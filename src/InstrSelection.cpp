@@ -1,5 +1,4 @@
 #include "CodeGen.h"
-#include "IR/Instructions.h"
 
 namespace riscv64 {
 

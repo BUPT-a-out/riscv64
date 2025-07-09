@@ -1,8 +1,7 @@
 #pragma once
 #include "IR/Module.h"
-#include "Target.h"
-#include <unordered_map>
 #include <string>
+#include <unordered_map>
 
 namespace riscv64 {
 
