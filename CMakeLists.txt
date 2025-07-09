@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(midend VERSION 1.0.0 LANGUAGES CXX)
+project(riscv64 VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,17 +23,17 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 file(GLOB_RECURSE SOURCES "src/*.cpp")
 
 # Create library
-add_library(backend
+add_library(riscv64
     ${SOURCES}
 )
 
-target_include_directories(midend PUBLIC
+target_include_directories(riscv64 PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
 
 # Set library properties
-set_target_properties(midend PROPERTIES
+set_target_properties(riscv64 PROPERTIES
     VERSION ${PROJECT_VERSION}
     SOVERSION ${PROJECT_VERSION_MAJOR}
     CXX_VISIBILITY_PRESET hidden
@@ -41,41 +41,48 @@ set_target_properties(midend PROPERTIES
 )
 
 
+install(TARGETS riscv64
+    EXPORT riscv64Targets
+    LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib
+    RUNTIME DESTINATION bin
+    INCLUDES DESTINATION include
+)
 
 install(DIRECTORY include/
     DESTINATION include
     FILES_MATCHING PATTERN "*.h"
 )
 
-install(EXPORT midendTargets
-    FILE midendTargets.cmake
-    NAMESPACE midend::
-    DESTINATION lib/cmake/backend
+install(EXPORT riscv64Targets
+    FILE riscv64Targets.cmake
+    NAMESPACE riscv64::
+    DESTINATION lib/cmake/riscv64
 )
 
 # Generate config files
 include(CMakePackageConfigHelpers)
 
 configure_package_config_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/backendConfig.cmake.in"
-    "${CMAKE_CURRENT_BINARY_DIR}/backendConfig.cmake"
-    INSTALL_DESTINATION lib/cmake/backend
+    "${CMAKE_CURRENT_SOURCE_DIR}/riscv64Config.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/riscv64Config.cmake"
+    INSTALL_DESTINATION lib/cmake/riscv64
 )
 
 write_basic_package_version_file(
-    "${CMAKE_CURRENT_BINARY_DIR}/backendConfigVersion.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/riscv64ConfigVersion.cmake"
     VERSION ${PROJECT_VERSION}
     COMPATIBILITY AnyNewerVersion
 )
 
 install(FILES
-    "${CMAKE_CURRENT_BINARY_DIR}/backendConfig.cmake"
-    "${CMAKE_CURRENT_BINARY_DIR}/backendConfigVersion.cmake"
-    DESTINATION lib/cmake/backend
+    "${CMAKE_CURRENT_BINARY_DIR}/riscv64Config.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/riscv64ConfigVersion.cmake"
+    DESTINATION lib/cmake/riscv64
 )
 
 # Print configuration summary
-message(STATUS "midend Configuration Summary:")
+message(STATUS "riscv64 Configuration Summary:")
 message(STATUS "  Build type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "  CXX Standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "  Build testing: ${BUILD_TESTING}")
