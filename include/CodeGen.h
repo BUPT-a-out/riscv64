@@ -1,0 +1,26 @@
+#pragma once
+#include "IR/Module.h"
+#include "Target.h"
+#include <unordered_map>
+#include <string>
+
+namespace riscv64 {
+
+class CodeGenerator {
+private:
+    std::unordered_map<const midend::Value*, std::string> valueToReg_;
+    std::unordered_map<const midend::BasicBlock*, std::string> bbToLabel_;
+    int nextRegNum_ = 0;
+    int nextLabelNum_ = 0;
+    
+    std::string allocateReg();
+    std::string getOrAllocateReg(const midend::Value* val);
+    std::string getBBLabel(const midend::BasicBlock* bb);
+    
+public:
+    std::vector<std::string> generateFunction(const midend::Function* func);
+    std::vector<std::string> generateBasicBlock(const midend::BasicBlock* bb);
+    std::string generateInstruction(const midend::Instruction* inst);
+};
+
+}  // namespace riscv64

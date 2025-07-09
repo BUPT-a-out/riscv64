@@ -18,6 +18,7 @@ endif()
 
 # Include directories
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../midend/include)
 
 # Collect source files
 file(GLOB_RECURSE SOURCES "src/*.cpp")
