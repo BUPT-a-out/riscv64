@@ -20,6 +20,15 @@ public:
     std::vector<std::string> generateFunction(const midend::Function* func);
     std::vector<std::string> generateBasicBlock(const midend::BasicBlock* bb);
     std::string generateInstruction(const midend::Instruction* inst);
+
+    // 维护映射关系
+    void mapValueToReg(const midend::Value* val, const std::string& reg);
+    void mapBBToLabel(const midend::BasicBlock* bb, const std::string& label);
+    std::string getRegForValue(const midend::Value* val) const;
+    std::string getLabelForBB(const midend::BasicBlock* bb) const;
+    int getNextRegNum() { return nextRegNum_++; }
+    int getNextLabelNum() { return nextLabelNum_++; }
+    void reset();
 };
 
 }  // namespace riscv64

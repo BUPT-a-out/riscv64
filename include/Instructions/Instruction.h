@@ -37,6 +37,8 @@ enum Opcode {
 class Instruction {
    public:
     explicit Instruction(Opcode op) : opcode(op) {}
+    explicit Instruction(Opcode op, BasicBlock* parent)
+        : opcode(op), parent(parent) {}
 
     // 添加操作数
     void addOperand(MachineOperand* operand) { operands.push_back(operand); }
@@ -47,6 +49,9 @@ class Instruction {
     // 为了方便，可以提供一些辅助函数
     // 例如：获取第 n 个操作数
     MachineOperand* getOperand(std::size_t n) const { return operands[n]; }
+
+    BasicBlock* getParent() const { return parent; }
+    void setParent(BasicBlock* bb) { parent = bb; }
 
    private:
     Opcode opcode;
