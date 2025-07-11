@@ -1,0 +1,35 @@
+{
+    "xmake.workingDirectory": "${workspaceFolder}",
+    "xmake.buildDirectory": "${workspaceFolder}/build",
+    "files.associations": {
+        "*.h": "cpp",
+        "*.hpp": "cpp",
+        "*.cpp": "cpp",
+        "*.cc": "cpp",
+        "*.cxx": "cpp"
+    },
+    "C_Cpp.default.configurationProvider": "ms-vscode.cpptools",
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/compile_commands.json",
+    "C_Cpp.default.cppStandard": "c++17",
+    "C_Cpp.default.intelliSenseMode": "linux-gcc-x64",
+    "clangd.arguments": [
+        "--compile-commands-dir=${workspaceFolder}",
+        "--header-insertion=never",
+        "--completion-style=detailed",
+        "--function-arg-placeholders",
+        "--fallback-style=llvm"
+    ],
+    "clangd.path": "clangd",
+    "editor.formatOnSave": true,
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true,
+    "files.exclude": {
+        "**/.git": true,
+        "**/.svn": true,
+        "**/.hg": true,
+        "**/CVS": true,
+        "**/.DS_Store": true,
+        "**/build": false,
+        "**/.xmake": true
+    }
+}

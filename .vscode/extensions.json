@@ -1,0 +1,8 @@
+{
+    "recommendations": [
+        "ms-vscode.cpptools",
+        "llvm-vs-code-extensions.vscode-clangd",
+        "tboox.xmake-vscode",
+        "jeff-hykin.better-cpp-syntax"
+    ]
+}

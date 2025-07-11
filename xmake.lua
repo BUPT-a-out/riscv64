@@ -1,12 +1,21 @@
-local midend_dir = path.join(path.directory(os.scriptdir()), "midend")
+add_rules("plugin.compile_commands.autoupdate", {outputdir = "."})
 
-if os.isdir(midend_dir) then
+package("midend")
+    set_description("Compiler middle-end")
+    set_urls("https://github.com/BUPT-a-out/midend.git")
+
+    on_install("linux", "macosx", "windows", function (package)
+        import("package.tools.xmake").install(package)
+    end)
+package_end()
+
+
+if os.isdir(path.join(path.directory(os.scriptdir()), "midend")) then
     add_deps("midend")
 else
     add_requires("midend main", {
-        alias   = "midend",
-        urls    = "https://github.com/BUPT-a-out/midend.git",
-        verify  = false
+        system = false,
+        verify = false
     })
     add_packages("midend")
 end
