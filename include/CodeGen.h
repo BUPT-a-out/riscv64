@@ -17,6 +17,8 @@ private:
     std::string getBBLabel(const midend::BasicBlock* bb);
     
 public:
+    CodeGenerator();
+    ~CodeGenerator();
     std::vector<std::string> generateFunction(const midend::Function* func);
     std::vector<std::string> generateBasicBlock(const midend::BasicBlock* bb);
     std::string generateInstruction(const midend::Instruction* inst);
@@ -29,6 +31,9 @@ public:
     int getNextRegNum() { return nextRegNum_++; }
     int getNextLabelNum() { return nextLabelNum_++; }
     void reset();
+
+    class Visitor;
+    std::unique_ptr<Visitor> visitor_;
 };
 
 }  // namespace riscv64
