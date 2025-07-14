@@ -10,7 +10,7 @@ package("midend")
 package_end()
 
 
-if os.isdir(path.join(path.directory(os.scriptdir()), "midend")) then
+if os.isfile(path.join(path.directory(os.scriptdir()), "..", "xmake.lua")) then
     add_deps("midend")
 else
     add_requires("midend main", {
