@@ -1,0 +1,80 @@
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+
+#include "Instructions/All.h"
+
+namespace riscv64 {
+// Machine Operand 相关的 toString 实现
+std::string MachineOperand::toString() const {
+    switch (getType()) {
+        case OperandType::Register:
+            return dynamic_cast<const RegisterOperand*>(this)->toString();
+        case OperandType::Immediate:
+            return dynamic_cast<const ImmediateOperand*>(this)->toString();
+        case OperandType::Label:
+            return dynamic_cast<const LabelOperand*>(this)->toString();
+        case OperandType::Memory:
+            return dynamic_cast<const MemoryOperand*>(this)->toString();
+        default:
+            throw std::runtime_error("Unknown operand type");
+    }
+}
+
+std::string RegisterOperand::toString() const {
+    return "x" + std::to_string(regNum) + (is_virtual ? " (virtual)" : "");
+}
+
+std::string ImmediateOperand::toString() const { return std::to_string(value); }
+
+std::string LabelOperand::toString() const { return ":"; }
+
+std::string MemoryOperand::toString() const {
+    return std::to_string(getOffset()->getValue()) + "(" +
+           getBaseReg()->toString() + ")";
+}
+
+std::string getInstructionName(Opcode opcode) {
+    static const std::unordered_map<Opcode, std::string> opcodeNames = {
+        {Opcode::ADD, "add"},
+        {Opcode::SUB, "sub"},
+        {Opcode::MUL, "mul"},
+        {Opcode::DIV, "div"},
+        {Opcode::RET, "ret"},
+        // TODO(rikka): 添加其他操作码的名称...
+    };
+    
+    auto it = opcodeNames.find(opcode);
+    if (it != opcodeNames.end()) {
+        return it->second;
+    }
+    throw std::runtime_error("Unknown opcode");
+}
+
+std::string Instruction::toString() const {
+    auto result = getInstructionName(opcode);
+    auto operand_count = getOprandCount();
+    if (operand_count == 0) {
+        return result;
+    }
+
+    result += ' ';
+    for (size_t index = 0; index < operand_count; ++index) {
+        if (index > 0) {
+            result += ", ";
+        }
+        result += getOperand(index)->toString();
+    }
+
+    return result;
+}
+
+std::string BasicBlock::toString() const {
+    std::string result = label + ":\n";
+    for (const auto& inst : instructions) {
+        result += "  " + inst->toString() + "\n";
+    }
+    return result;
+}
+
+}  // namespace riscv64
