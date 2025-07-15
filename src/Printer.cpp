@@ -41,6 +41,8 @@ std::string getInstructionName(Opcode opcode) {
         {Opcode::MUL, "mul"},
         {Opcode::DIV, "div"},
         {Opcode::RET, "ret"},
+        {Opcode::LI, "li"},
+        {Opcode::MV, "mv"},
         // TODO(rikka): 添加其他操作码的名称...
     };
     
@@ -73,6 +75,22 @@ std::string BasicBlock::toString() const {
     std::string result = label + ":\n";
     for (const auto& inst : instructions) {
         result += "  " + inst->toString() + "\n";
+    }
+    return result;
+}
+
+std::string Function::toString() const {
+    std::string result = name + ":\n";
+    for (const auto& bb : basic_blocks) {
+        result += bb->toString();
+    }
+    return result;
+}
+
+std::string Module::toString() const {
+    std::string result;
+    for (const auto& func : functions) {
+        result += func->toString() + "\n";
     }
     return result;
 }

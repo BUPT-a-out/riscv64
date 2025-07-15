@@ -34,18 +34,18 @@ class RegisterOperand : public MachineOperand {
    public:
     // regNum: 寄存器的编号 (例如 x10 就是 10)
     // isVirtual: 是否是虚拟寄存器
-    RegisterOperand(unsigned regNum, bool is_virtual = false)
+    explicit RegisterOperand(unsigned regNum, bool is_virtual = false)
         : MachineOperand(OperandType::Register),
           regNum(regNum),
           is_virtual(is_virtual) {}
 
     // 支持字符串构造函数
-    explicit RegisterOperand(const std::string& regName)
-        : MachineOperand(OperandType::Register),
-          regNum(0),  // 解析寄存器名称
-          is_virtual(false) {
-        // TODO: 解析寄存器名称到编号的逻辑
-    }
+    // explicit RegisterOperand(const std::string& regName)
+    //     : MachineOperand(OperandType::Register),
+    //       regNum(0),  // 解析寄存器名称
+    //       is_virtual(false) {
+    //     // TODO(rikka): 解析寄存器名称到编号的逻辑
+    // }
 
     unsigned getRegNum() const { return regNum; }
     bool isVirtual() const { return is_virtual; }

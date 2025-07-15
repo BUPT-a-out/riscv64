@@ -5,9 +5,9 @@
 #include <utility>
 #include <vector>
 
-namespace riscv64 {
+#include "BasicBlock.h"
 
-class BasicBlock;  // 前向声明
+namespace riscv64 {
 
 class Function {
    public:
