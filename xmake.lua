@@ -28,7 +28,8 @@ target("riscv64")
     
     add_includedirs("include", {public = true})
     
-    add_headerfiles("include/(**.h)")
+    add_headerfiles("include/(*.h)")
+    add_headerfiles("include/**/*.h")
     
     set_warnings("all")
     add_cxxflags("-Wall", "-Wextra")
@@ -43,6 +44,22 @@ target("riscv64")
         set_optimize("fastest")
     end
 
+-- 包含测试
 if os.isdir(path.join(os.scriptdir(), "tests")) then
     includes("tests/xmake.lua")
 end
+
+-- 添加便捷的测试任务
+task("test")
+    set_menu {
+        usage = "xmake test",
+        description = "Run RISC-V backend tests",
+        options = {}
+    }
+    on_run(function ()
+        import("core.project.project")
+        import("core.base.task")
+        
+        task.run("build", {}, "riscv64_test_framework")
+        os.exec("xmake run riscv64_test_framework")
+    end)
