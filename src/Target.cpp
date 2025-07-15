@@ -1,4 +1,5 @@
 #include "Target.h"
+
 #include "CodeGen.h"
 #include "IR/Function.h"
 #include "Visit.h"
@@ -8,22 +9,21 @@ namespace riscv64 {
 std::string RISCV64Target::compileToAssembly(const midend::Module& module) {
     std::vector<std::string> assembly;
     // CodeGenerator codegen;
-    
+
     // 添加汇编头部
     assembly.emplace_back(".text");
     assembly.emplace_back(".global _start");
-    
+
     // 为每个函数生成代码
     // for (const auto* func : module) {
     //     assembly.emplace_back("");
     //     assembly.push_back(func->getName() + ":");
-        
+
     //     auto funcCode = codegen.generateFunction(func);
     //     assembly.insert(assembly.end(), funcCode.begin(), funcCode.end());
     // }
     auto riscv_module = instructionSelectionPass(module);
-    
-    
+
     return riscv_module.toString();
 }
 

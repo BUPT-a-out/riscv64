@@ -24,7 +24,8 @@ class CodeGenerator {
     CodeGenerator() { visitor_ = std::make_unique<Visitor>(this); };
     ~CodeGenerator() = default;
     // std::vector<std::string> generateFunction(const midend::Function* func);
-    // std::vector<std::string> generateBasicBlock(const midend::BasicBlock* bb);
+    // std::vector<std::string> generateBasicBlock(const midend::BasicBlock*
+    // bb);
     std::string generateInstruction(const midend::Instruction* inst);
 
     // 维护映射关系

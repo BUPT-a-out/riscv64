@@ -106,10 +106,6 @@ void Visitor::visitRetInstruction(const midend::Instruction* ret_inst,
             instruction->addOperand(std::make_unique<ImmediateOperand>(
                 ret_imm->getValue()));  // imm
             parent_bb->addInstruction(std::move(instruction));
-            // std::cout << "Return immediate value: "
-            //      << ret_imm->getValue() << std::endl;
-            // assert(parent_bb->getInstructionCount() > 0 &&
-            //        "Return instruction should be added to the basic block");
             break;
         }
         case OperandType::Register: {
