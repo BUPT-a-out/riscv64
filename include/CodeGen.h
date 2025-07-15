@@ -5,8 +5,11 @@
 
 #include "IR/Module.h"
 #include "Instructions/MachineOperand.h"
+#include "Visit.h"
 
 namespace riscv64 {
+
+class Visitor;  // 前向声明
 
 class CodeGenerator {
    private:
@@ -17,15 +20,11 @@ class CodeGenerator {
     int nextRegNum_ = 0;
     int nextLabelNum_ = 0;
 
-    std::unique_ptr<RegisterOperand> allocateReg();
-    RegisterOperand* getOrAllocateReg(const midend::Value* val);
-    LabelOperand* getBBLabel(const midend::BasicBlock* bb);
-
    public:
-    CodeGenerator();
-    ~CodeGenerator();
-    std::vector<std::string> generateFunction(const midend::Function* func);
-    std::vector<std::string> generateBasicBlock(const midend::BasicBlock* bb);
+    CodeGenerator() { visitor_ = std::make_unique<Visitor>(this); };
+    ~CodeGenerator() = default;
+    // std::vector<std::string> generateFunction(const midend::Function* func);
+    // std::vector<std::string> generateBasicBlock(const midend::BasicBlock* bb);
     std::string generateInstruction(const midend::Instruction* inst);
 
     // 维护映射关系
@@ -39,7 +38,11 @@ class CodeGenerator {
     int getNextLabelNum() { return nextLabelNum_++; }
     void reset();
 
-    class Visitor;
+    std::unique_ptr<RegisterOperand> allocateReg();
+    RegisterOperand* getOrAllocateReg(const midend::Value* val);
+    LabelOperand* getBBLabel(const midend::BasicBlock* bb);
+
+    // class Visitor;
     std::unique_ptr<Visitor> visitor_;
 };
 

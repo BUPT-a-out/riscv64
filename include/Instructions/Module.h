@@ -9,6 +9,16 @@ namespace riscv64 {
 
 class Module {
    public:
+    // 默认构造函数
+    Module() = default;
+
+    // 禁用拷贝构造函数和拷贝赋值运算符
+    Module(const Module&) = delete;
+    Module& operator=(const Module&) = delete;
+
+    // 启用移动构造函数和移动赋值运算符
+    Module(Module&&) = default;
+    Module& operator=(Module&&) = default;
     void addFunction(std::unique_ptr<Function> func) {
         functions.push_back(std::move(func));
     }

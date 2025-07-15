@@ -4,7 +4,7 @@
 #include <optional>
 
 #include "IR/Module.h"
-#include "Instructions/MachineOperand.h"
+#include "Instructions/All.h"
 
 namespace riscv64 {
 
@@ -22,20 +22,22 @@ class Visitor {
     Visitor& operator=(Visitor&&) = default;
 
     // 访问方法声明
-    void visit(const midend::Module* module);
-    void visit(const midend::Function* func);
-    void visit(const midend::BasicBlock* bb);
-    void visit(const midend::Instruction* inst);
-    void visitRetInstruction(const midend::Instruction* retInst);
+    Module visit(const midend::Module* module);
+    void visit(const midend::Function* func, Module* parent_module);
+    void visit(const midend::BasicBlock* bb, Function* parent_func);
+    void visit(const midend::Instruction* inst, BasicBlock* parent_bb);
+    void visitRetInstruction(const midend::Instruction* retInst,
+                             BasicBlock* parent_bb);
 
-    std::unique_ptr<MachineOperand> visit(const midend::Value* value);
+    std::unique_ptr<MachineOperand> visit(const midend::Value* value,
+                                          BasicBlock* parent_bb);
     void visit(const midend::Constant* constant);
     void visit(const midend::GlobalVariable* var);
 
    private:
     CodeGenerator* codeGen_;
 
-    std::optional<std::string> findRegForValue(const midend::Value* value);
+    std::optional<RegisterOperand*> findRegForValue(const midend::Value* value);
 };
 
 }  // namespace riscv64
