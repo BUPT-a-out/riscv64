@@ -453,9 +453,15 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
 }
 
 // 将值存储到寄存器中，生成 mv 或者 li 指令
-void Visitor::storeOperandToReg(std::unique_ptr<MachineOperand> source_operand,
-                                std::unique_ptr<RegisterOperand> dest_reg,
-                                BasicBlock* parent_bb) {
+void Visitor::storeOperandToReg(
+    std::unique_ptr<MachineOperand> source_operand,
+    std::unique_ptr<RegisterOperand> dest_reg, BasicBlock* parent_bb,
+    std::list<std::unique_ptr<Instruction>>::const_iterator insert_pos) {
+    if (insert_pos ==
+        std::list<std::unique_ptr<Instruction>>::const_iterator{}) {
+        insert_pos = parent_bb->end();
+    }  // 默认值
+
     switch (source_operand->getType()) {
         case OperandType::Immediate: {
             auto inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
@@ -465,7 +471,7 @@ void Visitor::storeOperandToReg(std::unique_ptr<MachineOperand> source_operand,
             inst->addOperand(std::move(dest_reg));  // rd
             inst->addOperand(std::make_unique<ImmediateOperand>(
                 source_imm->getValue()));  // imm
-            parent_bb->addInstruction(std::move(inst));
+            parent_bb->insert(insert_pos, std::move(inst));
             break;
         }
         case OperandType::Register: {
@@ -476,7 +482,7 @@ void Visitor::storeOperandToReg(std::unique_ptr<MachineOperand> source_operand,
             inst->addOperand(std::move(dest_reg));  // rd
             inst->addOperand(std::make_unique<RegisterOperand>(
                 reg_source->getRegNum(), reg_source->isVirtual()));  // rs
-            parent_bb->addInstruction(std::move(inst));
+            parent_bb->insert(insert_pos, std::move(inst));
             break;
         }
 
