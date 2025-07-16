@@ -25,7 +25,7 @@ class Visitor {
     Module visit(const midend::Module* module);
     void visit(const midend::Function* func, Module* parent_module);
     void visit(const midend::BasicBlock* bb, Function* parent_func);
-    void visit(const midend::Instruction* inst, BasicBlock* parent_bb);
+    std::unique_ptr<MachineOperand> visit(const midend::Instruction* inst, BasicBlock* parent_bb);
     void visitRetInstruction(const midend::Instruction* retInst,
                              BasicBlock* parent_bb);
     std::unique_ptr<MachineOperand> visitBinaryOp(

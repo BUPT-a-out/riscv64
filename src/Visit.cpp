@@ -54,7 +54,8 @@ void Visitor::visit(const midend::BasicBlock* bb, Function* parent_func) {
 }
 
 // 访问指令
-void Visitor::visit(const midend::Instruction* inst, BasicBlock* parent_bb) {
+std::unique_ptr<MachineOperand> Visitor::visit(const midend::Instruction* inst,
+                                               BasicBlock* parent_bb) {
     switch (inst->getOpcode()) {
         case midend::Opcode::Add:
         case midend::Opcode::Sub:
@@ -68,21 +69,21 @@ void Visitor::visit(const midend::Instruction* inst, BasicBlock* parent_bb) {
         case midend::Opcode::Shr:
             // 处理算术指令，此处直接生成
             // 关于 0 和 1 的判断优化等，后期写一个 Pass 来优化
-            visitBinaryOp(inst, parent_bb);
+            return visitBinaryOp(inst, parent_bb);
             break;
         case midend::Opcode::Load:
-        case midend::Opcode::Store:
-            // 处理内存操作指令
             break;
+
         case midend::Opcode::Br:
-            break;  // 处理分支指令
+        case midend::Opcode::Store:
         case midend::Opcode::Ret:
             // 处理返回指令
             visitRetInstruction(inst, parent_bb);
-            break;
+            return nullptr;  // 不产生值，只执行副作用
         default:
             // 其他指令类型
-            break;
+            throw std::runtime_error("Unsupported instruction: " +
+                                     inst->toString());
     }
 }
 
@@ -111,6 +112,8 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
 
     return std::make_unique<RegisterOperand>(new_reg->getRegNum(), true);
 }
+
+// 处理 load 指令
 
 // 处理二元运算指令
 // Handles binary operation instructions by generating the appropriate RISC-V
@@ -359,10 +362,9 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
                                                  new_reg->isVirtual());
     }
 
-    // 检查是否是指令，如果是则递归处理
+    // 检查是否是指令，如果是则递归处理（作为值使用）
     if (midend::isa<midend::Instruction>(value)) {
-        return visitBinaryOp(midend::cast<midend::Instruction>(value),
-                             parent_bb);
+        return visit(midend::cast<midend::Instruction>(value), parent_bb);
     }
 
     // 如果是函数参数，则直接映射到对应的寄存器
