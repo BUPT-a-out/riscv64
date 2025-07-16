@@ -6,6 +6,8 @@
 #include <string>
 
 #include "IR/BasicBlock.h"
+#include "ABI.h"
+
 namespace riscv64 {
 
 class BasicBlock;  // 前向声明
@@ -51,23 +53,21 @@ class RegisterOperand : public MachineOperand {
    public:
     // regNum: 寄存器的编号 (例如 x10 就是 10)
     // isVirtual: 是否是虚拟寄存器
-    explicit RegisterOperand(unsigned regNum, bool is_virtual = false)
+    explicit RegisterOperand(unsigned reg_num, bool is_virtual = false)
         : MachineOperand(OperandType::Register),
-          regNum(regNum),
+          regNum(reg_num),
           is_virtual(is_virtual) {}
 
     // 支持字符串构造函数
-    // explicit RegisterOperand(const std::string& regName)
-    //     : MachineOperand(OperandType::Register),
-    //       regNum(0),  // 解析寄存器名称
-    //       is_virtual(false) {
-    //     // TODO(rikka): 解析寄存器名称到编号的逻辑
-    // }
+    explicit RegisterOperand(const std::string& reg_name)
+        : MachineOperand(OperandType::Register),
+          regNum(ABI::getRegNumFromABIName(reg_name)),  // 解析寄存器名称
+          is_virtual(false) {}
 
     unsigned getRegNum() const { return regNum; }
     bool isVirtual() const { return is_virtual; }
 
-    unsigned abiToRegNum() const;
+    // unsigned abiToRegNum() const;
 
     std::string toString() const;
 
