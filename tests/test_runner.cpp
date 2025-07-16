@@ -29,6 +29,7 @@ std::unique_ptr<midend::Module> createSimpleAddTest();
 std::unique_ptr<midend::Module> createArithmeticOpsTest();
 std::unique_ptr<midend::Module> createConditionalBranchTest();
 std::unique_ptr<midend::Module> createSimpleImmAddTest();
+std::unique_ptr<midend::Module> createVariableAssignmentTest();
 }  // namespace testcases
 
 class TestRunner {
@@ -268,6 +269,57 @@ std::unique_ptr<midend::Module> createSimpleImmAddTest() {
     return module;
 }
 
+std::unique_ptr<midend::Module> createVariableAssignmentTest() {
+    static auto context = std::make_unique<midend::Context>();
+    auto module =
+        std::make_unique<midend::Module>("variable_assignment", context.get());
+
+    // 创建函数类型: i32 test_var(i32)
+    auto* i32Type = context->getInt32Type();
+    auto* funcType = midend::FunctionType::get(i32Type, {i32Type});
+
+    // 创建函数
+    auto* func = midend::Function::Create(funcType, "test_var", module.get());
+
+    // 获取参数
+    auto* arg = func->getArg(0);
+    arg->setName("input");
+
+    // 创建基本块
+    auto* entry = midend::BasicBlock::Create(context.get(), "entry", func);
+
+    // 创建IRBuilder
+    midend::IRBuilder builder(context.get());
+    builder.setInsertPoint(entry);
+
+    // 分配局部变量: %x = alloca i32
+    auto* varX = builder.createAlloca(i32Type, nullptr, "x");
+    
+    // 分配另一个局部变量: %y = alloca i32  
+    auto* varY = builder.createAlloca(i32Type, nullptr, "y");
+
+    // 存储输入参数到 x: store i32 %input, i32* %x
+    builder.createStore(arg, varX);
+
+    // 加载 x 的值: %temp1 = load i32, i32* %x
+    auto* temp1 = builder.createLoad(varX, "temp1");
+
+    // 计算 temp1 + 10: %temp2 = add i32 %temp1, 10
+    auto* constant10 = midend::ConstantInt::get(i32Type, 10);
+    auto* temp2 = builder.createAdd(temp1, constant10, "temp2");
+
+    // 存储结果到 y: store i32 %temp2, i32* %y
+    builder.createStore(temp2, varY);
+
+    // 加载 y 的值: %result = load i32, i32* %y
+    auto* result = builder.createLoad(varY, "result");
+
+    // 返回结果: ret i32 %result
+    builder.createRet(result);
+
+    return module;
+}
+
 }  // namespace testcases
 
 // TestRunner 构造函数实现
@@ -278,6 +330,7 @@ TestRunner::TestRunner() {
     testCases_["2_simple_add"] = testcases::createSimpleAddTest;
     testCases_["3_arithmetic_ops"] = testcases::createArithmeticOpsTest;
     testCases_["4_conditional_branch"] = testcases::createConditionalBranchTest;
+    testCases_["5_variable_assignment"] = testcases::createVariableAssignmentTest; // 添加这行
 }
 
 std::unique_ptr<midend::Module> TestRunner::loadTestCase(
