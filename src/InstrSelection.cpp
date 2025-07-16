@@ -17,9 +17,10 @@ std::string CodeGenerator::generateInstruction(
 }
 
 RegisterOperand* CodeGenerator::mapValueToReg(const midend::Value* val,
-                                              const unsigned regNum) {
+                                              unsigned reg_num,
+                                              bool is_virtual) {
     // 创建新的 RegisterOperand 并使用智能指针管理
-    auto reg = std::make_unique<RegisterOperand>(regNum);
+    auto reg = std::make_unique<RegisterOperand>(reg_num, is_virtual);
     auto* regPtr = reg.get();
     valueToReg_[val] = std::move(reg);
     return regPtr;

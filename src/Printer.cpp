@@ -22,7 +22,10 @@ std::string MachineOperand::toString() const {
 }
 
 std::string RegisterOperand::toString() const {
-    return "x" + std::to_string(regNum) + (is_virtual ? " (virtual)" : "");
+    if (isVirtual()) {
+        return "%vreg_" + std::to_string(regNum);
+    }
+    return "x" + std::to_string(regNum);
 }
 
 std::string ImmediateOperand::toString() const { return std::to_string(value); }

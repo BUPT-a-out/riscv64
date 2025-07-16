@@ -28,6 +28,10 @@ class Visitor {
     void visit(const midend::Instruction* inst, BasicBlock* parent_bb);
     void visitRetInstruction(const midend::Instruction* retInst,
                              BasicBlock* parent_bb);
+    std::unique_ptr<MachineOperand> visitBinaryOp(
+        const midend::Instruction* inst, BasicBlock* parent_bb);
+    std::unique_ptr<RegisterOperand> immToReg(
+        std::unique_ptr<MachineOperand> operand, BasicBlock* parent_bb);
 
     std::unique_ptr<MachineOperand> visit(const midend::Value* value,
                                           BasicBlock* parent_bb);

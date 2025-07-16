@@ -29,8 +29,8 @@ class CodeGenerator {
     std::string generateInstruction(const midend::Instruction* inst);
 
     // 维护映射关系
-    RegisterOperand* mapValueToReg(const midend::Value* val,
-                                   const unsigned regNum);
+    RegisterOperand* mapValueToReg(const midend::Value* val, unsigned reg_num,
+                                   bool is_virtual = false);
     LabelOperand* mapBBToLabel(const midend::BasicBlock* bb,
                                const std::string& label);
     RegisterOperand* getRegForValue(const midend::Value* val) const;
