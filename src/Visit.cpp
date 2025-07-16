@@ -61,6 +61,13 @@ void Visitor::visit(const midend::BasicBlock* bb, Function* parent_func) {
 // 访问指令
 std::unique_ptr<MachineOperand> Visitor::visit(const midend::Instruction* inst,
                                                BasicBlock* parent_bb) {
+    // 检查是否已经处理过
+    auto foundReg = findRegForValue(inst);
+    if (foundReg.has_value()) {
+        return std::make_unique<RegisterOperand>(foundReg.value()->getRegNum(),
+                                                 foundReg.value()->isVirtual());
+    }
+
     switch (inst->getOpcode()) {
         case midend::Opcode::Add:
         case midend::Opcode::Sub:
@@ -72,6 +79,7 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Instruction* inst,
         case midend::Opcode::Xor:
         case midend::Opcode::Shl:
         case midend::Opcode::Shr:
+        case midend::Opcode::ICmpSGT:
             // 处理算术指令，此处直接生成
             // 关于 0 和 1 的判断优化等，后期写一个 Pass 来优化
             return visitBinaryOp(inst, parent_bb);
@@ -306,7 +314,7 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
 // immediate operands and maps the result to a register.
 std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
     const midend::Instruction* inst, BasicBlock* parent_bb) {
-    if (!inst->isBinaryOp()) {
+    if (!inst->isBinaryOp() && !inst->isComparison()) {
         throw std::runtime_error("Not a binary operation instruction: " +
                                  inst->toString());
     }
@@ -431,6 +439,29 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg->getRegNum(), new_reg->isVirtual()));  // rd
             instruction->addOperand(std::move(lhs_reg));       // rs1
             instruction->addOperand(std::move(rhs_reg));       // rs2
+
+            parent_bb->addInstruction(std::move(instruction));
+            break;
+        }
+
+        case midend::Opcode::ICmpSGT: {
+            // 处理有符号大于比较
+            if ((lhs->getType() == OperandType::Immediate) &&
+                (rhs->getType() == OperandType::Immediate)) {
+                auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
+                auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                return std::make_unique<ImmediateOperand>(
+                    lhs_imm->getValue() > rhs_imm->getValue() ? 1 : 0);
+            }
+
+            // 使用 slt 指令
+            new_reg = codeGen_->allocateReg();
+            auto instruction =
+                std::make_unique<Instruction>(Opcode::SLT, parent_bb);
+            instruction->addOperand(std::make_unique<RegisterOperand>(
+                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+            instruction->addOperand(std::move(lhs));           // rs1
+            instruction->addOperand(std::move(rhs));           // rs2
 
             parent_bb->addInstruction(std::move(instruction));
             break;
