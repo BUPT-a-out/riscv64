@@ -4,6 +4,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <iostream>
 
 #include "BasicBlock.h"
 
@@ -39,6 +40,15 @@ class Function {
     // 管理函数的栈帧信息
     void calculateStackFrame() {
         // ... 计算需要多大的栈空间，哪些寄存器需要保存等
+    }
+
+    BasicBlock* getBasicBlockByLabel(const std::string& label) const {
+        for (const auto& block : basic_blocks) {
+            if (block->getLabel() == label) {
+                return block.get();
+            }
+        }
+        return nullptr;  // 如果没有找到，返回 nullptr
     }
 
     std::string toString() const;
