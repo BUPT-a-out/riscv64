@@ -53,7 +53,7 @@ class RegisterOperand : public MachineOperand {
    public:
     // regNum: 寄存器的编号 (例如 x10 就是 10)
     // isVirtual: 是否是虚拟寄存器
-    explicit RegisterOperand(unsigned reg_num, bool is_virtual = false)
+    explicit RegisterOperand(unsigned reg_num, bool is_virtual = true)
         : MachineOperand(OperandType::Register),
           regNum(reg_num),
           is_virtual(is_virtual) {}

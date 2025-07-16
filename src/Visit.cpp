@@ -91,7 +91,7 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
     // 将立即数存到寄存器中，如果已经是寄存器则直接返回
     if (operand->getType() == OperandType::Register) {
         return std::make_unique<RegisterOperand>(
-            dynamic_cast<RegisterOperand*>(operand.get())->getRegNum());
+            dynamic_cast<RegisterOperand*>(operand.get())->getRegNum(), true);
     }
 
     auto* imm_operand = dynamic_cast<ImmediateOperand*>(operand.get());
@@ -107,7 +107,7 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
         std::make_unique<ImmediateOperand>(imm_operand->getValue()));  // imm
     parent_bb->addInstruction(std::move(instruction));
 
-    return std::make_unique<RegisterOperand>(new_reg->getRegNum());
+    return std::make_unique<RegisterOperand>(new_reg->getRegNum(), true);
 }
 
 // 处理二元运算指令
@@ -229,8 +229,8 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                                      inst->toString());
     }
     // 返回新分配的寄存器操作数
-    codeGen_->mapValueToReg(inst, new_reg->getRegNum());
-    return std::make_unique<RegisterOperand>(new_reg->getRegNum());
+    codeGen_->mapValueToReg(inst, new_reg->getRegNum(), new_reg->isVirtual());
+    return std::make_unique<RegisterOperand>(new_reg->getRegNum(), new_reg->isVirtual());
 }
 
 // 处理 ret 指令
@@ -251,24 +251,21 @@ void Visitor::visitRetInstruction(const midend::Instruction* ret_inst,
 
     switch (ret_value->getType()) {
         case OperandType::Immediate: {
-            auto instruction =
-                std::make_unique<Instruction>(Opcode::LI, parent_bb);
+            auto inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
             auto* const ret_imm =
                 dynamic_cast<ImmediateOperand*>(ret_value.get());
 
-            instruction->addOperand(std::make_unique<RegisterOperand>(
-                ABI::getRegNumFromABIName("a0")));  // rd
-            instruction->addOperand(std::make_unique<ImmediateOperand>(
+            inst->addOperand(std::make_unique<RegisterOperand>("a0"));  // rd
+            inst->addOperand(std::make_unique<ImmediateOperand>(
                 ret_imm->getValue()));  // imm
-            parent_bb->addInstruction(std::move(instruction));
+            parent_bb->addInstruction(std::move(inst));
             break;
         }
         case OperandType::Register: {
             auto inst = std::make_unique<Instruction>(Opcode::MV, parent_bb);
             auto* reg_source = dynamic_cast<RegisterOperand*>(ret_value.get());
 
-            inst->addOperand(std::make_unique<RegisterOperand>(
-                ABI::getRegNumFromABIName("a0")));  // rd
+            inst->addOperand(std::make_unique<RegisterOperand>("a0"));  // rd
             inst->addOperand(std::make_unique<RegisterOperand>(
                 reg_source->getRegNum()));  // rs
             parent_bb->addInstruction(std::move(inst));
@@ -320,10 +317,10 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
 
     // 对于其他类型的值，分配一个新的虚拟寄存器
     auto new_reg = codeGen_->allocateReg();
-    codeGen_->mapValueToReg(value, new_reg->getRegNum());
+    codeGen_->mapValueToReg(value, new_reg->getRegNum(), new_reg->isVirtual());
 
     // TODO(rikka): 其他类型处理...
-    return std::make_unique<RegisterOperand>(new_reg->getRegNum());
+    return std::make_unique<RegisterOperand>(new_reg->getRegNum(), new_reg->isVirtual());
 }
 
 // 访问常量
