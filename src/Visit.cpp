@@ -90,8 +90,10 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
     std::unique_ptr<MachineOperand> operand, BasicBlock* parent_bb) {
     // 将立即数存到寄存器中，如果已经是寄存器则直接返回
     if (operand->getType() == OperandType::Register) {
+        auto register_operand = dynamic_cast<RegisterOperand*>(operand.get());
         return std::make_unique<RegisterOperand>(
-            dynamic_cast<RegisterOperand*>(operand.get())->getRegNum(), true);
+            dynamic_cast<RegisterOperand*>(operand.get())->getRegNum(),
+            register_operand->isVirtual());
     }
 
     auto* imm_operand = dynamic_cast<ImmediateOperand*>(operand.get());
@@ -111,6 +113,10 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
 }
 
 // 处理二元运算指令
+// Handles binary operation instructions by generating the appropriate RISC-V
+// instructions for the given midend instruction, allocating registers as
+// needed, and returning the result operand. Supports constant folding for
+// immediate operands and maps the result to a register.
 std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
     const midend::Instruction* inst, BasicBlock* parent_bb) {
     if (!inst->isBinaryOp()) {
@@ -123,9 +129,29 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             std::to_string(inst->getNumOperands()));
     }
 
-    auto lhs = visit(inst->getOperand(0), parent_bb);
-    auto rhs = visit(inst->getOperand(1), parent_bb);
-    auto new_reg = codeGen_->allocateReg();
+    std::unique_ptr<MachineOperand> lhs;
+    {
+        const auto foundReg = findRegForValue(inst->getOperand(0));
+        if (foundReg.has_value()) {
+            lhs = std::make_unique<RegisterOperand>(
+                foundReg.value()->getRegNum(), foundReg.value()->isVirtual());
+        } else {
+            lhs = visit(inst->getOperand(0), parent_bb);
+        }
+    }
+    std::unique_ptr<MachineOperand> rhs;
+    {
+        const auto foundReg = findRegForValue(inst->getOperand(1));
+        if (foundReg.has_value()) {
+            rhs = std::make_unique<RegisterOperand>(
+                foundReg.value()->getRegNum(), foundReg.value()->isVirtual());
+        } else {
+            rhs = visit(inst->getOperand(1), parent_bb);
+        }
+    }
+
+    // Only allocate a new register if needed (not for immediate result)
+    std::unique_ptr<RegisterOperand> new_reg;
 
     // TODO(rikka): 关于 0 和 1 的判断优化等，后期写一个 Pass 来优化
     switch (inst->getOpcode()) {
@@ -142,6 +168,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             if ((lhs->getType() == OperandType::Immediate) !=
                 (rhs->getType() == OperandType::Immediate)) {
                 // 使用 addi 指令
+                new_reg = codeGen_->allocateReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
                 auto* imm_operand = dynamic_cast<ImmediateOperand*>(
@@ -151,21 +178,22 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     lhs->getType() == OperandType::Register ? lhs.get()
                                                             : rhs.get());
                 instruction->addOperand(std::make_unique<RegisterOperand>(
-                    new_reg->getRegNum()));  // rd
+                    new_reg->getRegNum(), new_reg->isVirtual()));  // rd
                 instruction->addOperand(std::make_unique<RegisterOperand>(
-                    reg_operand->getRegNum()));  // rs1
+                    reg_operand->getRegNum(), new_reg->isVirtual()));  // rs1
                 instruction->addOperand(std::make_unique<ImmediateOperand>(
                     imm_operand->getValue()));  // imm
 
                 parent_bb->addInstruction(std::move(instruction));
             } else {
                 // 使用 add 指令
+                new_reg = codeGen_->allocateReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::ADD, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
-                    new_reg->getRegNum()));               // rd
-                instruction->addOperand(std::move(lhs));  // rs1
-                instruction->addOperand(std::move(rhs));  // rs2
+                    new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+                instruction->addOperand(std::move(lhs));           // rs1
+                instruction->addOperand(std::move(rhs));           // rs2
                 parent_bb->addInstruction(std::move(instruction));
             }
             break;
@@ -184,14 +212,13 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             auto lhs_reg = immToReg(std::move(lhs), parent_bb);
             auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
+            new_reg = codeGen_->allocateReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::SUB, parent_bb);
-            instruction->addOperand(
-                std::make_unique<RegisterOperand>(new_reg->getRegNum()));  // rd
             instruction->addOperand(std::make_unique<RegisterOperand>(
-                lhs_reg->getRegNum()));  // rs1
-            instruction->addOperand(std::make_unique<RegisterOperand>(
-                rhs_reg->getRegNum()));  // rs2
+                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+            instruction->addOperand(std::move(lhs_reg));       // rs1
+            instruction->addOperand(std::move(rhs_reg));       // rs2
 
             parent_bb->addInstruction(std::move(instruction));
             break;
@@ -210,14 +237,13 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             auto lhs_reg = immToReg(std::move(lhs), parent_bb);
             auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
+            new_reg = codeGen_->allocateReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::MUL, parent_bb);
-            instruction->addOperand(
-                std::make_unique<RegisterOperand>(new_reg->getRegNum()));  // rd
             instruction->addOperand(std::make_unique<RegisterOperand>(
-                lhs_reg->getRegNum()));  // rs1
-            instruction->addOperand(std::make_unique<RegisterOperand>(
-                rhs_reg->getRegNum()));  // rs2
+                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+            instruction->addOperand(std::move(lhs_reg));       // rs1
+            instruction->addOperand(std::move(rhs_reg));       // rs2
 
             parent_bb->addInstruction(std::move(instruction));
             break;
@@ -228,12 +254,17 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             throw std::runtime_error("Unsupported binary operation: " +
                                      inst->toString());
     }
-    // 返回新分配的寄存器操作数
-    codeGen_->mapValueToReg(inst, new_reg->getRegNum(), new_reg->isVirtual());
-    return std::make_unique<RegisterOperand>(new_reg->getRegNum(), new_reg->isVirtual());
+
+    // 返回新分配的寄存器操作数（如果有）
+    if (new_reg) {
+        codeGen_->mapValueToReg(inst, new_reg->getRegNum(),
+                                new_reg->isVirtual());
+        return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                                 new_reg->isVirtual());
+    }  // Should only happen if we returned early (immediate case)
+    throw std::runtime_error("No register allocated for binary op result");
 }
 
-// 处理 ret 指令
 void Visitor::visitRetInstruction(const midend::Instruction* ret_inst,
                                   BasicBlock* parent_bb) {
     if (ret_inst->getOpcode() != midend::Opcode::Ret) {
@@ -308,7 +339,10 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
     if (midend::isa<midend::ConstantInt>(value)) {
         // 判断范围，是否在 [-2048, 2047] 之间
         auto value_int = midend::cast<midend::ConstantInt>(value)->getValue();
-        if (value_int >= -2048 && value_int <= 2047) {
+        constexpr int64_t IMM_MIN = -2048;
+        constexpr int64_t IMM_MAX = 2047;
+        auto signed_value = static_cast<int64_t>(value_int);
+        if (signed_value >= IMM_MIN && signed_value <= IMM_MAX) {
             return std::make_unique<ImmediateOperand>(value_int);
         }
         // 如果不在范围内，分配一个新的寄存器
@@ -316,7 +350,8 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         codeGen_->mapValueToReg(value, new_reg->getRegNum(),
                                 new_reg->isVirtual());
         auto inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
-        inst->addOperand(std::make_unique<RegisterOperand>(new_reg->getRegNum()));
+        inst->addOperand(
+            std::make_unique<RegisterOperand>(new_reg->getRegNum()));
         inst->addOperand(std::make_unique<ImmediateOperand>(value_int));
         parent_bb->addInstruction(std::move(inst));
         // 返回新分配的寄存器操作数
@@ -326,7 +361,8 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
 
     // 检查是否是指令，如果是则递归处理
     if (midend::isa<midend::Instruction>(value)) {
-        return visitBinaryOp(midend::cast<midend::Instruction>(value), parent_bb);
+        return visitBinaryOp(midend::cast<midend::Instruction>(value),
+                             parent_bb);
     }
 
     // 如果是函数参数，则直接映射到对应的寄存器
@@ -342,12 +378,17 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         throw std::runtime_error("Stack frame arguments not implemented yet");
     }
 
+    throw std::runtime_error(
+        "Unsupported value type: " + value->getName() + " (type: " +
+        std::to_string(static_cast<int>(value->getValueKind())) + ")");
+
     // 对于其他类型的值，分配一个新的虚拟寄存器
     auto new_reg = codeGen_->allocateReg();
     codeGen_->mapValueToReg(value, new_reg->getRegNum(), new_reg->isVirtual());
 
     // TODO(rikka): 其他类型处理...
-    return std::make_unique<RegisterOperand>(new_reg->getRegNum(), new_reg->isVirtual());
+    return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                             new_reg->isVirtual());
 }
 
 // 访问常量
