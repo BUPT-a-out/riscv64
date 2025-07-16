@@ -21,9 +21,12 @@ std::string MachineOperand::toString() const {
     }
 }
 
-std::string RegisterOperand::toString() const {
+std::string RegisterOperand::toString(bool use_abi) const {
     if (isVirtual()) {
         return "%vreg_" + std::to_string(regNum);
+    }
+    if (use_abi) {
+        return ABI::getABINameFromRegNum(regNum);
     }
     return "x" + std::to_string(regNum);
 }

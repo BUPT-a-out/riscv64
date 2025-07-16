@@ -69,7 +69,7 @@ class RegisterOperand : public MachineOperand {
 
     // unsigned abiToRegNum() const;
 
-    std::string toString() const;
+    std::string toString(bool use_abi = true) const;
 
     void setPhysicalReg(unsigned new_reg_num) {
         assert(is_virtual && "Cannot set physical register for non-virtual register");
