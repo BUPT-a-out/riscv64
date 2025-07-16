@@ -25,13 +25,17 @@ class Visitor {
     Module visit(const midend::Module* module);
     void visit(const midend::Function* func, Module* parent_module);
     void visit(const midend::BasicBlock* bb, Function* parent_func);
-    std::unique_ptr<MachineOperand> visit(const midend::Instruction* inst, BasicBlock* parent_bb);
+    std::unique_ptr<MachineOperand> visit(const midend::Instruction* inst,
+                                          BasicBlock* parent_bb);
     void visitRetInstruction(const midend::Instruction* retInst,
                              BasicBlock* parent_bb);
     std::unique_ptr<MachineOperand> visitBinaryOp(
         const midend::Instruction* inst, BasicBlock* parent_bb);
     std::unique_ptr<RegisterOperand> immToReg(
         std::unique_ptr<MachineOperand> operand, BasicBlock* parent_bb);
+    void storeOperandToReg(std::unique_ptr<MachineOperand> source_operand,
+                           std::unique_ptr<RegisterOperand> reg_operand,
+                           BasicBlock* parent_bb);
 
     std::unique_ptr<MachineOperand> visit(const midend::Value* value,
                                           BasicBlock* parent_bb);

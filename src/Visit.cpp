@@ -268,6 +268,42 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
     throw std::runtime_error("No register allocated for binary op result");
 }
 
+// 将值存储到寄存器中，生成 mv 或者 li 指令
+void Visitor::storeOperandToReg(std::unique_ptr<MachineOperand> source_operand,
+                                std::unique_ptr<RegisterOperand> dest_reg,
+                                BasicBlock* parent_bb) {
+    switch (source_operand->getType()) {
+        case OperandType::Immediate: {
+            auto inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
+            auto* const source_imm =
+                dynamic_cast<ImmediateOperand*>(source_operand.get());
+
+            inst->addOperand(std::move(dest_reg));  // rd
+            inst->addOperand(std::make_unique<ImmediateOperand>(
+                source_imm->getValue()));  // imm
+            parent_bb->addInstruction(std::move(inst));
+            break;
+        }
+        case OperandType::Register: {
+            auto inst = std::make_unique<Instruction>(Opcode::MV, parent_bb);
+            auto* reg_source =
+                dynamic_cast<RegisterOperand*>(source_operand.get());
+
+            inst->addOperand(std::move(dest_reg));  // rd
+            inst->addOperand(std::make_unique<RegisterOperand>(
+                reg_source->getRegNum()));  // rs
+            parent_bb->addInstruction(std::move(inst));
+            break;
+        }
+
+        default:
+            // TODO(rikka): 其他类型的返回值处理
+            throw std::runtime_error(
+                "Unsupported return value type: " +
+                std::to_string(static_cast<int>(source_operand->getType())));
+    }
+}
+
 void Visitor::visitRetInstruction(const midend::Instruction* ret_inst,
                                   BasicBlock* parent_bb) {
     if (ret_inst->getOpcode() != midend::Opcode::Ret) {
@@ -281,37 +317,9 @@ void Visitor::visitRetInstruction(const midend::Instruction* ret_inst,
     }
 
     // 处理返回值
-    auto ret_value = visit(ret_inst->getOperand(0), parent_bb);
-
-    switch (ret_value->getType()) {
-        case OperandType::Immediate: {
-            auto inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
-            auto* const ret_imm =
-                dynamic_cast<ImmediateOperand*>(ret_value.get());
-
-            inst->addOperand(std::make_unique<RegisterOperand>("a0"));  // rd
-            inst->addOperand(std::make_unique<ImmediateOperand>(
-                ret_imm->getValue()));  // imm
-            parent_bb->addInstruction(std::move(inst));
-            break;
-        }
-        case OperandType::Register: {
-            auto inst = std::make_unique<Instruction>(Opcode::MV, parent_bb);
-            auto* reg_source = dynamic_cast<RegisterOperand*>(ret_value.get());
-
-            inst->addOperand(std::make_unique<RegisterOperand>("a0"));  // rd
-            inst->addOperand(std::make_unique<RegisterOperand>(
-                reg_source->getRegNum()));  // rs
-            parent_bb->addInstruction(std::move(inst));
-            break;
-        }
-
-        default:
-            // TODO(rikka): 其他类型的返回值处理
-            throw std::runtime_error(
-                "Unsupported return value type: " +
-                std::to_string(static_cast<int>(ret_value->getType())));
-    }
+    auto ret_operand = visit(ret_inst->getOperand(0), parent_bb);
+    storeOperandToReg(std::move(ret_operand),
+                      std::make_unique<RegisterOperand>("a0"), parent_bb);
     // 添加返回指令
     auto riscv_ret_inst = std::make_unique<Instruction>(Opcode::RET, parent_bb);
     parent_bb->addInstruction(std::move(riscv_ret_inst));
