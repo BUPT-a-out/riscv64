@@ -494,11 +494,14 @@ void RegAllocGreedy::insertSpillAtDef(RegisterOperand* virtReg,
         for (unsigned tempReg : {5, 6, 7, 28, 29, 30, 31}) {
             if (!physicalRegs_[tempReg - 5].allocated) {
                 // Create move instruction first
-                auto inst = Instruction{Opcode::MV};
-                inst.addOperand(std::make_unique<RegisterOperand>(tempReg));
-                inst.addOperand(std::make_unique<RegisterOperand>(*virtReg));
+                std::vector<std::unique_ptr<MachineOperand>> moveOperands;
+                moveOperands.push_back(
+                    std::make_unique<RegisterOperand>(tempReg));
+                moveOperands.push_back(
+                    std::make_unique<RegisterOperand>(*virtReg));
 
-                auto moveInst = std::make_unique<Instruction>(inst);
+                auto moveInst = std::make_unique<Instruction>(
+                    Opcode::MV, std::move(moveOperands));
                 moveInst->setParent(bb);
                 bb->insert(insertPos, std::move(moveInst));
 
@@ -801,11 +804,10 @@ void RegAllocGreedy::coalesceRegisters() {
 
 bool RegAllocGreedy::canEliminateCopy(Instruction* copyInst) {
     // 获取拷贝指令的源和目标操作数
-    auto ops = copyInst->getOperands();
-    if (ops.size() < 2) return false;
+    if (copyInst->getOprandCount() < 2) return false;
 
-    auto dest = ops[0].get();
-    auto src = ops[1].get();
+    auto dest = copyInst->getOperand(0);
+    auto src = copyInst->getOperand(1);
 
     // 必须是寄存器操作数
     if (!dest->isReg() || !src->isReg()) return false;
@@ -820,6 +822,7 @@ bool RegAllocGreedy::canEliminateCopy(Instruction* copyInst) {
 
 std::vector<unsigned> RegAllocGreedy::getAllocationOrder(
     LiveInterval* virtReg) const {
+    (void)virtReg;  // Suppress unused parameter warning
     return RegAllocUtils::getRegisterAllocationOrder();
 }
 
@@ -1075,7 +1078,10 @@ bool isCalleeSaved(unsigned physReg) {
 
 // 所有寄存器都是整数寄存器
 // TODO: float
-RegClass getRegisterClass(unsigned physReg) { return RegClass::Integer; }
+RegClass getRegisterClass(unsigned physReg) {
+    (void)physReg;  // Suppress unused parameter warning
+    return RegClass::Integer;
+}
 
 bool interferes(const LiveInterval& a, const LiveInterval& b) {
     return a.interferesWith(b);
