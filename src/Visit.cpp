@@ -8,6 +8,7 @@
 
 #include "ABI.h"
 #include "CodeGen.h"
+#include "IR/Instructions.h"
 #include "IR/Module.h"
 #include "Instructions/All.h"
 
@@ -72,10 +73,15 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Instruction* inst,
             return visitBinaryOp(inst, parent_bb);
             break;
         case midend::Opcode::Load:
+            return visitLoadInst(inst, parent_bb);
             break;
-
+        case midend::Opcode::Alloca:
+            return visitAllocaInst(inst, parent_bb);
+            break;
         case midend::Opcode::Br:
         case midend::Opcode::Store:
+            visitStoreInst(inst, parent_bb);
+            break;
         case midend::Opcode::Ret:
             // 处理返回指令
             visitRetInstruction(inst, parent_bb);
@@ -85,6 +91,7 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Instruction* inst,
             throw std::runtime_error("Unsupported instruction: " +
                                      inst->toString());
     }
+    return nullptr;  // 对于不产生值的指令，返回 nullptr
 }
 
 std::unique_ptr<RegisterOperand> Visitor::immToReg(
@@ -113,7 +120,83 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
     return std::make_unique<RegisterOperand>(new_reg->getRegNum(), true);
 }
 
+// 处理 alloca 指令
+std::unique_ptr<MachineOperand> Visitor::visitAllocaInst(
+    const midend::Instruction* inst, BasicBlock* parent_bb) {
+    if (inst->getOpcode() != midend::Opcode::Alloca) {
+        throw std::runtime_error("Not an alloca instruction: " +
+                                 inst->toString());
+    }
+
+    // 检查是否已经为此 alloca 分配了寄存器
+    const auto foundReg = findRegForValue(inst);
+    if (foundReg.has_value()) {
+        return std::make_unique<RegisterOperand>(foundReg.value()->getRegNum(),
+                                                 foundReg.value()->isVirtual());
+    }
+
+    // 分配一个新的寄存器，映射指令本身（不是操作数）
+    auto new_reg = codeGen_->allocateReg();
+    codeGen_->mapValueToReg(inst, new_reg->getRegNum(), new_reg->isVirtual());
+
+    // 不生成实际的 RISC-V 指令，因为 alloca 只是分配空间，不需要立即执行
+    return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                             new_reg->isVirtual());
+}
+
+// 处理 store 指令
+void Visitor::visitStoreInst(const midend::Instruction* inst,
+                             BasicBlock* parent_bb) {
+    if (inst->getOpcode() != midend::Opcode::Store) {
+        throw std::runtime_error("Not a store instruction: " +
+                                 inst->toString());
+    }
+    if (inst->getNumOperands() != 2) {
+        throw std::runtime_error(
+            "Store instruction must have two operands, got " +
+            std::to_string(inst->getNumOperands()));
+    }
+
+    const auto* store_inst = dynamic_cast<const midend::StoreInst*>(inst);
+
+    // 获取存储的值和目标地址
+    auto value_operand = visit(store_inst->getValueOperand(), parent_bb);
+    auto address_operand =
+        immToReg(visit(store_inst->getPointerOperand(), parent_bb), parent_bb);
+
+    // 生成存储指令
+    storeOperandToReg(std::move(value_operand), std::move(address_operand),
+                      parent_bb);
+}
+
 // 处理 load 指令
+std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
+    const midend::Instruction* inst, BasicBlock* parent_bb) {
+    if (inst->getOpcode() != midend::Opcode::Load) {
+        throw std::runtime_error("Not a load instruction: " + inst->toString());
+    }
+    if (inst->getNumOperands() != 1) {
+        throw std::runtime_error(
+            "Load instruction must have one operand, got " +
+            std::to_string(inst->getNumOperands()));
+    }
+
+    const auto* load_inst = dynamic_cast<const midend::LoadInst*>(inst);
+    auto address_operand =
+        immToReg(visit(load_inst->getPointerOperand(), parent_bb), parent_bb);
+
+    // 获取源地址指针对应的寄存器
+    auto* reg_operand =
+        codeGen_->getRegForValue(load_inst->getPointerOperand());
+    if (reg_operand == nullptr) {
+        throw std::runtime_error("No register allocated for pointer operand: " +
+                                 load_inst->getPointerOperand()->getName());
+    }
+
+    // 或许不需要分配新的寄存器？
+    return std::make_unique<RegisterOperand>(reg_operand->getRegNum(),
+                                             reg_operand->isVirtual());
+}
 
 // 处理二元运算指令
 // Handles binary operation instructions by generating the appropriate RISC-V
@@ -291,7 +374,7 @@ void Visitor::storeOperandToReg(std::unique_ptr<MachineOperand> source_operand,
 
             inst->addOperand(std::move(dest_reg));  // rd
             inst->addOperand(std::make_unique<RegisterOperand>(
-                reg_source->getRegNum()));  // rs
+                reg_source->getRegNum(), reg_source->isVirtual()));  // rs
             parent_bb->addInstruction(std::move(inst));
             break;
         }
@@ -343,7 +426,8 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
     const auto foundReg = findRegForValue(value);
     if (foundReg.has_value()) {
         // 直接使用找到的寄存器操作数
-        return std::make_unique<RegisterOperand>(foundReg.value()->getRegNum());
+        return std::make_unique<RegisterOperand>(foundReg.value()->getRegNum(),
+                                                 foundReg.value()->isVirtual());
     }
 
     // 检查是否是常量
@@ -362,7 +446,8 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
                                 new_reg->isVirtual());
         auto inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
         inst->addOperand(
-            std::make_unique<RegisterOperand>(new_reg->getRegNum()));
+            std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                              new_reg->isVirtual()));  // rd
         inst->addOperand(std::make_unique<ImmediateOperand>(value_int));
         parent_bb->addInstruction(std::move(inst));
         // 返回新分配的寄存器操作数
@@ -386,6 +471,13 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         // 否则，从栈帧中取出来
         // TODO(rikka): 处理栈帧中的参数
         throw std::runtime_error("Stack frame arguments not implemented yet");
+    }
+
+    // 如果是指针，则直接返回对应的寄存器
+    if (value->getType()->isPointerType()) {
+        auto* reg = codeGen_->getOrAllocateReg(value);
+        return std::make_unique<RegisterOperand>(reg->getRegNum(),
+                                                 reg->isVirtual());
     }
 
     throw std::runtime_error(

@@ -31,6 +31,12 @@ class Visitor {
                              BasicBlock* parent_bb);
     std::unique_ptr<MachineOperand> visitBinaryOp(
         const midend::Instruction* inst, BasicBlock* parent_bb);
+    std::unique_ptr<MachineOperand> visitAllocaInst(
+        const midend::Instruction* inst, BasicBlock* parent_bb);
+    std::unique_ptr<MachineOperand> visitLoadInst(const midend::Instruction* inst,
+                                              BasicBlock* parent_bb);
+    void visitStoreInst(const midend::Instruction* inst,
+                                               BasicBlock* parent_bb);
     std::unique_ptr<RegisterOperand> immToReg(
         std::unique_ptr<MachineOperand> operand, BasicBlock* parent_bb);
     void storeOperandToReg(std::unique_ptr<MachineOperand> source_operand,
