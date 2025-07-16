@@ -42,9 +42,9 @@ std::string MemoryOperand::toString() const {
 
 std::string getInstructionName(Opcode opcode) {
     static const std::unordered_map<Opcode, std::string> opcodeNames = {
-        {Opcode::ADD, "add"}, {Opcode::SUB, "sub"}, {Opcode::MUL, "mul"},
-        {Opcode::DIV, "div"}, {Opcode::RET, "ret"}, {Opcode::LI, "li"},
-        {Opcode::MV, "mv"},
+        {Opcode::ADD, "add"}, {Opcode::SUB, "sub"},   {Opcode::MUL, "mul"},
+        {Opcode::DIV, "div"}, {Opcode::RET, "ret"},   {Opcode::LI, "li"},
+        {Opcode::MV, "mv"},   {Opcode::ADDI, "addi"},
         // TODO(rikka): 添加其他操作码的名称...
     };
 
@@ -52,7 +52,8 @@ std::string getInstructionName(Opcode opcode) {
     if (it != opcodeNames.end()) {
         return it->second;
     }
-    throw std::runtime_error("Unknown opcode");
+    throw std::runtime_error("Unknown opcode: " +
+                             std::to_string(static_cast<int>(opcode)));
 }
 
 std::string Instruction::toString() const {
