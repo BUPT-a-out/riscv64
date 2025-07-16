@@ -40,6 +40,10 @@ class BasicBlock {
     const_iterator end() const { return instructions.end(); }
 
     iterator erase(iterator it) { return instructions.erase(it); }
+    iterator insert(const_iterator pos, std::unique_ptr<Instruction> inst) {
+        inst->setParent(this);
+        return instructions.insert(pos, std::move(inst));
+    }
 
     const std::string& getLabel() const { return label; }
 
