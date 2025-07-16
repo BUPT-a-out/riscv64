@@ -39,6 +39,8 @@ class BasicBlock {
     const_iterator begin() const { return instructions.begin(); }
     const_iterator end() const { return instructions.end(); }
 
+    iterator erase(iterator it) { return instructions.erase(it); }
+
     const std::string& getLabel() const { return label; }
 
     // CFG (控制流图) 信息 - 使用原始指针，因为这些是弱引用关系
