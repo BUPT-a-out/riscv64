@@ -3,6 +3,7 @@
 // #include "BasicBlock.h"
 #include <list>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -199,6 +200,7 @@ enum Opcode {
     // 特殊控制流伪指令
     COPY  // 表示约束“这个虚拟寄存器的值，必须被放入那个特定的物理寄存器中”
 };
+using DestSourcePair = std::pair<MachineOperand*, MachineOperand*>;
 
 class Instruction {
    public:
@@ -215,7 +217,7 @@ class Instruction {
     const std::vector<std::unique_ptr<MachineOperand>>& getOperands() const {
         return operands;
     }
-    const auto getOprandCount() const { return operands.size(); }
+    auto getOprandCount() const { return operands.size(); }
 
     // 为了方便，可以提供一些辅助函数
     // 例如：获取第 n 个操作数
@@ -229,9 +231,15 @@ class Instruction {
     // 生成文本表示
     std::string toString() const;
 
+    std::optional<DestSourcePair> isCopyInstr() const;
+    bool isCallInstr() const {
+        return opcode == CALL || opcode == JAL;
+    }
+
    private:
     Opcode opcode;
     std::vector<std::unique_ptr<MachineOperand>> operands;
+    std::optional<DestSourcePair> isCopyInstrImpl() const;
 
     // 指向其所在的基本块 (可选，但非常有用) - 弱引用
     BasicBlock* parent{};

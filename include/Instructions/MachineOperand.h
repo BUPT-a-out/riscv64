@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 
 #include "IR/BasicBlock.h"
@@ -25,6 +26,22 @@ class MachineOperand {
     OperandType getType() const { return type; }
 
     std::string toString() const;
+
+    virtual unsigned getRegNum() const {
+        throw std::runtime_error("Not a register operand");
+    }
+
+    virtual std::int64_t getValue() const {
+        throw std::runtime_error("Not a immediate operand");
+    }
+
+    bool isReg() const {
+        return type == OperandType::Register;
+    }
+
+    bool isImm() const {
+        return type == OperandType::Immediate;
+    }
 
    protected:
     explicit MachineOperand(OperandType t) : type(t) {}
@@ -53,6 +70,12 @@ class RegisterOperand : public MachineOperand {
     // unsigned abiToRegNum() const;
 
     std::string toString() const;
+
+    void setPhysicalReg(unsigned new_reg_num) {
+        assert(is_virtual && "Cannot set physical register for non-virtual register");
+        regNum = new_reg_num;
+        is_virtual = false;
+    }
 
    private:
     unsigned regNum;
