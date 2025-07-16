@@ -68,6 +68,7 @@ void Visitor::visit(const midend::Instruction* inst, BasicBlock* parent_bb) {
         case midend::Opcode::Shr:
             // 处理算术指令，此处直接生成
             // 关于 0 和 1 的判断优化等，后期写一个 Pass 来优化
+            visitBinaryOp(inst, parent_bb);
             break;
         case midend::Opcode::Load:
         case midend::Opcode::Store:
@@ -228,6 +229,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                                      inst->toString());
     }
     // 返回新分配的寄存器操作数
+    codeGen_->mapValueToReg(inst, new_reg->getRegNum());
     return std::make_unique<RegisterOperand>(new_reg->getRegNum());
 }
 
@@ -305,19 +307,22 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         return std::make_unique<RegisterOperand>(foundReg.value()->getRegNum());
     }
 
-    // 是立即数，直接返回
-    if (value->getType()->isIntegerType()) {
+    // 检查是否是常量
+    if (midend::isa<midend::ConstantInt>(value)) {
         return std::make_unique<ImmediateOperand>(
-            dynamic_cast<const midend::ConstantInt*>(value)->getValue());
+            midend::cast<midend::ConstantInt>(value)->getValue());
     }
 
-    // 分配一个新的虚拟寄存器
+    // 检查是否是指令，如果是则递归处理
+    if (midend::isa<midend::Instruction>(value)) {
+        return visitBinaryOp(midend::cast<midend::Instruction>(value), parent_bb);
+    }
+
+    // 对于其他类型的值，分配一个新的虚拟寄存器
     auto new_reg = codeGen_->allocateReg();
     codeGen_->mapValueToReg(value, new_reg->getRegNum());
-    
-    // 把值加载到寄存器中
-    auto load_inst = std::make_unique<Instruction>(Opcode::ADD, parent_bb);
-    // TODO(rikka): 其他整数类型处理...
+
+    // TODO(rikka): 其他类型处理...
     return std::make_unique<RegisterOperand>(new_reg->getRegNum());
 }
 
