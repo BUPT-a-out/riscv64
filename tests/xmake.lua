@@ -110,7 +110,7 @@ task("test-riscv64")
         import("core.base.task")
         
         -- 构建测试框架
-        task.run("build", {}, "riscv64_test_framework")
+        task.run("build", { target = "riscv64_test_framework" })
         
         local testcase = option.testcase
         if testcase then

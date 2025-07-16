@@ -60,6 +60,6 @@ task("test")
         import("core.project.project")
         import("core.base.task")
         
-        task.run("build", {}, "riscv64_test_framework")
+        task.run("build", { target = "riscv64_test_framework" })
         os.exec("xmake run riscv64_test_framework")
     end)
