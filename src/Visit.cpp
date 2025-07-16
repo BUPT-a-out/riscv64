@@ -83,6 +83,8 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Instruction* inst,
             return visitAllocaInst(inst, parent_bb);
             break;
         case midend::Opcode::Br:
+            visitBranchInst(inst, parent_bb);
+            break;
         case midend::Opcode::Store:
             visitStoreInst(inst, parent_bb);
             break;
