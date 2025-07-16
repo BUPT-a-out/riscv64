@@ -207,6 +207,8 @@ class Instruction {
     explicit Instruction(Opcode op) : opcode(op) {}
     explicit Instruction(Opcode op, BasicBlock* parent)
         : opcode(op), parent(parent) {}
+    explicit Instruction(Opcode op, std::vector<std::unique_ptr<MachineOperand>>&& operands_vec, BasicBlock* parent = nullptr)
+    : opcode(op), operands(std::move(operands_vec)), parent(parent) {}
 
     // 添加操作数
     void addOperand(std::unique_ptr<MachineOperand> operand) {
