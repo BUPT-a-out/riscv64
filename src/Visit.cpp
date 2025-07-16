@@ -315,6 +315,19 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         return visitBinaryOp(midend::cast<midend::Instruction>(value), parent_bb);
     }
 
+    // 如果是函数参数，则直接映射到对应的寄存器
+    if (value->getValueKind() == midend::ValueKind::Argument) {
+        const auto* argument = midend::cast<midend::Argument>(value);
+        if (argument->getArgNo() < 8) {
+            // 如果参数编号小于的寄存器数量，直接返回对应的寄存器
+            return std::make_unique<RegisterOperand>(
+                "a" + std::to_string(argument->getArgNo()));
+        }
+        // 否则，从栈帧中取出来
+        // TODO(rikka): 处理栈帧中的参数
+        throw std::runtime_error("Stack frame arguments not implemented yet");
+    }
+
     // 对于其他类型的值，分配一个新的虚拟寄存器
     auto new_reg = codeGen_->allocateReg();
     codeGen_->mapValueToReg(value, new_reg->getRegNum(), new_reg->isVirtual());
