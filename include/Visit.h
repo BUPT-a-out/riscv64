@@ -33,15 +33,20 @@ class Visitor {
         const midend::Instruction* inst, BasicBlock* parent_bb);
     std::unique_ptr<MachineOperand> visitAllocaInst(
         const midend::Instruction* inst, BasicBlock* parent_bb);
-    std::unique_ptr<MachineOperand> visitLoadInst(const midend::Instruction* inst,
-                                              BasicBlock* parent_bb);
-    void visitStoreInst(const midend::Instruction* inst,
-                                               BasicBlock* parent_bb);
+    std::unique_ptr<MachineOperand> visitLoadInst(
+        const midend::Instruction* inst, BasicBlock* parent_bb);
+    void visitStoreInst(const midend::Instruction* inst, BasicBlock* parent_bb);
+    std::unique_ptr<MachineOperand> visitPhiInst(
+        const midend::Instruction* inst, BasicBlock* parent_bb);
+    void visitBranchInst(const midend::Instruction* inst,
+                         BasicBlock* parent_bb);
     std::unique_ptr<RegisterOperand> immToReg(
         std::unique_ptr<MachineOperand> operand, BasicBlock* parent_bb);
-    void storeOperandToReg(std::unique_ptr<MachineOperand> source_operand,
-                           std::unique_ptr<RegisterOperand> reg_operand,
-                           BasicBlock* parent_bb);
+    void storeOperandToReg(
+        std::unique_ptr<MachineOperand> source_operand,
+        std::unique_ptr<RegisterOperand> reg_operand, BasicBlock* parent_bb,
+        std::list<std::unique_ptr<Instruction>>::const_iterator insert_pos =
+            {});
 
     std::unique_ptr<MachineOperand> visit(const midend::Value* value,
                                           BasicBlock* parent_bb);
