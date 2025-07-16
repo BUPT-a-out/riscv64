@@ -306,8 +306,22 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
 
     // 检查是否是常量
     if (midend::isa<midend::ConstantInt>(value)) {
-        return std::make_unique<ImmediateOperand>(
-            midend::cast<midend::ConstantInt>(value)->getValue());
+        // 判断范围，是否在 [-2048, 2047] 之间
+        auto value_int = midend::cast<midend::ConstantInt>(value)->getValue();
+        if (value_int >= -2048 && value_int <= 2047) {
+            return std::make_unique<ImmediateOperand>(value_int);
+        }
+        // 如果不在范围内，分配一个新的寄存器
+        auto new_reg = codeGen_->allocateReg();
+        codeGen_->mapValueToReg(value, new_reg->getRegNum(),
+                                new_reg->isVirtual());
+        auto inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
+        inst->addOperand(std::make_unique<RegisterOperand>(new_reg->getRegNum()));
+        inst->addOperand(std::make_unique<ImmediateOperand>(value_int));
+        parent_bb->addInstruction(std::move(inst));
+        // 返回新分配的寄存器操作数
+        return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                                 new_reg->isVirtual());
     }
 
     // 检查是否是指令，如果是则递归处理
