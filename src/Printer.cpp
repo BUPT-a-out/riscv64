@@ -92,7 +92,13 @@ std::string Function::toString() const {
 
 std::string Module::toString() const {
     std::string result;
+    result += "  .text\n";
+    // for (const auto& global : global_vars) {
+    //     result += "  " + global->toString() + "\n";
+    // }
+    // TODO(rikka): 处理全局变量的输出，修改数据结构
     for (const auto& func : functions) {
+        result += "  .globl " + func->getName() + "\n";
         result += func->toString() + "\n";
     }
     return result;
