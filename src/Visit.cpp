@@ -38,6 +38,10 @@ void Visitor::visit(const midend::Function* func, Module* parent_module) {
     parent_module->addFunction(std::move(riscv_func));
 
     for (const auto& bb : *func) {
+        codeGen_->mapBBToLabel(bb, bb->getName());
+    }
+
+    for (const auto& bb : *func) {
         visit(bb, func_ptr);
     }
 }
@@ -85,7 +89,10 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Instruction* inst,
         case midend::Opcode::Ret:
             // 处理返回指令
             visitRetInstruction(inst, parent_bb);
-            return nullptr;  // 不产生值，只执行副作用
+            break;
+        case midend::Opcode::PHI:
+            return visitPhiInst(inst, parent_bb);
+            break;
         default:
             // 其他指令类型
             throw std::runtime_error("Unsupported instruction: " +
@@ -118,6 +125,98 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
     parent_bb->addInstruction(std::move(instruction));
 
     return std::make_unique<RegisterOperand>(new_reg->getRegNum(), true);
+}
+
+std::unique_ptr<MachineOperand> Visitor::visitPhiInst(
+    const midend::Instruction* inst, BasicBlock* parent_bb) {
+    if (inst->getOpcode() != midend::Opcode::PHI) {
+        throw std::runtime_error("Not a PHI instruction: " + inst->toString());
+    }
+
+    const auto* phi_inst = dynamic_cast<const midend::PHINode*>(inst);
+    if (phi_inst == nullptr) {
+        throw std::runtime_error("Not a PHI instruction: " + inst->toString());
+    }
+
+    auto value_1 = visit(phi_inst->getIncomingValue(0), parent_bb);
+    auto value_2 = visit(phi_inst->getIncomingValue(1), parent_bb);
+
+    auto* parent_func = parent_bb->getParent();
+
+    auto* incoming_block_1 = parent_func->getBasicBlockByLabel(
+        phi_inst->getIncomingBlock(0)->getName());
+    auto* incoming_block_2 = parent_func->getBasicBlockByLabel(
+        phi_inst->getIncomingBlock(1)->getName());
+
+    if (incoming_block_1 == nullptr || incoming_block_2 == nullptr) {
+        throw std::runtime_error(
+            "Incoming blocks not found for PHI instruction: " +
+            inst->toString());
+    }
+
+    // 在最后一条跳转指令之前，插入 mov 指令
+    auto new_reg = codeGen_->allocateReg();
+
+    // 为 PHI 指令分配的寄存器创建副本用于插入
+    auto dest_reg_1 = std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                                        new_reg->isVirtual());
+    auto dest_reg_2 = std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                                        new_reg->isVirtual());
+
+    storeOperandToReg(std::move(value_1), std::move(dest_reg_1),
+                      incoming_block_1, std::prev(incoming_block_1->end()));
+    storeOperandToReg(std::move(value_2), std::move(dest_reg_2),
+                      incoming_block_2, std::prev(incoming_block_2->end()));
+
+    // 映射 PHI 指令到分配的寄存器
+    codeGen_->mapValueToReg(inst, new_reg->getRegNum(), new_reg->isVirtual());
+
+    return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                             new_reg->isVirtual());
+}
+
+void Visitor::visitBranchInst(const midend::Instruction* inst,
+                              BasicBlock* parent_bb) {
+    if (inst->getOpcode() != midend::Opcode::Br) {
+        throw std::runtime_error("Not a branch instruction: " +
+                                 inst->toString());
+    }
+
+    const auto* branch_inst = dynamic_cast<const midend::BranchInst*>(inst);
+    if (branch_inst == nullptr) {
+        throw std::runtime_error("Not a branch instruction: " +
+                                 inst->toString());
+    }
+
+    if (branch_inst->isUnconditional()) {
+        // 处理无条件跳转
+        auto* target_bb = branch_inst->getTargetBB();
+        auto instruction = std::make_unique<Instruction>(Opcode::J, parent_bb);
+        instruction->addOperand(std::make_unique<LabelOperand>(target_bb));
+        parent_bb->addInstruction(std::move(instruction));
+    } else {
+        // 处理条件跳转
+        auto condition = visit(branch_inst->getCondition(), parent_bb);
+        auto* true_bb = branch_inst->getTrueBB();
+        auto* false_bb = branch_inst->getFalseBB();
+
+        // 生成条件跳转指令
+        auto instruction =
+            std::make_unique<Instruction>(Opcode::BNEZ, parent_bb);
+        instruction->addOperand(std::move(condition));  // 条件
+        instruction->addOperand(
+            std::make_unique<LabelOperand>(true_bb));  // 真分支标签
+        instruction->addOperand(
+            std::make_unique<LabelOperand>(false_bb));  // 假分支标签
+        parent_bb->addInstruction(std::move(instruction));
+
+        // 生成无条件跳转到假分支的指令
+        auto false_instruction =
+            std::make_unique<Instruction>(Opcode::J, parent_bb);
+        false_instruction->addOperand(
+            std::make_unique<LabelOperand>(false_bb));  // 跳转到假分支标签
+        parent_bb->addInstruction(std::move(false_instruction));
+    }
 }
 
 // 处理 alloca 指令
