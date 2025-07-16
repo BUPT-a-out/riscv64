@@ -33,7 +33,7 @@ std::string RegisterOperand::toString(bool use_abi) const {
 
 std::string ImmediateOperand::toString() const { return std::to_string(value); }
 
-std::string LabelOperand::toString() const { return ":"; }
+std::string LabelOperand::toString() const { return getLabelName(); }
 
 std::string MemoryOperand::toString() const {
     return std::to_string(getOffset()->getValue()) + "(" +
@@ -44,7 +44,8 @@ std::string getInstructionName(Opcode opcode) {
     static const std::unordered_map<Opcode, std::string> opcodeNames = {
         {Opcode::ADD, "add"}, {Opcode::SUB, "sub"},   {Opcode::MUL, "mul"},
         {Opcode::DIV, "div"}, {Opcode::RET, "ret"},   {Opcode::LI, "li"},
-        {Opcode::MV, "mv"},   {Opcode::ADDI, "addi"},
+        {Opcode::MV, "mv"},   {Opcode::ADDI, "addi"}, {Opcode::BNEZ, "bnez"},
+        {Opcode::J, "j"},     {Opcode::SLT, "slt"},
         // TODO(rikka): 添加其他操作码的名称...
     };
 
