@@ -29,6 +29,8 @@ class BasicBlock {
 
     size_t getInstructionCount() const { return instructions.size(); }
 
+    auto* getParent() const { return parent; }
+
     // 迭代器，便于遍历指令
     using iterator = std::list<std::unique_ptr<Instruction>>::iterator;
     using const_iterator =
