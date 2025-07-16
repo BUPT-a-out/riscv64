@@ -5,8 +5,8 @@
 #include <stdexcept>
 #include <string>
 
-#include "IR/BasicBlock.h"
 #include "ABI.h"
+#include "IR/BasicBlock.h"
 
 namespace riscv64 {
 
@@ -35,13 +35,9 @@ class MachineOperand {
         throw std::runtime_error("Not a immediate operand");
     }
 
-    bool isReg() const {
-        return type == OperandType::Register;
-    }
+    bool isReg() const { return type == OperandType::Register; }
 
-    bool isImm() const {
-        return type == OperandType::Immediate;
-    }
+    bool isImm() const { return type == OperandType::Immediate; }
 
    protected:
     explicit MachineOperand(OperandType t) : type(t) {}
@@ -72,7 +68,8 @@ class RegisterOperand : public MachineOperand {
     std::string toString(bool use_abi = true) const;
 
     void setPhysicalReg(unsigned new_reg_num) {
-        assert(is_virtual && "Cannot set physical register for non-virtual register");
+        assert(is_virtual &&
+               "Cannot set physical register for non-virtual register");
         regNum = new_reg_num;
         is_virtual = false;
     }
@@ -122,13 +119,20 @@ class MemoryOperand : public MachineOperand {
 class LabelOperand : public MachineOperand {
    public:
     explicit LabelOperand(midend::BasicBlock* block)  // 指向基本块的指针
-        : MachineOperand(OperandType::Label), block(block) {}
+        : MachineOperand(OperandType::Label),
+          block(block),
+          labelName(block->getName()) {}
 
     // 支持字符串构造函数
     explicit LabelOperand(const std::string& labelName)
         : MachineOperand(OperandType::Label),
           block(nullptr),
           labelName(labelName) {}
+
+    explicit LabelOperand(midend::BasicBlock* block, std::string labelName)
+        : MachineOperand(OperandType::Label),
+          block(block),
+          labelName(std::move(labelName)) {}
 
     midend::BasicBlock* getBlock() const { return block; }
     const std::string& getLabelName() const { return labelName; }
