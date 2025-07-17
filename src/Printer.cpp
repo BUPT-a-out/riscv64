@@ -42,10 +42,11 @@ std::string MemoryOperand::toString() const {
 
 std::string getInstructionName(Opcode opcode) {
     static const std::unordered_map<Opcode, std::string> opcodeNames = {
-        {Opcode::ADD, "add"}, {Opcode::SUB, "sub"},   {Opcode::MUL, "mul"},
-        {Opcode::DIV, "div"}, {Opcode::RET, "ret"},   {Opcode::LI, "li"},
-        {Opcode::MV, "mv"},   {Opcode::ADDI, "addi"}, {Opcode::BNEZ, "bnez"},
-        {Opcode::J, "j"},     {Opcode::SLT, "slt"},   {Opcode::SGT, "sgt"},
+        {Opcode::ADD, "add"},   {Opcode::SUB, "sub"},   {Opcode::MUL, "mul"},
+        {Opcode::DIV, "div"},   {Opcode::RET, "ret"},   {Opcode::LI, "li"},
+        {Opcode::MV, "mv"},     {Opcode::ADDI, "addi"}, {Opcode::BNEZ, "bnez"},
+        {Opcode::J, "j"},       {Opcode::SLT, "slt"},   {Opcode::SGT, "sgt"},
+        {Opcode::SLTI, "slti"}, {Opcode::CALL, "call"},
         // TODO(rikka): 添加其他操作码的名称...
     };
 

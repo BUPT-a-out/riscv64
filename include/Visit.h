@@ -42,6 +42,8 @@ class Visitor {
                          BasicBlock* parent_bb);
     std::unique_ptr<RegisterOperand> immToReg(
         std::unique_ptr<MachineOperand> operand, BasicBlock* parent_bb);
+    std::unique_ptr<MachineOperand> visitCallInst(
+        const midend::Instruction* inst, BasicBlock* parent_bb);
     void storeOperandToReg(
         std::unique_ptr<MachineOperand> source_operand,
         std::unique_ptr<RegisterOperand> reg_operand, BasicBlock* parent_bb,

@@ -104,6 +104,9 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Instruction* inst,
         case midend::Opcode::PHI:
             return visitPhiInst(inst, parent_bb);
             break;
+        case midend::Opcode::Call:
+            return visitCallInst(inst, parent_bb);
+            break;
         default:
             // 其他指令类型
             throw std::runtime_error("Unsupported instruction: " +
@@ -142,6 +145,81 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
     parent_bb->addInstruction(std::move(instruction));
 
     return std::make_unique<RegisterOperand>(reg_num, is_virtual);
+}
+
+std::unique_ptr<MachineOperand> Visitor::visitCallInst(
+    const midend::Instruction* inst, BasicBlock* parent_bb) {
+    if (inst->getOpcode() != midend::Opcode::Call) {
+        throw std::runtime_error("Not a call instruction: " + inst->toString());
+    }
+
+    // 处理函数调用指令
+    const auto* call_inst = dynamic_cast<const midend::CallInst*>(inst);
+    if (call_inst == nullptr) {
+        throw std::runtime_error("Not a call instruction: " + inst->toString());
+    }
+
+    auto* called_func = call_inst->getCalledFunction();
+    if (called_func == nullptr) {
+        throw std::runtime_error("Called function not found for: " +
+                                 inst->toString());
+    }
+
+    // 存入寄存器
+    for (size_t arg_i = 0; arg_i < called_func->getNumArgs(); ++arg_i) {
+        auto* dest_arg = called_func->getArg(arg_i);
+        if (dest_arg == nullptr) {
+            throw std::runtime_error(
+                "Argument " + std::to_string(arg_i) +
+                " is null in call instruction: " + inst->toString());
+        }
+
+        auto* source_operand = call_inst->getArgOperand(arg_i);
+        if (source_operand == nullptr) {
+            throw std::runtime_error(
+                "Source operand for argument " + std::to_string(arg_i) +
+                " is null in call instruction: " + inst->toString());
+        }
+
+        // 将参数转换为寄存器
+        auto dest_arg_operand = visit(dest_arg, parent_bb);
+
+        // Cast to RegisterOperand since function arguments should be in
+        // registers
+        auto* reg_operand =
+            dynamic_cast<RegisterOperand*>(dest_arg_operand.get());
+        if (reg_operand == nullptr) {
+            throw std::runtime_error(
+                "Function argument must be a register operand");
+        }
+        auto dest_reg = std::make_unique<RegisterOperand>(
+            reg_operand->getRegNum(), reg_operand->isVirtual());
+
+        // 将参数存储到寄存器中
+        storeOperandToReg(visit(source_operand, parent_bb), std::move(dest_reg),
+                          parent_bb);
+    }
+
+    // 生成调用指令
+    auto riscv_call_inst =
+        std::make_unique<Instruction>(Opcode::CALL, parent_bb);
+    riscv_call_inst->addOperand(
+        std::make_unique<LabelOperand>(called_func->getName()));  // 函数名
+    parent_bb->addInstruction(std::move(riscv_call_inst));
+
+    // 如果被调用函数有返回值，则将 a0 的值保存到一个新的寄存器并返回
+    if (!called_func->getReturnType()->isVoidType()) {
+        auto new_reg = codeGen_->allocateReg();
+        auto dest_reg = std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                                          new_reg->isVirtual());
+        storeOperandToReg(std::make_unique<RegisterOperand>("a0"),
+                          std::move(dest_reg), parent_bb);
+        codeGen_->mapValueToReg(inst, new_reg->getRegNum(),
+                                new_reg->isVirtual());
+        return new_reg;
+    }
+
+    return nullptr;
 }
 
 std::unique_ptr<MachineOperand> Visitor::visitPhiInst(
@@ -503,14 +581,14 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
                 // 使用 slt 指令
-            auto instruction =
-                std::make_unique<Instruction>(Opcode::SLT, parent_bb);
-            instruction->addOperand(std::make_unique<RegisterOperand>(
-                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+                auto instruction =
+                    std::make_unique<Instruction>(Opcode::SLT, parent_bb);
+                instruction->addOperand(std::make_unique<RegisterOperand>(
+                    new_reg->getRegNum(), new_reg->isVirtual()));  // rd
                 instruction->addOperand(std::move(lhs_reg));       // rs1
                 instruction->addOperand(std::move(rhs_reg));       // rs2
 
-            parent_bb->addInstruction(std::move(instruction));
+                parent_bb->addInstruction(std::move(instruction));
             }
             break;
         }
