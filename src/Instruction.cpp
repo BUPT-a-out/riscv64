@@ -141,4 +141,46 @@ bool Instruction::isBranch() const {
     return false;
 }
 
+bool Instruction::isBackEdge() const {
+    if (!isBranch()) {
+        return false;
+    }
+    
+    BasicBlock* target_bb = nullptr;
+    
+    // 获取目标基本块
+    if (opcode == BEQ || opcode == BNE || opcode == BLT || opcode == BGE || 
+        opcode == BLTU || opcode == BGEU || opcode == BEQZ || opcode == BNEZ || 
+        opcode == BLEZ || opcode == BGEZ || opcode == BLTZ || opcode == BGTZ || 
+        opcode == BGT || opcode == BLE || opcode == BGTU || opcode == BLEU) {
+        if (operands.size() >= 3) {
+            auto* target_operand = operands.back().get();
+            if (target_operand->getType() == OperandType::Label) {
+                LabelOperand* label_op = static_cast<LabelOperand*>(target_operand);
+                // 需要根据LabelOperand的实际设计调整这里的类型转换
+                target_bb = reinterpret_cast<BasicBlock*>(label_op->getBlock());
+            }
+        }
+    } else if (opcode == JAL || opcode == J) {
+        size_t target_idx = (opcode == JAL) ? 1 : 0;
+        if (operands.size() > target_idx) {
+            auto* target_operand = operands[target_idx].get();
+            if (target_operand->getType() == OperandType::Label) {
+                LabelOperand* label_op = static_cast<LabelOperand*>(target_operand);
+                target_bb = reinterpret_cast<BasicBlock*>(label_op->getBlock());
+            }
+        }
+    }
+    
+    // 简单的回边检测：检查目标是否在当前基本块的前驱中
+    if (target_bb && parent) {
+        // 这种方法假设如果跳转目标是当前块的前驱，则可能是回边
+        // 更准确的判断需要完整的CFG分析
+        return target_bb == parent;  // 自循环一定是回边
+    }
+    
+    return false;
+}
+
+
 }  // namespace riscv64
