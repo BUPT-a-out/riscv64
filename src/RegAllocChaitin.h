@@ -26,7 +26,7 @@ struct InterferenceNode {
     int color = -1;                          // 分配的颜色（物理寄存器）
     bool isPrecolored = false;               // 是否已经预着色（物理寄存器）
 
-    unsigned coalesceParent;                 // 合并的代表元
+    unsigned coalesceParent;  // 合并的代表元
 
     InterferenceNode(unsigned reg) : regNum(reg) {}
 };
@@ -62,6 +62,16 @@ class RegAllocChaitin {
     std::unordered_set<unsigned> coalescedRegs;
     std::unordered_map<unsigned, unsigned> coalesceMap;  // 映射到代表元
 
+    // 维护度数缓存，避免重复计算
+    std::unordered_map<unsigned, int> degreeCache;
+    void initializeDegreeCache();
+    void updateDegreeAfterRemoval(unsigned removedReg);
+    void updateDegreeAfterCoalesce(unsigned merged, unsigned eliminated);
+    void invalidateDegreeCache(unsigned reg);
+    int getCachedDegree(unsigned reg);
+    void clearDegreeCache() { degreeCache.clear(); }
+
+
    public:
     explicit RegAllocChaitin(Function* func) : function(func) {}
 
@@ -69,6 +79,7 @@ class RegAllocChaitin {
     void allocateRegisters();
 
    private:
+
     // 活跃性分析
     void computeLiveness();
     void computeDefUse(BasicBlock* bb, LivenessInfo& info);
@@ -91,6 +102,7 @@ class RegAllocChaitin {
     void rewriteInstructions();
     void rewriteInstruction(Instruction* inst);
     unsigned getFinalCoalescedReg(unsigned reg);
+    void replaceRegisterInInstruction(Instruction* inst, unsigned oldReg, unsigned newReg, bool replaceDef);
 
     // 寄存器合并方法
     void performCoalescing();
@@ -103,7 +115,8 @@ class RegAllocChaitin {
     void removeCoalescedCopies();
 
     // 计算合并权重
-    int calculateCoalescePriority(unsigned src, unsigned dst, BasicBlock* bb, Instruction* inst);
+    int calculateCoalescePriority(unsigned src, unsigned dst, BasicBlock* bb,
+                                  Instruction* inst);
     int getBasicBlockFrequency(BasicBlock* bb);
 
     int getRegisterUsageCount(unsigned reg);
@@ -111,7 +124,6 @@ class RegAllocChaitin {
     int calculateLifetimeOverlap(unsigned src, unsigned dst);
     int getRegisterPressure(BasicBlock* bb);
     int calculatePhysicalRegPreference(unsigned src, unsigned dst);
-
 
     // 辅助函数
     bool isPhysicalReg(unsigned reg) const;

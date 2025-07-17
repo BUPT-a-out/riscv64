@@ -2,11 +2,13 @@
 
 #include <algorithm>
 #include <iostream>
+#include <queue>
 #include <stack>
 
 #include "StackFrameManager.h"
 namespace riscv64 {
 
+/// Entry
 void RegAllocChaitin::allocateRegisters() {
     computeLiveness();
 
@@ -30,6 +32,99 @@ void RegAllocChaitin::allocateRegisters() {
 
     printAllocationResult();
     printCoalesceResult();
+}
+
+/// degree cache
+void RegAllocChaitin::initializeDegreeCache() {
+    degreeCache.clear();
+    for (const auto& [regNum, node] : interferenceGraph) {
+        if (!node->isPrecolored) {
+            degreeCache[regNum] = node->neighbors.size();
+        }
+    }
+}
+
+int RegAllocChaitin::getCachedDegree(unsigned reg) {
+    auto it = degreeCache.find(reg);
+    if (it != degreeCache.end()) {
+        return it->second;
+    }
+    
+    // 如果缓存中没有，重新计算并缓存
+    if (interferenceGraph.find(reg) != interferenceGraph.end()) {
+        int degree = interferenceGraph[reg]->neighbors.size();
+        degreeCache[reg] = degree;
+        return degree;
+    }
+    
+    return 0;
+}
+
+void RegAllocChaitin::updateDegreeAfterRemoval(unsigned removedReg) {
+    if (interferenceGraph.find(removedReg) == interferenceGraph.end()) {
+        return;
+    }
+    
+    // 更新所有邻居的度数
+    for (unsigned neighbor : interferenceGraph[removedReg]->neighbors) {
+        if (degreeCache.find(neighbor) != degreeCache.end()) {
+            degreeCache[neighbor]--;
+        }
+    }
+    
+    // 移除被删除节点的度数缓存
+    degreeCache.erase(removedReg);
+}
+
+void RegAllocChaitin::updateDegreeAfterCoalesce(unsigned merged, unsigned eliminated) {
+    if (interferenceGraph.find(eliminated) == interferenceGraph.end() ||
+        interferenceGraph.find(merged) == interferenceGraph.end()) {
+        return;
+    }
+    
+    auto& eliminatedNode = interferenceGraph[eliminated];
+    auto& mergedNode = interferenceGraph[merged];
+    
+    // 计算合并后的度数变化
+    std::unordered_set<unsigned> newNeighbors;
+    std::unordered_set<unsigned> commonNeighbors;
+    
+    // 找出eliminated的邻居中，merged原本没有的
+    for (unsigned neighbor : eliminatedNode->neighbors) {
+        if (neighbor != merged) {
+            if (mergedNode->neighbors.find(neighbor) == mergedNode->neighbors.end()) {
+                newNeighbors.insert(neighbor);
+            } else {
+                commonNeighbors.insert(neighbor);
+            }
+        }
+    }
+    
+    // 更新merged节点的度数
+    if (degreeCache.find(merged) != degreeCache.end()) {
+        degreeCache[merged] += newNeighbors.size();
+    }
+    
+    // 更新所有相关邻居的度数
+    // 1. eliminated的邻居需要减1（因为eliminated被移除）
+    // 2. 如果是新邻居，还需要加1（因为现在与merged连接）
+    for (unsigned neighbor : eliminatedNode->neighbors) {
+        if (neighbor != merged && degreeCache.find(neighbor) != degreeCache.end()) {
+            degreeCache[neighbor]--;  // 失去与eliminated的连接
+            
+            // 如果是新连接的邻居，需要加1
+            if (newNeighbors.find(neighbor) != newNeighbors.end()) {
+                degreeCache[neighbor]++;
+            }
+        }
+    }
+    
+    // 移除eliminated节点的度数缓存
+    degreeCache.erase(eliminated);
+}
+
+void RegAllocChaitin::invalidateDegreeCache(unsigned reg) {
+    degreeCache.erase(reg);
 }
 
 void RegAllocChaitin::computeLiveness() {
@@ -170,49 +265,82 @@ std::vector<unsigned> RegAllocChaitin::getSimplificationOrder() {
     std::vector<unsigned> order;
     std::unordered_set<unsigned> removed;
     std::stack<unsigned> stack;
-
-    // 简化阶段：移除度数小于K的节点
-    bool changed = true;
-    while (changed) {
-        changed = false;
-
-        for (auto& [regNum, node] : interferenceGraph) {
-            if (removed.find(regNum) != removed.end() || node->isPrecolored) {
-                continue;
-            }
-
-            // 计算当前度数（排除已移除的节点）
-            int currentDegree = 0;
-            for (unsigned neighbor : node->neighbors) {
-                if (removed.find(neighbor) == removed.end()) {
-                    currentDegree++;
-                }
-            }
-
-            // 如果度数小于可用颜色数，则移除
+    
+    // 初始化度数缓存
+    initializeDegreeCache();
+    
+    // 工作列表：维护当前度数小于K的节点
+    std::queue<unsigned> workList;
+    
+    // 初始化工作列表
+    for (auto& [regNum, node] : interferenceGraph) {
+        if (!node->isPrecolored) {
+            int currentDegree = getCachedDegree(regNum);
             if (currentDegree < static_cast<int>(availableRegs.size())) {
-                stack.push(regNum);
-                removed.insert(regNum);
-                changed = true;
+                workList.push(regNum);
             }
         }
     }
-
+    
+    // 简化阶段：处理工作列表中的节点
+    while (!workList.empty()) {
+        unsigned regNum = workList.front();
+        workList.pop();
+        
+        // 检查节点是否已经被处理
+        if (removed.find(regNum) != removed.end()) {
+            continue;
+        }
+        
+        // 再次检查度数（可能在之前的处理中已经改变）
+        int currentDegree = getCachedDegree(regNum);
+        if (currentDegree >= static_cast<int>(availableRegs.size())) {
+            continue;
+        }
+        
+        // 移除节点
+        stack.push(regNum);
+        removed.insert(regNum);
+        
+        // 更新邻居的度数，并检查是否有新的节点可以加入工作列表
+        if (interferenceGraph.find(regNum) != interferenceGraph.end()) {
+            for (unsigned neighbor : interferenceGraph[regNum]->neighbors) {
+                if (removed.find(neighbor) == removed.end() && 
+                    !interferenceGraph[neighbor]->isPrecolored) {
+                    
+                    // 更新邻居的度数
+                    if (degreeCache.find(neighbor) != degreeCache.end()) {
+                        degreeCache[neighbor]--;
+                        
+                        // 如果邻居的度数现在小于K，加入工作列表
+                        if (degreeCache[neighbor] < static_cast<int>(availableRegs.size())) {
+                            workList.push(neighbor);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 从度数缓存中移除当前节点
+        degreeCache.erase(regNum);
+    }
+    
     // 如果还有未移除的节点，选择溢出候选
     for (auto& [regNum, node] : interferenceGraph) {
         if (removed.find(regNum) == removed.end() && !node->isPrecolored) {
             spilledRegs.insert(regNum);
         }
     }
-
+    
     // 按栈顺序返回
     while (!stack.empty()) {
         order.push_back(stack.top());
         stack.pop();
     }
-
+    
     return order;
 }
+
 
 bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
     // 预着色物理寄存器
@@ -285,6 +413,7 @@ void RegAllocChaitin::handleSpills() {
     interferenceGraph.clear();
     virtualToPhysical.clear();
     spilledRegs.clear();
+    clearDegreeCache();  // 清理度数缓存
 }
 
 std::vector<unsigned> RegAllocChaitin::selectSpillCandidates() {
@@ -559,10 +688,7 @@ int RegAllocChaitin::getRegisterUsageCount(unsigned reg) {
 }
 
 int RegAllocChaitin::getRegisterDegree(unsigned reg) {
-    if (interferenceGraph.find(reg) == interferenceGraph.end()) {
-        return 0;
-    }
-    return interferenceGraph[reg]->neighbors.size();
+    return getCachedDegree(reg);
 }
 
 int RegAllocChaitin::calculateLifetimeOverlap(unsigned src, unsigned dst) {
@@ -680,6 +806,9 @@ void RegAllocChaitin::coalesceRegisters(unsigned src, unsigned dst) {
         unionCoalesce(srcRoot, dstRoot);
         coalesceMap[src] = dst;
         coalescedRegs.insert(src);
+
+        // 增量更新度数缓存
+        updateDegreeAfterCoalesce(dst, src);
 
         // 更新冲突图
         updateInterferenceAfterCoalesce(dst, src);
