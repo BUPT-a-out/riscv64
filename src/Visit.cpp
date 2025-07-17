@@ -442,20 +442,44 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
     }
 
     const auto* load_inst = dynamic_cast<const midend::LoadInst*>(inst);
-    auto address_operand =
-        immToReg(visit(load_inst->getPointerOperand(), parent_bb), parent_bb);
 
-    // 获取源地址指针对应的寄存器
-    auto* reg_operand =
-        codeGen_->getRegForValue(load_inst->getPointerOperand());
-    if (reg_operand == nullptr) {
-        throw std::runtime_error("No register allocated for pointer operand: " +
-                                 load_inst->getPointerOperand()->getName());
+    // 获取指针操作数
+    auto* pointer_operand = load_inst->getPointerOperand();
+
+    // 查找对应的FrameIndex
+    auto* sfm = parent_bb->getParent()->getStackFrameManager();
+    int frame_id = sfm->getAllocaStackSlotId(pointer_operand);
+
+    if (frame_id == -1) {
+        throw std::runtime_error(
+            "Cannot find frame index for pointer operand in load instruction");
     }
 
-    // 或许不需要分配新的寄存器？
-    return std::make_unique<RegisterOperand>(reg_operand->getRegNum(),
-                                             reg_operand->isVirtual());
+    // 生成frameaddr指令来获取栈地址
+    auto frame_addr_reg = codeGen_->allocateReg();
+    auto store_frame_addr_inst =
+        std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
+    store_frame_addr_inst->addOperand(std::make_unique<RegisterOperand>(
+        frame_addr_reg->getRegNum(), frame_addr_reg->isVirtual()));  // rd
+    store_frame_addr_inst->addOperand(
+        std::make_unique<FrameIndexOperand>(frame_id));  // FI
+    parent_bb->addInstruction(std::move(store_frame_addr_inst));
+
+    // 加载到新的寄存器
+    auto new_reg = codeGen_->allocateReg();
+    auto load_inst_ptr = std::make_unique<Instruction>(Opcode::LW, parent_bb);
+    load_inst_ptr->addOperand(std::make_unique<RegisterOperand>(
+        new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+    load_inst_ptr->addOperand(std::make_unique<MemoryOperand>(
+        std::move(frame_addr_reg),
+        std::make_unique<ImmediateOperand>(0)));  // memory address
+    parent_bb->addInstruction(std::move(load_inst_ptr));
+
+    // 建立load指令结果值到寄存器的映射
+    codeGen_->mapValueToReg(inst, new_reg->getRegNum(), new_reg->isVirtual());
+
+    return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                             new_reg->isVirtual());
 }
 
 // 处理二元运算指令
