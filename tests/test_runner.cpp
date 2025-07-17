@@ -662,7 +662,7 @@ std::unique_ptr<midend::Module> createComplexFunctionCallTest() {
     return module;
 }
 
-std::unique_ptr<midend::Module> createRegisterSpillTest() {
+std::unique_ptr<midend::Module> createLargeRegisterSpillTest() {
     static auto context = std::make_unique<midend::Context>();
     auto module = std::make_unique<midend::Module>("register_spill_test", context.get());
 
@@ -774,6 +774,76 @@ std::unique_ptr<midend::Module> createRegisterSpillTest() {
     return module;
 }
 
+std::unique_ptr<midend::Module> createSmallRegisterSpillTest() {
+    static auto context = std::make_unique<midend::Context>();
+    auto module = std::make_unique<midend::Module>("register_spill_test", context.get());
+
+    auto* i32Type = context->getInt32Type();
+
+    // 创建一个在RISC-V64上会导致轻微寄存器溢出的函数
+    // i32 riscv_spill_test(i32 a, i32 b, i32 c, i32 d, i32 e, i32 f, i32 g, i32 h)
+    auto* funcType = midend::FunctionType::get(i32Type, {
+        i32Type, i32Type, i32Type, i32Type, 
+        i32Type, i32Type, i32Type, i32Type
+    });
+    auto* func = midend::Function::Create(funcType, "riscv_spill_test", module.get());
+
+    // 设置参数名称
+    auto* arg1 = func->getArg(0); arg1->setName("a");
+    auto* arg2 = func->getArg(1); arg2->setName("b");
+    auto* arg3 = func->getArg(2); arg3->setName("c");
+    auto* arg4 = func->getArg(3); arg4->setName("d");
+    auto* arg5 = func->getArg(4); arg5->setName("e");
+    auto* arg6 = func->getArg(5); arg6->setName("f");
+    auto* arg7 = func->getArg(6); arg7->setName("g");
+    auto* arg8 = func->getArg(7); arg8->setName("h");
+
+    auto* entry = midend::BasicBlock::Create(context.get(), "entry", func);
+    midend::IRBuilder builder(context.get());
+    builder.setInsertPoint(entry);
+
+    // 创建常量
+    auto* const1 = midend::ConstantInt::get(i32Type, 1);
+    auto* const2 = midend::ConstantInt::get(i32Type, 2);
+    auto* const3 = midend::ConstantInt::get(i32Type, 3);
+    auto* const7 = midend::ConstantInt::get(i32Type, 7);
+
+    // 第一层计算 - 基础运算 (8个参数 + 8个中间值 = 16个活跃变量)
+    auto* temp1 = builder.createAdd(arg1, arg2, "temp1");
+    auto* temp2 = builder.createMul(arg3, arg4, "temp2");
+    auto* temp3 = builder.createAdd(arg5, arg6, "temp3");
+    auto* temp4 = builder.createMul(arg7, arg8, "temp4");
+    auto* temp5 = builder.createAdd(temp1, const1, "temp5");
+    auto* temp6 = builder.createMul(temp2, const2, "temp6");
+    auto* temp7 = builder.createAdd(temp3, const3, "temp7");
+    auto* temp8 = builder.createMul(temp4, const7, "temp8");
+
+    // 第二层计算 - 增加复杂度 (前面16个 + 6个新的 = 22个活跃变量)
+    auto* inter1 = builder.createAdd(temp1, temp2, "inter1");
+    auto* inter2 = builder.createMul(temp3, temp4, "inter2");
+    auto* inter3 = builder.createAdd(temp5, temp6, "inter3");
+    auto* inter4 = builder.createMul(temp7, temp8, "inter4");
+    auto* inter5 = builder.createAdd(inter1, inter2, "inter5");
+    auto* inter6 = builder.createMul(inter3, inter4, "inter6");
+
+    // 第三层计算 - 达到溢出临界点 (前面22个 + 4个新的 = 26个活跃变量)
+    auto* cross1 = builder.createAdd(inter5, arg1, "cross1");
+    auto* cross2 = builder.createMul(inter6, arg2, "cross2");
+    auto* cross3 = builder.createAdd(cross1, temp5, "cross3");
+    auto* cross4 = builder.createMul(cross2, temp6, "cross4");
+
+    // 最终计算 - 逐步释放一些变量，但仍保持高压力
+    auto* final1 = builder.createAdd(cross3, cross4, "final1");
+    auto* final2 = builder.createMul(final1, inter5, "final2");
+    auto* final3 = builder.createAdd(final2, temp7, "final3");
+    auto* result = builder.createMul(final3, temp8, "result");
+
+    builder.createRet(result);
+
+    return module;
+}
+
+
 
 }  // namespace testcases
 
@@ -789,7 +859,9 @@ TestRunner::TestRunner() {
     testCases_["6_complex_assignment"] = testcases::createComplexAssignmentTest;
     testCases_["7_complex_branch"] = testcases::createComplexBranchTest;
     testCases_["8_complex_function_call"] = testcases::createComplexFunctionCallTest;
-    testCases_["9_register_spill"] = testcases::createRegisterSpillTest;
+    testCases_["9_small_register_spill"] = testcases::createSmallRegisterSpillTest;
+    testCases_["10_big_register_spill"] = testcases::createLargeRegisterSpillTest;
+
 }
 
 std::unique_ptr<midend::Module> TestRunner::loadTestCase(
