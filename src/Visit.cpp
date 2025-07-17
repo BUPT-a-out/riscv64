@@ -82,7 +82,7 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Instruction* inst,
         case midend::Opcode::ICmpSGT:
         case midend::Opcode::ICmpSLT:
             // 处理算术指令，此处直接生成
-            // 关于 0 和 1 的判断优化等，后期写一个 Pass 来优化
+            // TODO(rikka): 关于 0, 1, 2^n(左移) 的判断优化等，后期写一个 Pass 来优化
             return visitBinaryOp(inst, parent_bb);
             break;
         case midend::Opcode::Load:
