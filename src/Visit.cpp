@@ -453,10 +453,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     lhs_imm->getValue() > rhs_imm->getValue() ? 1 : 0);
             }
 
-            // 使用 slt 指令
+            // 使用 sgt 指令
             new_reg = codeGen_->allocateReg();
             auto instruction =
-                std::make_unique<Instruction>(Opcode::SLT, parent_bb);
+                std::make_unique<Instruction>(Opcode::SGT, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual()));  // rd
             instruction->addOperand(std::move(lhs));           // rs1
@@ -467,7 +467,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
         }
 
         case midend::Opcode::ICmpSLT: {
-            // 处理有符号大于比较
+            // 处理有符号小于比较
             if ((lhs->getType() == OperandType::Immediate) &&
                 (rhs->getType() == OperandType::Immediate)) {
                 auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
@@ -476,10 +476,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     lhs_imm->getValue() < rhs_imm->getValue() ? 1 : 0);
             }
 
-            // 使用 sgt 指令
+            // 使用 slt 指令
             new_reg = codeGen_->allocateReg();
             auto instruction =
-                std::make_unique<Instruction>(Opcode::SGT, parent_bb);
+                std::make_unique<Instruction>(Opcode::SLT, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual()));  // rd
             instruction->addOperand(std::move(lhs));           // rs1
