@@ -844,24 +844,27 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         return new_reg;
     }
 
-    // 如果是指针，则直接返回对应的寄存器
-    if (value->getType()->isPointerType()) {
-        auto* reg = codeGen_->getOrAllocateReg(value);
-        return std::make_unique<RegisterOperand>(reg->getRegNum(),
-                                                 reg->isVirtual());
+    // 检查是否是alloca指令，如果是则应该返回对应的FrameIndex
+    if (auto* alloca_inst = midend::dyn_cast<midend::AllocaInst>(value)) {
+        auto* sfm = parent_bb->getParent()->getStackFrameManager();
+        int frame_id = sfm->getAllocaStackSlotId(alloca_inst);
+        if (frame_id == -1) {
+            // 如果还没有为这个alloca分配FI，现在分配
+            auto frame_operand = visitAllocaInst(alloca_inst, parent_bb);
+            auto* fi_operand =
+                dynamic_cast<FrameIndexOperand*>(frame_operand.get());
+            if (fi_operand) {
+                frame_id = fi_operand->getIndex();
+            }
+        }
+        if (frame_id != -1) {
+            return std::make_unique<FrameIndexOperand>(frame_id);
+        }
     }
 
     throw std::runtime_error(
         "Unsupported value type: " + value->getName() + " (type: " +
         std::to_string(static_cast<int>(value->getValueKind())) + ")");
-
-    // 对于其他类型的值，分配一个新的虚拟寄存器
-    auto new_reg = codeGen_->allocateReg();
-    codeGen_->mapValueToReg(value, new_reg->getRegNum(), new_reg->isVirtual());
-
-    // TODO(rikka): 其他类型处理...
-    return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
-                                             new_reg->isVirtual());
 }
 
 // 访问常量
