@@ -1,4 +1,5 @@
 #include "RegAllocChaitin.h"
+#include "StackFrameManager.h"
 
 #include <iostream>
 namespace riscv64 {
@@ -283,52 +284,41 @@ std::vector<unsigned> RegAllocChaitin::selectSpillCandidates() {
 }
 
 void RegAllocChaitin::insertSpillCode(unsigned reg) {
-    // 为溢出的寄存器在栈上分配空间
-    // 这里简化处理，实际需要与栈帧管理器配合
-
+    // 获取栈帧管理器
+    StackFrameManager stackManager(function);
+    
+    // 为溢出寄存器分配栈槽
+    int spillSlot = stackManager.allocateSpillSlot(reg);
+    int spillOffset = stackManager.getSpillSlotOffset(reg);
+    
     for (auto& bb : *function) {
         for (auto it = bb->begin(); it != bb->end(); ++it) {
             Instruction* inst = it->get();
-
+            
+            // 检查指令是否使用了溢出的寄存器
             auto usedRegs = getUsedRegs(inst);
-            auto definedRegs = getDefinedRegs(inst);
-
-            // 如果指令使用了溢出的寄存器，在指令前插入加载
-            if (std::find(usedRegs.begin(), usedRegs.end(), reg) !=
-                usedRegs.end()) {
-                // 创建临时寄存器
-                unsigned tempReg = 1000 + reg;  // 简单的临时寄存器分配
-
-                // 插入加载指令: ld tempReg, offset(sp)
+            if (std::find(usedRegs.begin(), usedRegs.end(), reg) != usedRegs.end()) {
+                // 在指令前插入加载
                 auto loadInst = std::make_unique<Instruction>(LD);
-                loadInst->addOperand(
-                    std::make_unique<RegisterOperand>(tempReg));
+                loadInst->addOperand(std::make_unique<RegisterOperand>(reg, false));
                 loadInst->addOperand(std::make_unique<MemoryOperand>(
-                    std::make_unique<RegisterOperand>(2),  // sp
-                    std::make_unique<ImmediateOperand>(reg *
-                                                       8)  // 简单的偏移计算
-                    ));
-
+                    std::make_unique<RegisterOperand>(2, false),  // sp
+                    std::make_unique<ImmediateOperand>(spillOffset)
+                ));
                 it = bb->insert(it, std::move(loadInst));
                 ++it;
-
-                // 替换指令中的寄存器使用
-                // 这里需要修改指令的操作数，将reg替换为tempReg
             }
-
-            // 如果指令定义了溢出的寄存器，在指令后插入存储
-            if (std::find(definedRegs.begin(), definedRegs.end(), reg) !=
-                definedRegs.end()) {
-                unsigned tempReg = 1000 + reg;
-
-                // 插入存储指令: sd tempReg, offset(sp)
+            
+            // 检查指令是否定义了溢出的寄存器
+            auto definedRegs = getDefinedRegs(inst);
+            if (std::find(definedRegs.begin(), definedRegs.end(), reg) != definedRegs.end()) {
+                // 在指令后插入存储
                 auto storeInst = std::make_unique<Instruction>(SD);
-                storeInst->addOperand(
-                    std::make_unique<RegisterOperand>(tempReg));
+                storeInst->addOperand(std::make_unique<RegisterOperand>(reg, false));
                 storeInst->addOperand(std::make_unique<MemoryOperand>(
-                    std::make_unique<RegisterOperand>(2),  // sp
-                    std::make_unique<ImmediateOperand>(reg * 8)));
-
+                    std::make_unique<RegisterOperand>(2, false),  // sp
+                    std::make_unique<ImmediateOperand>(spillOffset)
+                ));
                 ++it;
                 it = bb->insert(it, std::move(storeInst));
             }
