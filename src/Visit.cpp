@@ -11,6 +11,7 @@
 #include "IR/Instructions.h"
 #include "IR/Module.h"
 #include "Instructions/All.h"
+#include "StackFrameManager.h"
 
 namespace riscv64 {
 
@@ -321,20 +322,50 @@ std::unique_ptr<MachineOperand> Visitor::visitAllocaInst(
                                  inst->toString());
     }
 
-    // 检查是否已经为此 alloca 分配了寄存器
-    const auto foundReg = findRegForValue(inst);
-    if (foundReg.has_value()) {
-        return std::make_unique<RegisterOperand>(foundReg.value()->getRegNum(),
-                                                 foundReg.value()->isVirtual());
+    const auto* alloca_inst = midend::dyn_cast<midend::AllocaInst>(inst);
+    if (alloca_inst == nullptr) {
+        throw std::runtime_error("Not an alloca instruction: " +
+                                 inst->toString());
     }
 
-    // 分配一个新的寄存器，映射指令本身（不是操作数）
-    auto new_reg = codeGen_->allocateReg();
-    codeGen_->mapValueToReg(inst, new_reg->getRegNum(), new_reg->isVirtual());
+    // 检查是否已经为这个alloca分配过FI
+    auto* sfm = parent_bb->getParent()->getStackFrameManager();
+    int existing_id = sfm->getAllocaStackSlotId(inst);
+    if (existing_id != -1) {
+        // 已经分配过，直接返回现有的FrameIndexOperand
+        return std::make_unique<FrameIndexOperand>(existing_id);
+    }
 
-    // 不生成实际的 RISC-V 指令，因为 alloca 只是分配空间，不需要立即执行
-    return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
-                                             new_reg->isVirtual());
+    // 处理 alloca 指令
+    auto size = alloca_inst->getAllocatedType()->getBitWidth() /
+                8;  // 获取分配的大小（字节）
+    if (size == 0) {
+        throw std::runtime_error("Invalid alloca size: " +
+                                 std::to_string(size));
+    }
+
+    int64_t array_size = 1;  // 默认数组大小为 1
+    if (alloca_inst->isArrayAllocation()) {
+        auto* array_size_const =
+            midend::dyn_cast<midend::ConstantInt>(alloca_inst->getArraySize());
+        if (array_size_const == nullptr) {
+            throw std::runtime_error("Array size must be a constant integer");
+        }
+        array_size = array_size_const->getSignedValue();
+    }
+
+    int id = sfm->getNewStackObjectIdentifier();
+    auto stackObject =
+        std::make_unique<StackObject>(size * array_size, size, id);
+    sfm->addStackObject(std::move(stackObject));
+    sfm->mapAllocaToStackSlot(inst, id);
+
+    // 为alloca指令本身也建立映射，这样后续引用这个指令时能找到对应的FI
+    codeGen_->mapValueToReg(
+        inst, id, false);  // 使用id作为"寄存器号"，false表示这不是真正的寄存器
+
+    // 返回分配的FrameIndexOperand
+    return std::make_unique<FrameIndexOperand>(id);
 }
 
 // 处理 store 指令
