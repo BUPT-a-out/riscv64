@@ -427,6 +427,9 @@ std::unique_ptr<midend::Module> createComplexBranchTest() {
     auto* merge1BB = midend::BasicBlock::Create(context.get(), "merge1", func);
     auto* merge2BB = midend::BasicBlock::Create(context.get(), "merge2", func);
     auto* finalBB = midend::BasicBlock::Create(context.get(), "final", func);
+    auto* adjustBB = midend::BasicBlock::Create(context.get(), "adjust", func);
+    auto* noAdjustBB = midend::BasicBlock::Create(context.get(), "no_adjust", func);
+    auto* exitBB = midend::BasicBlock::Create(context.get(), "exit", func);
 
     // 创建IRBuilder
     midend::IRBuilder builder(context.get());
@@ -497,17 +500,30 @@ std::unique_ptr<midend::Module> createComplexBranchTest() {
     finalPhi->addIncoming(phi1, merge1BB);
     finalPhi->addIncoming(phi2, merge2BB);
 
-    // 最后再做一次计算: 如果结果 > 50 则减 10，否则加 5
-    auto* one = midend::ConstantInt::get(i32Type, 1);
+    // 最后再做一次判断: 如果结果 > 50 则减 10，否则加 5（使用分支代替select）
     auto* fifty_threshold = midend::ConstantInt::get(i32Type, 50);
-    auto* five = midend::ConstantInt::get(i32Type, 5);
-    auto* minusTen = midend::ConstantInt::get(i32Type, -10);
-    
     auto* isGreaterThan50 = builder.createICmpSGT(finalPhi, fifty_threshold, "is_gt_50");
-    auto* adjustment = builder.createSelect(isGreaterThan50, minusTen, five, "adjustment");
-    auto* adjustedResult = builder.createAdd(finalPhi, adjustment, "adjusted_result");
+    builder.createCondBr(isGreaterThan50, adjustBB, noAdjustBB);
 
-    builder.createRet(adjustedResult);
+    // adjust块: 结果 > 50，减去 10
+    builder.setInsertPoint(adjustBB);
+    auto* minusTen = midend::ConstantInt::get(i32Type, -10);
+    auto* adjustedResult1 = builder.createAdd(finalPhi, minusTen, "adjusted_result1");
+    builder.createBr(exitBB);
+
+    // no_adjust块: 结果 <= 50，加上 5
+    builder.setInsertPoint(noAdjustBB);
+    auto* five = midend::ConstantInt::get(i32Type, 5);
+    auto* adjustedResult2 = builder.createAdd(finalPhi, five, "adjusted_result2");
+    builder.createBr(exitBB);
+
+    // exit块: 最终的 phi 节点选择调整后的结果
+    builder.setInsertPoint(exitBB);
+    auto* exitPhi = builder.createPHI(i32Type, "exit_result");
+    exitPhi->addIncoming(adjustedResult1, adjustBB);
+    exitPhi->addIncoming(adjustedResult2, noAdjustBB);
+
+    builder.createRet(exitPhi);
 
     return module;
 }
