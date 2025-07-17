@@ -460,14 +460,17 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     lhs_imm->getValue() > rhs_imm->getValue() ? 1 : 0);
             }
 
+            auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+            auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
             // 使用 sgt 指令
             new_reg = codeGen_->allocateReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::SGT, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-            instruction->addOperand(std::move(lhs));           // rs1
-            instruction->addOperand(std::move(rhs));           // rs2
+            instruction->addOperand(std::move(lhs_reg));       // rs1
+            instruction->addOperand(std::move(rhs_reg));       // rs2
 
             parent_bb->addInstruction(std::move(instruction));
             break;
@@ -483,16 +486,32 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     lhs_imm->getValue() < rhs_imm->getValue() ? 1 : 0);
             }
 
-            // 使用 slt 指令
             new_reg = codeGen_->allocateReg();
+            if (rhs->getType() == OperandType::Immediate) {
+                auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                auto slti_inst =
+                    std::make_unique<Instruction>(Opcode::SLTI, parent_bb);
+                slti_inst->addOperand(std::make_unique<RegisterOperand>(
+                    new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+                slti_inst->addOperand(std::move(lhs));             // rs1
+                slti_inst->addOperand(std::make_unique<ImmediateOperand>(
+                    rhs_imm->getValue()));  // imm
+
+                parent_bb->addInstruction(std::move(slti_inst));
+            } else {
+                auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+                auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+                // 使用 slt 指令
             auto instruction =
                 std::make_unique<Instruction>(Opcode::SLT, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-            instruction->addOperand(std::move(lhs));           // rs1
-            instruction->addOperand(std::move(rhs));           // rs2
+                instruction->addOperand(std::move(lhs_reg));       // rs1
+                instruction->addOperand(std::move(rhs_reg));       // rs2
 
             parent_bb->addInstruction(std::move(instruction));
+            }
             break;
         }
 
