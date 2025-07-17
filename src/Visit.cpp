@@ -132,6 +132,7 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
     auto reg_num = new_reg->getRegNum();
     auto is_virtual = new_reg->isVirtual();
     instruction->addOperand(std::move(new_reg));  // rd
+    instruction->addOperand(std::make_unique<ImmediateOperand>(imm_operand->getValue()));  // imm
     parent_bb->addInstruction(std::move(instruction));
 
     return std::make_unique<RegisterOperand>(reg_num, is_virtual);
