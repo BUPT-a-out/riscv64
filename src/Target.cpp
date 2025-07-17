@@ -4,6 +4,8 @@
 #include "IR/Function.h"
 #include "Visit.h"
 
+#include "RegAllocChaitin.h"
+
 namespace riscv64 {
 
 std::string RISCV64Target::compileToAssembly(const midend::Module& module) {
@@ -37,8 +39,12 @@ Module RISCV64Target::instructionSelectionPass(const midend::Module& module) {
 }
 
 Module& RISCV64Target::registerAllocationPass(riscv64::Module& module) {
-    // 这里可以实现寄存器分配逻辑
-    // 目前只是返回原始模块
+    // 这里实现寄存器分配逻辑
+    for (auto& function: module) {
+        RegAllocChaitin allocator(function.get());
+        allocator.allocateRegisters();
+    }
+
     return module;
 }
 
