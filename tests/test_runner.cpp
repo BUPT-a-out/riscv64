@@ -32,6 +32,7 @@ std::unique_ptr<midend::Module> createSimpleImmAddTest();
 std::unique_ptr<midend::Module> createVariableAssignmentTest();
 std::unique_ptr<midend::Module> createComplexAssignmentTest();
 std::unique_ptr<midend::Module> createComplexBranchTest();
+std::unique_ptr<midend::Module> createComplexFunctionCallTest();
 }  // namespace testcases
 
 class TestRunner {
@@ -528,6 +529,141 @@ std::unique_ptr<midend::Module> createComplexBranchTest() {
     return module;
 }
 
+std::unique_ptr<midend::Module> createComplexFunctionCallTest() {
+    static auto context = std::make_unique<midend::Context>();
+    auto module =
+        std::make_unique<midend::Module>("complex_function_call", context.get());
+
+    auto* i32Type = context->getInt32Type();
+
+    // 创建辅助函数 1: i32 add_three(i32 a, i32 b, i32 c)
+    auto* addThreeFuncType = midend::FunctionType::get(i32Type, {i32Type, i32Type, i32Type});
+    auto* addThreeFunc = midend::Function::Create(addThreeFuncType, "add_three", module.get());
+    
+    auto* addThreeArg1 = addThreeFunc->getArg(0);
+    auto* addThreeArg2 = addThreeFunc->getArg(1);
+    auto* addThreeArg3 = addThreeFunc->getArg(2);
+    addThreeArg1->setName("a");
+    addThreeArg2->setName("b");
+    addThreeArg3->setName("c");
+
+    auto* addThreeEntry = midend::BasicBlock::Create(context.get(), "entry", addThreeFunc);
+    midend::IRBuilder addThreeBuilder(context.get());
+    addThreeBuilder.setInsertPoint(addThreeEntry);
+
+    auto* temp1 = addThreeBuilder.createAdd(addThreeArg1, addThreeArg2, "temp1");
+    auto* result1 = addThreeBuilder.createAdd(temp1, addThreeArg3, "result");
+    addThreeBuilder.createRet(result1);
+
+    // 创建辅助函数 2: i32 multiply_by_two(i32 x)
+    auto* multiplyFuncType = midend::FunctionType::get(i32Type, {i32Type});
+    auto* multiplyFunc = midend::Function::Create(multiplyFuncType, "multiply_by_two", module.get());
+    
+    auto* multiplyArg = multiplyFunc->getArg(0);
+    multiplyArg->setName("x");
+
+    auto* multiplyEntry = midend::BasicBlock::Create(context.get(), "entry", multiplyFunc);
+    midend::IRBuilder multiplyBuilder(context.get());
+    multiplyBuilder.setInsertPoint(multiplyEntry);
+
+    auto* two = midend::ConstantInt::get(i32Type, 2);
+    auto* result2 = multiplyBuilder.createMul(multiplyArg, two, "result");
+    multiplyBuilder.createRet(result2);
+
+    // 创建辅助函数 3: i32 compute_formula(i32 a, i32 b)
+    auto* formulaFuncType = midend::FunctionType::get(i32Type, {i32Type, i32Type});
+    auto* formulaFunc = midend::Function::Create(formulaFuncType, "compute_formula", module.get());
+    
+    auto* formulaArg1 = formulaFunc->getArg(0);
+    auto* formulaArg2 = formulaFunc->getArg(1);
+    formulaArg1->setName("a");
+    formulaArg2->setName("b");
+
+    auto* formulaEntry = midend::BasicBlock::Create(context.get(), "entry", formulaFunc);
+    midend::IRBuilder formulaBuilder(context.get());
+    formulaBuilder.setInsertPoint(formulaEntry);
+
+    // 在 compute_formula 中调用 multiply_by_two
+    std::vector<midend::Value*> multiplyArgs = {formulaArg1};
+    auto* doubledA = formulaBuilder.createCall(multiplyFunc, multiplyArgs, "doubled_a");
+    
+    // 计算 doubled_a + b * 3
+    auto* three = midend::ConstantInt::get(i32Type, 3);
+    auto* bTimesThree = formulaBuilder.createMul(formulaArg2, three, "b_times_3");
+    auto* formulaResult = formulaBuilder.createAdd(doubledA, bTimesThree, "formula_result");
+    formulaBuilder.createRet(formulaResult);
+
+    // 创建主函数: i32 main(i32 x, i32 y, i32 z)
+    auto* mainFuncType = midend::FunctionType::get(i32Type, {i32Type, i32Type, i32Type});
+    auto* mainFunc = midend::Function::Create(mainFuncType, "main", module.get());
+
+    auto* mainArg1 = mainFunc->getArg(0);
+    auto* mainArg2 = mainFunc->getArg(1);
+    auto* mainArg3 = mainFunc->getArg(2);
+    mainArg1->setName("x");
+    mainArg2->setName("y");
+    mainArg3->setName("z");
+
+    auto* mainEntry = midend::BasicBlock::Create(context.get(), "entry", mainFunc);
+    auto* condBB = midend::BasicBlock::Create(context.get(), "condition", mainFunc);
+    auto* thenBB = midend::BasicBlock::Create(context.get(), "then", mainFunc);
+    auto* elseBB = midend::BasicBlock::Create(context.get(), "else", mainFunc);
+    auto* mergeBB = midend::BasicBlock::Create(context.get(), "merge", mainFunc);
+
+    midend::IRBuilder mainBuilder(context.get());
+
+    // entry块: 调用 add_three(x, y, z)
+    mainBuilder.setInsertPoint(mainEntry);
+    std::vector<midend::Value*> addThreeArgs = {mainArg1, mainArg2, mainArg3};
+    auto* sumResult = mainBuilder.createCall(addThreeFunc, addThreeArgs, "sum_result");
+    mainBuilder.createBr(condBB);
+
+    // condition块: 检查 sum_result > 20
+    mainBuilder.setInsertPoint(condBB);
+    auto* twenty = midend::ConstantInt::get(i32Type, 20);
+    auto* cmp = mainBuilder.createICmpSGT(sumResult, twenty, "cmp");
+    mainBuilder.createCondBr(cmp, thenBB, elseBB);
+
+    // then块: 调用 compute_formula(sum_result, x)
+    mainBuilder.setInsertPoint(thenBB);
+    std::vector<midend::Value*> formulaArgs1 = {sumResult, mainArg1};
+    auto* thenResult = mainBuilder.createCall(formulaFunc, formulaArgs1, "then_result");
+    mainBuilder.createBr(mergeBB);
+
+    // else块: 调用 multiply_by_two(sum_result) 然后再调用 compute_formula
+    mainBuilder.setInsertPoint(elseBB);
+    std::vector<midend::Value*> multiplyArgs2 = {sumResult};
+    auto* doubledSum = mainBuilder.createCall(multiplyFunc, multiplyArgs2, "doubled_sum");
+    
+    // 再调用 compute_formula(doubled_sum, y + z)
+    auto* yzSum = mainBuilder.createAdd(mainArg2, mainArg3, "yz_sum");
+    std::vector<midend::Value*> formulaArgs2 = {doubledSum, yzSum};
+    auto* elseResult = mainBuilder.createCall(formulaFunc, formulaArgs2, "else_result");
+    mainBuilder.createBr(mergeBB);
+
+    // merge块: 使用 phi 节点合并结果，然后进行最终计算
+    mainBuilder.setInsertPoint(mergeBB);
+    auto* phi = mainBuilder.createPHI(i32Type, "phi_result");
+    phi->addIncoming(thenResult, thenBB);
+    phi->addIncoming(elseResult, elseBB);
+
+    // 最终调用: multiply_by_two(phi_result) + add_three(10, 20, 30)
+    std::vector<midend::Value*> finalMultiplyArgs = {phi};
+    auto* finalDoubled = mainBuilder.createCall(multiplyFunc, finalMultiplyArgs, "final_doubled");
+
+    auto* ten = midend::ConstantInt::get(i32Type, 10);
+    auto* thirty = midend::ConstantInt::get(i32Type, 30);
+    std::vector<midend::Value*> finalAddArgs = {ten, twenty, thirty};
+    auto* constantSum = mainBuilder.createCall(addThreeFunc, finalAddArgs, "constant_sum");
+
+    auto* finalResult = mainBuilder.createAdd(finalDoubled, constantSum, "final_result");
+    mainBuilder.createRet(finalResult);
+
+    return module;
+}
+
+
+
 }  // namespace testcases
 
 // TestRunner 构造函数实现
@@ -541,6 +677,7 @@ TestRunner::TestRunner() {
     testCases_["5_variable_assignment"] = testcases::createVariableAssignmentTest;
     testCases_["6_complex_assignment"] = testcases::createComplexAssignmentTest;
     testCases_["7_complex_branch"] = testcases::createComplexBranchTest;
+    testCases_["8_complex_function_call"] = testcases::createComplexFunctionCallTest;
 }
 
 std::unique_ptr<midend::Module> TestRunner::loadTestCase(
