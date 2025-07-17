@@ -36,10 +36,10 @@ Module RISCV64Target::instructionSelectionPass(const midend::Module& module) {
     return riscv_module;
 }
 
-Module RISCV64Target::registerAllocationPass(riscv64::Module& module) {
+Module& RISCV64Target::registerAllocationPass(riscv64::Module& module) {
     // 这里可以实现寄存器分配逻辑
     // 目前只是返回原始模块
-    return std::move(module);
+    return module;
 }
 
 }  // namespace riscv64
