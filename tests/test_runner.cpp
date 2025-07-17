@@ -662,6 +662,117 @@ std::unique_ptr<midend::Module> createComplexFunctionCallTest() {
     return module;
 }
 
+std::unique_ptr<midend::Module> createRegisterSpillTest() {
+    static auto context = std::make_unique<midend::Context>();
+    auto module = std::make_unique<midend::Module>("register_spill_test", context.get());
+
+    auto* i32Type = context->getInt32Type();
+
+    // 创建一个会导致寄存器溢出的复杂函数
+    // i32 complex_computation(i32 a, i32 b, i32 c, i32 d, i32 e, i32 f, i32 g, i32 h)
+    auto* funcType = midend::FunctionType::get(i32Type, {
+        i32Type, i32Type, i32Type, i32Type, 
+        i32Type, i32Type, i32Type, i32Type
+    });
+    auto* func = midend::Function::Create(funcType, "complex_computation", module.get());
+
+    // 设置参数名称
+    auto* arg1 = func->getArg(0); arg1->setName("a");
+    auto* arg2 = func->getArg(1); arg2->setName("b");
+    auto* arg3 = func->getArg(2); arg3->setName("c");
+    auto* arg4 = func->getArg(3); arg4->setName("d");
+    auto* arg5 = func->getArg(4); arg5->setName("e");
+    auto* arg6 = func->getArg(5); arg6->setName("f");
+    auto* arg7 = func->getArg(6); arg7->setName("g");
+    auto* arg8 = func->getArg(7); arg8->setName("h");
+
+    auto* entry = midend::BasicBlock::Create(context.get(), "entry", func);
+    midend::IRBuilder builder(context.get());
+    builder.setInsertPoint(entry);
+
+    // 创建大量常量
+    auto* const1 = midend::ConstantInt::get(i32Type, 1);
+    auto* const2 = midend::ConstantInt::get(i32Type, 2);
+    auto* const3 = midend::ConstantInt::get(i32Type, 3);
+    auto* const4 = midend::ConstantInt::get(i32Type, 4);
+    auto* const5 = midend::ConstantInt::get(i32Type, 5);
+    auto* const7 = midend::ConstantInt::get(i32Type, 7);
+    auto* const11 = midend::ConstantInt::get(i32Type, 11);
+    auto* const13 = midend::ConstantInt::get(i32Type, 13);
+
+    // 第一层计算 - 生成大量中间值
+    auto* temp1 = builder.createAdd(arg1, arg2, "temp1");
+    auto* temp2 = builder.createMul(arg3, arg4, "temp2");
+    auto* temp3 = builder.createAdd(arg5, arg6, "temp3");
+    auto* temp4 = builder.createMul(arg7, arg8, "temp4");
+    auto* temp5 = builder.createAdd(temp1, temp2, "temp5");
+    auto* temp6 = builder.createMul(temp3, temp4, "temp6");
+    auto* temp7 = builder.createAdd(temp5, temp6, "temp7");
+    auto* temp8 = builder.createMul(temp7, const2, "temp8");
+
+    // 第二层计算 - 更多中间值
+    auto* inter1 = builder.createAdd(arg1, const1, "inter1");
+    auto* inter2 = builder.createMul(arg2, const2, "inter2");
+    auto* inter3 = builder.createAdd(arg3, const3, "inter3");
+    auto* inter4 = builder.createMul(arg4, const4, "inter4");
+    auto* inter5 = builder.createAdd(arg5, const5, "inter5");
+    auto* inter6 = builder.createMul(arg6, const7, "inter6");
+    auto* inter7 = builder.createAdd(arg7, const11, "inter7");
+    auto* inter8 = builder.createMul(arg8, const13, "inter8");
+
+    // 第三层计算 - 交叉运算
+    auto* cross1 = builder.createAdd(inter1, inter2, "cross1");
+    auto* cross2 = builder.createMul(inter3, inter4, "cross2");
+    auto* cross3 = builder.createAdd(inter5, inter6, "cross3");
+    auto* cross4 = builder.createMul(inter7, inter8, "cross4");
+    auto* cross5 = builder.createAdd(cross1, cross3, "cross5");
+    auto* cross6 = builder.createMul(cross2, cross4, "cross6");
+    auto* cross7 = builder.createAdd(cross5, cross6, "cross7");
+    auto* cross8 = builder.createMul(cross7, temp8, "cross8");
+
+    // 第四层计算 - 更复杂的表达式
+    auto* complex1 = builder.createAdd(temp1, inter1, "complex1");
+    auto* complex2 = builder.createMul(temp2, inter2, "complex2");
+    auto* complex3 = builder.createAdd(temp3, inter3, "complex3");
+    auto* complex4 = builder.createMul(temp4, inter4, "complex4");
+    auto* complex5 = builder.createAdd(temp5, inter5, "complex5");
+    auto* complex6 = builder.createMul(temp6, inter6, "complex6");
+    auto* complex7 = builder.createAdd(temp7, inter7, "complex7");
+    auto* complex8 = builder.createMul(temp8, inter8, "complex8");
+
+    // 第五层计算 - 组合前面的结果
+    auto* combo1 = builder.createAdd(complex1, complex2, "combo1");
+    auto* combo2 = builder.createMul(complex3, complex4, "combo2");
+    auto* combo3 = builder.createAdd(complex5, complex6, "combo3");
+    auto* combo4 = builder.createMul(complex7, complex8, "combo4");
+    auto* combo5 = builder.createAdd(combo1, combo3, "combo5");
+    auto* combo6 = builder.createMul(combo2, combo4, "combo6");
+    auto* combo7 = builder.createAdd(combo5, combo6, "combo7");
+
+    // 第六层计算 - 最终复杂表达式
+    auto* final1 = builder.createAdd(combo7, cross8, "final1");
+    auto* final2 = builder.createMul(final1, temp7, "final2");
+    auto* final3 = builder.createAdd(final2, cross7, "final3");
+    auto* final4 = builder.createMul(final3, combo5, "final4");
+    auto* final5 = builder.createAdd(final4, combo6, "final5");
+    auto* final6 = builder.createMul(final5, temp5, "final6");
+    auto* final7 = builder.createAdd(final6, inter5, "final7");
+    auto* final8 = builder.createMul(final7, cross5, "final8");
+
+    // 最终结果 - 使用所有中间值
+    auto* result1 = builder.createAdd(final8, temp1, "result1");
+    auto* result2 = builder.createAdd(result1, temp2, "result2");
+    auto* result3 = builder.createAdd(result2, temp3, "result3");
+    auto* result4 = builder.createAdd(result3, temp4, "result4");
+    auto* result5 = builder.createAdd(result4, inter1, "result5");
+    auto* result6 = builder.createAdd(result5, inter2, "result6");
+    auto* result7 = builder.createAdd(result6, inter3, "result7");
+    auto* finalResult = builder.createAdd(result7, inter4, "final_result");
+
+    builder.createRet(finalResult);
+
+    return module;
+}
 
 
 }  // namespace testcases
@@ -678,6 +789,7 @@ TestRunner::TestRunner() {
     testCases_["6_complex_assignment"] = testcases::createComplexAssignmentTest;
     testCases_["7_complex_branch"] = testcases::createComplexBranchTest;
     testCases_["8_complex_function_call"] = testcases::createComplexFunctionCallTest;
+    testCases_["9_register_spill"] = testcases::createRegisterSpillTest;
 }
 
 std::unique_ptr<midend::Module> TestRunner::loadTestCase(
