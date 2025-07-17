@@ -17,7 +17,7 @@ class CodeGenerator {
         valueToReg_;
     std::unordered_map<const midend::BasicBlock*, std::unique_ptr<LabelOperand>>
         bbToLabel_;
-    int nextRegNum_ = 0;
+    int nextRegNum_ = 100;
     int nextLabelNum_ = 0;
 
    public:

@@ -236,9 +236,11 @@ class Instruction {
     std::string toString() const;
 
     std::optional<DestSourcePair> isCopyInstr() const;
-    bool isCallInstr() const {
-        return opcode == CALL || opcode == JAL;
-    }
+    bool isCallInstr() const;
+
+    bool isJumpInstr() const;
+    bool isBranch() const;
+    bool isBackEdge() const;
 
    private:
     Opcode opcode;

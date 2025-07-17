@@ -1,13 +1,10 @@
 #pragma once
 
-#include <algorithm>
 #include <memory>
-#include <stack>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
-#include "ABI.h"
 #include "Instructions/Function.h"
 #include "Instructions/Instruction.h"
 #include "Instructions/MachineOperand.h"
@@ -29,7 +26,17 @@ struct InterferenceNode {
     int color = -1;                          // 分配的颜色（物理寄存器）
     bool isPrecolored = false;               // 是否已经预着色（物理寄存器）
 
+    unsigned coalesceParent;                 // 合并的代表元
+
     InterferenceNode(unsigned reg) : regNum(reg) {}
+};
+
+// 合并信息结构
+struct CoalesceInfo {
+    unsigned src;
+    unsigned dst;
+    bool canCoalesce;
+    int priority;  // 合并优先级，基于指令频次等因素
 };
 
 // 图着色寄存器分配器
@@ -50,6 +57,10 @@ class RegAllocChaitin {
         interferenceGraph;
     std::unordered_map<unsigned, unsigned> virtualToPhysical;
     std::unordered_set<unsigned> spilledRegs;  // 需要溢出的寄存器
+
+    std::vector<CoalesceInfo> coalesceCandidates;
+    std::unordered_set<unsigned> coalescedRegs;
+    std::unordered_map<unsigned, unsigned> coalesceMap;  // 映射到代表元
 
    public:
     explicit RegAllocChaitin(Function* func) : function(func) {}
@@ -80,6 +91,27 @@ class RegAllocChaitin {
     void rewriteInstructions();
     void rewriteInstruction(Instruction* inst);
 
+    // 寄存器合并方法
+    void performCoalescing();
+    void identifyCoalesceCandidates();
+    bool canCoalesce(unsigned src, unsigned dst);
+    void coalesceRegisters(unsigned src, unsigned dst);
+    unsigned findCoalesceRoot(unsigned reg);
+    void unionCoalesce(unsigned reg1, unsigned reg2);
+    void updateInterferenceAfterCoalesce(unsigned merged, unsigned eliminated);
+    void removeCoalescedCopies();
+
+    // 计算合并权重
+    int calculateCoalescePriority(unsigned src, unsigned dst, BasicBlock* bb, Instruction* inst);
+    int getBasicBlockFrequency(BasicBlock* bb);
+
+    int getRegisterUsageCount(unsigned reg);
+    int getRegisterDegree(unsigned reg);
+    int calculateLifetimeOverlap(unsigned src, unsigned dst);
+    int getRegisterPressure(BasicBlock* bb);
+    int calculatePhysicalRegPreference(unsigned src, unsigned dst);
+
+
     // 辅助函数
     bool isPhysicalReg(unsigned reg) const;
     unsigned getPhysicalReg(unsigned virtualReg) const;
@@ -89,6 +121,7 @@ class RegAllocChaitin {
     // 调试和统计
     void printInterferenceGraph() const;
     void printAllocationResult() const;
+    void printCoalesceResult() const;
 };
 
 }  // namespace riscv64
