@@ -83,7 +83,8 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Instruction* inst,
         case midend::Opcode::ICmpSGT:
         case midend::Opcode::ICmpSLT:
             // 处理算术指令，此处直接生成
-            // TODO(rikka): 关于 0, 1, 2^n(左移) 的判断优化等，后期写一个 Pass 来优化
+            // TODO(rikka): 关于 0, 1, 2^n(左移) 的判断优化等，后期写一个 Pass
+            // 来优化
             return visitBinaryOp(inst, parent_bb);
             break;
         case midend::Opcode::Load:
@@ -703,42 +704,47 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
 // 将值存储到寄存器中，生成 mv 或者 li 指令
 void Visitor::storeOperandToReg(
     std::unique_ptr<MachineOperand> source_operand,
-    std::unique_ptr<RegisterOperand> dest_reg, BasicBlock* parent_bb,
+    std::unique_ptr<MachineOperand> dest_reg, BasicBlock* parent_bb,
     std::list<std::unique_ptr<Instruction>>::const_iterator insert_pos) {
     if (insert_pos ==
         std::list<std::unique_ptr<Instruction>>::const_iterator{}) {
         insert_pos = parent_bb->end();
     }  // 默认值
 
-    switch (source_operand->getType()) {
-        case OperandType::Immediate: {
-            auto inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
-            auto* const source_imm =
-                dynamic_cast<ImmediateOperand*>(source_operand.get());
+    if (dest_reg->getType() == OperandType::Register) {
+        switch (source_operand->getType()) {
+            case OperandType::Immediate: {
+                auto inst =
+                    std::make_unique<Instruction>(Opcode::LI, parent_bb);
+                auto* const source_imm =
+                    dynamic_cast<ImmediateOperand*>(source_operand.get());
 
-            inst->addOperand(std::move(dest_reg));  // rd
-            inst->addOperand(std::make_unique<ImmediateOperand>(
-                source_imm->getValue()));  // imm
-            parent_bb->insert(insert_pos, std::move(inst));
-            break;
+                inst->addOperand(std::move(dest_reg));  // rd
+                inst->addOperand(std::make_unique<ImmediateOperand>(
+                    source_imm->getValue()));  // imm
+                parent_bb->insert(insert_pos, std::move(inst));
+                break;
+            }
+            case OperandType::Register: {
+                auto inst =
+                    std::make_unique<Instruction>(Opcode::MV, parent_bb);
+                auto* reg_source =
+                    dynamic_cast<RegisterOperand*>(source_operand.get());
+
+                inst->addOperand(std::move(dest_reg));  // rd
+                inst->addOperand(std::make_unique<RegisterOperand>(
+                    reg_source->getRegNum(), reg_source->isVirtual()));  // rs
+                parent_bb->insert(insert_pos, std::move(inst));
+                break;
+            }
+
+            default:
+                // TODO(rikka): 其他类型的返回值处理
+                throw std::runtime_error("Unsupported return value type: " +
+                                         std::to_string(static_cast<int>(
+                                             source_operand->getType())));
         }
-        case OperandType::Register: {
-            auto inst = std::make_unique<Instruction>(Opcode::MV, parent_bb);
-            auto* reg_source =
-                dynamic_cast<RegisterOperand*>(source_operand.get());
-
-            inst->addOperand(std::move(dest_reg));  // rd
-            inst->addOperand(std::make_unique<RegisterOperand>(
-                reg_source->getRegNum(), reg_source->isVirtual()));  // rs
-            parent_bb->insert(insert_pos, std::move(inst));
-            break;
-        }
-
-        default:
-            // TODO(rikka): 其他类型的返回值处理
-            throw std::runtime_error(
-                "Unsupported return value type: " +
-                std::to_string(static_cast<int>(source_operand->getType())));
+        return;
     }
 }
 
