@@ -58,6 +58,9 @@ class RegAllocChaitin {
     std::unordered_map<unsigned, unsigned> virtualToPhysical;
     std::unordered_set<unsigned> spilledRegs;  // 需要溢出的寄存器
 
+    std::unordered_map<unsigned, std::unordered_set<unsigned>> physicalConstraints;
+    void addPhysicalConstraint(unsigned virtualReg, unsigned physicalReg);
+
     std::vector<CoalesceInfo> coalesceCandidates;
     std::unordered_set<unsigned> coalescedRegs;
     std::unordered_map<unsigned, unsigned> coalesceMap;  // 映射到代表元
@@ -71,6 +74,10 @@ class RegAllocChaitin {
     int getCachedDegree(unsigned reg);
     void clearDegreeCache() { degreeCache.clear(); }
 
+    unsigned nextTempReg = 1000;  // 临时寄存器起始编号
+    unsigned createTempReg() {
+        return nextTempReg++;
+    }
 
    public:
     explicit RegAllocChaitin(Function* func) : function(func) {}
@@ -102,7 +109,9 @@ class RegAllocChaitin {
     void rewriteInstructions();
     void rewriteInstruction(Instruction* inst);
     unsigned getFinalCoalescedReg(unsigned reg);
-    void replaceRegisterInInstruction(Instruction* inst, unsigned oldReg, unsigned newReg, bool replaceDef);
+    void updateRegisterInInstruction(Instruction* inst, 
+                                                  unsigned oldReg, 
+                                                  unsigned newReg);
 
     // 寄存器合并方法
     void performCoalescing();

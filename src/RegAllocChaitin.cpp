@@ -14,7 +14,9 @@ void RegAllocChaitin::allocateRegisters() {
 
     buildInterferenceGraph();
 
-    performCoalescing();
+    // TODO: correct coalescing on ABI reg a0-a7
+    // TODO: follor ABI constraint
+    // performCoalescing();
 
     bool success = colorGraph();
 
@@ -49,14 +51,14 @@ int RegAllocChaitin::getCachedDegree(unsigned reg) {
     if (it != degreeCache.end()) {
         return it->second;
     }
-    
+
     // 如果缓存中没有，重新计算并缓存
     if (interferenceGraph.find(reg) != interferenceGraph.end()) {
         int degree = interferenceGraph[reg]->neighbors.size();
         degreeCache[reg] = degree;
         return degree;
     }
-    
+
     return 0;
 }
 
@@ -64,61 +66,64 @@ void RegAllocChaitin::updateDegreeAfterRemoval(unsigned removedReg) {
     if (interferenceGraph.find(removedReg) == interferenceGraph.end()) {
         return;
     }
-    
+
     // 更新所有邻居的度数
     for (unsigned neighbor : interferenceGraph[removedReg]->neighbors) {
         if (degreeCache.find(neighbor) != degreeCache.end()) {
             degreeCache[neighbor]--;
         }
     }
-    
+
     // 移除被删除节点的度数缓存
     degreeCache.erase(removedReg);
 }
 
-void RegAllocChaitin::updateDegreeAfterCoalesce(unsigned merged, unsigned eliminated) {
+void RegAllocChaitin::updateDegreeAfterCoalesce(unsigned merged,
+                                                unsigned eliminated) {
     if (interferenceGraph.find(eliminated) == interferenceGraph.end() ||
         interferenceGraph.find(merged) == interferenceGraph.end()) {
         return;
     }
-    
+
     auto& eliminatedNode = interferenceGraph[eliminated];
     auto& mergedNode = interferenceGraph[merged];
-    
+
     // 计算合并后的度数变化
     std::unordered_set<unsigned> newNeighbors;
     std::unordered_set<unsigned> commonNeighbors;
-    
+
     // 找出eliminated的邻居中，merged原本没有的
     for (unsigned neighbor : eliminatedNode->neighbors) {
         if (neighbor != merged) {
-            if (mergedNode->neighbors.find(neighbor) == mergedNode->neighbors.end()) {
+            if (mergedNode->neighbors.find(neighbor) ==
+                mergedNode->neighbors.end()) {
                 newNeighbors.insert(neighbor);
             } else {
                 commonNeighbors.insert(neighbor);
             }
         }
     }
-    
+
     // 更新merged节点的度数
     if (degreeCache.find(merged) != degreeCache.end()) {
         degreeCache[merged] += newNeighbors.size();
     }
-    
+
     // 更新所有相关邻居的度数
     // 1. eliminated的邻居需要减1（因为eliminated被移除）
     // 2. 如果是新邻居，还需要加1（因为现在与merged连接）
     for (unsigned neighbor : eliminatedNode->neighbors) {
-        if (neighbor != merged && degreeCache.find(neighbor) != degreeCache.end()) {
+        if (neighbor != merged &&
+            degreeCache.find(neighbor) != degreeCache.end()) {
             degreeCache[neighbor]--;  // 失去与eliminated的连接
-            
+
             // 如果是新连接的邻居，需要加1
             if (newNeighbors.find(neighbor) != newNeighbors.end()) {
                 degreeCache[neighbor]++;
             }
         }
     }
-    
+
     // 移除eliminated节点的度数缓存
     degreeCache.erase(eliminated);
 }
@@ -198,43 +203,48 @@ void RegAllocChaitin::buildInterferenceGraph() {
             auto definedRegs = getDefinedRegs(inst.get());
 
             for (unsigned reg : usedRegs) {
-                if (interferenceGraph.find(reg) == interferenceGraph.end()) {
-                    interferenceGraph[reg] =
-                        std::make_unique<InterferenceNode>(reg);
-                    interferenceGraph[reg]->isPrecolored = isPhysicalReg(reg);
+                if (!isPhysicalReg(reg)) {  // 只处理虚拟寄存器
+                    if (interferenceGraph.find(reg) ==
+                        interferenceGraph.end()) {
+                        interferenceGraph[reg] =
+                            std::make_unique<InterferenceNode>(reg);
+                        interferenceGraph[reg]->isPrecolored = false;
+                    }
                 }
             }
 
             for (unsigned reg : definedRegs) {
-                if (interferenceGraph.find(reg) == interferenceGraph.end()) {
-                    interferenceGraph[reg] =
-                        std::make_unique<InterferenceNode>(reg);
-                    interferenceGraph[reg]->isPrecolored = isPhysicalReg(reg);
+                if (!isPhysicalReg(reg)) {  // 只处理虚拟寄存器
+                    if (interferenceGraph.find(reg) ==
+                        interferenceGraph.end()) {
+                        interferenceGraph[reg] =
+                            std::make_unique<InterferenceNode>(reg);
+                        interferenceGraph[reg]->isPrecolored = false;
+                    }
                 }
             }
         }
     }
 
-    // 构建冲突边
+    // 构建冲突边 ：逆序遍历
     for (auto& bb : *function) {
         const LivenessInfo& info = livenessInfo[bb.get()];
-
-        // 在每个程序点，活跃的变量之间都有冲突
         std::unordered_set<unsigned> live = info.liveOut;
 
-        // 逆序遍历指令
-        for (auto it = bb->begin(); it != bb->end(); ++it) {
+        // 真正的逆序遍历指令
+        for (auto it = bb->rbegin(); it != bb->rend(); ++it) {
             Instruction* inst = it->get();
-
             auto definedRegs = getDefinedRegs(inst);
+
             for (unsigned defReg : definedRegs) {
-                // 定义的寄存器与当前活跃的所有寄存器冲突
-                for (unsigned liveReg : live) {
-                    if (defReg != liveReg) {
-                        addInterference(defReg, liveReg);
+                if (!isPhysicalReg(defReg)) {
+                    // 只与活跃的虚拟寄存器建立冲突
+                    for (unsigned liveReg : live) {
+                        if (defReg != liveReg && !isPhysicalReg(liveReg)) {
+                            addInterference(defReg, liveReg);
+                        }
                     }
                 }
-
                 // 移除定义的寄存器
                 live.erase(defReg);
             }
@@ -248,8 +258,19 @@ void RegAllocChaitin::buildInterferenceGraph() {
     }
 }
 
+// 添加物理寄存器约束的方法
+void RegAllocChaitin::addPhysicalConstraint(unsigned virtualReg,
+                                            unsigned physicalReg) {
+    if (physicalConstraints.find(virtualReg) == physicalConstraints.end()) {
+        physicalConstraints[virtualReg] = std::unordered_set<unsigned>();
+    }
+    physicalConstraints[virtualReg].insert(physicalReg);
+}
+
 void RegAllocChaitin::addInterference(unsigned reg1, unsigned reg2) {
-    if (interferenceGraph.find(reg1) != interferenceGraph.end() &&
+    // 确保两个寄存器都是虚拟寄存器且都在冲突图中
+    if (!isPhysicalReg(reg1) && !isPhysicalReg(reg2) &&
+        interferenceGraph.find(reg1) != interferenceGraph.end() &&
         interferenceGraph.find(reg2) != interferenceGraph.end()) {
         interferenceGraph[reg1]->neighbors.insert(reg2);
         interferenceGraph[reg2]->neighbors.insert(reg1);
@@ -265,13 +286,13 @@ std::vector<unsigned> RegAllocChaitin::getSimplificationOrder() {
     std::vector<unsigned> order;
     std::unordered_set<unsigned> removed;
     std::stack<unsigned> stack;
-    
+
     // 初始化度数缓存
     initializeDegreeCache();
-    
+
     // 工作列表：维护当前度数小于K的节点
     std::queue<unsigned> workList;
-    
+
     // 初始化工作列表
     for (auto& [regNum, node] : interferenceGraph) {
         if (!node->isPrecolored) {
@@ -281,76 +302,67 @@ std::vector<unsigned> RegAllocChaitin::getSimplificationOrder() {
             }
         }
     }
-    
+
     // 简化阶段：处理工作列表中的节点
     while (!workList.empty()) {
         unsigned regNum = workList.front();
         workList.pop();
-        
+
         // 检查节点是否已经被处理
         if (removed.find(regNum) != removed.end()) {
             continue;
         }
-        
+
         // 再次检查度数（可能在之前的处理中已经改变）
         int currentDegree = getCachedDegree(regNum);
         if (currentDegree >= static_cast<int>(availableRegs.size())) {
             continue;
         }
-        
+
         // 移除节点
         stack.push(regNum);
         removed.insert(regNum);
-        
+
         // 更新邻居的度数，并检查是否有新的节点可以加入工作列表
         if (interferenceGraph.find(regNum) != interferenceGraph.end()) {
             for (unsigned neighbor : interferenceGraph[regNum]->neighbors) {
-                if (removed.find(neighbor) == removed.end() && 
+                if (removed.find(neighbor) == removed.end() &&
                     !interferenceGraph[neighbor]->isPrecolored) {
-                    
                     // 更新邻居的度数
                     if (degreeCache.find(neighbor) != degreeCache.end()) {
                         degreeCache[neighbor]--;
-                        
+
                         // 如果邻居的度数现在小于K，加入工作列表
-                        if (degreeCache[neighbor] < static_cast<int>(availableRegs.size())) {
+                        if (degreeCache[neighbor] <
+                            static_cast<int>(availableRegs.size())) {
                             workList.push(neighbor);
                         }
                     }
                 }
             }
         }
-        
+
         // 从度数缓存中移除当前节点
         degreeCache.erase(regNum);
     }
-    
+
     // 如果还有未移除的节点，选择溢出候选
     for (auto& [regNum, node] : interferenceGraph) {
         if (removed.find(regNum) == removed.end() && !node->isPrecolored) {
             spilledRegs.insert(regNum);
         }
     }
-    
+
     // 按栈顺序返回
     while (!stack.empty()) {
         order.push_back(stack.top());
         stack.pop();
     }
-    
+
     return order;
 }
 
-
 bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
-    // 预着色物理寄存器
-    for (auto& [regNum, node] : interferenceGraph) {
-        if (node->isPrecolored) {
-            node->color = regNum;
-            virtualToPhysical[regNum] = regNum; // 确保物理寄存器有映射
-        }
-    }
-
     // 按顺序为每个虚拟寄存器着色
     for (unsigned regNum : order) {
         if (spilledRegs.find(regNum) != spilledRegs.end()) {
@@ -365,10 +377,17 @@ bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
         auto& node = interferenceGraph[regNum];
         std::unordered_set<int> usedColors;
 
-        // 收集邻居使用的颜色
+        // 收集邻居虚拟寄存器使用的颜色
         for (unsigned neighbor : node->neighbors) {
             if (interferenceGraph[neighbor]->color != -1) {
                 usedColors.insert(interferenceGraph[neighbor]->color);
+            }
+        }
+
+        // 收集与物理寄存器的约束
+        if (physicalConstraints.find(regNum) != physicalConstraints.end()) {
+            for (unsigned physReg : physicalConstraints[regNum]) {
+                usedColors.insert(physReg);
             }
         }
 
@@ -391,10 +410,14 @@ bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
         virtualToPhysical[regNum] = selectedColor;
     }
 
-    // 为被合并的寄存器建立映射关系
+    // 修改后的映射建立逻辑
     for (const auto& [src, dst] : coalesceMap) {
         unsigned finalDst = getFinalCoalescedReg(dst);
-        if (virtualToPhysical.find(finalDst) != virtualToPhysical.end()) {
+        if (isPhysicalReg(finalDst)) {
+            // 如果最终目标是物理寄存器，直接映射
+            virtualToPhysical[src] = finalDst;
+        } else if (virtualToPhysical.find(finalDst) !=
+                   virtualToPhysical.end()) {
             virtualToPhysical[src] = virtualToPhysical[finalDst];
         }
     }
@@ -413,6 +436,14 @@ void RegAllocChaitin::handleSpills() {
     interferenceGraph.clear();
     virtualToPhysical.clear();
     spilledRegs.clear();
+
+    coalesceCandidates.clear();
+    coalesceMap.clear();
+    coalescedRegs.clear();
+    livenessInfo.clear();
+
+    physicalConstraints.clear();
+
     clearDegreeCache();  // 清理度数缓存
 }
 
@@ -430,10 +461,7 @@ std::vector<unsigned> RegAllocChaitin::selectSpillCandidates() {
 }
 
 void RegAllocChaitin::insertSpillCode(unsigned reg) {
-    // 获取栈帧管理器
     StackFrameManager stackManager(function);
-
-    // 为溢出寄存器分配栈槽
     stackManager.allocateSpillSlot(reg);
     int spillOffset = stackManager.getSpillSlotOffset(reg);
 
@@ -445,30 +473,58 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
             auto usedRegs = getUsedRegs(inst);
             if (std::find(usedRegs.begin(), usedRegs.end(), reg) !=
                 usedRegs.end()) {
-                // 在指令前插入加载
+                // 创建独立的临时寄存器用于load
+                unsigned tempReg = createTempReg();
+
                 auto loadInst = std::make_unique<Instruction>(LD);
                 loadInst->addOperand(
-                    std::make_unique<RegisterOperand>(reg, false));
+                    std::make_unique<RegisterOperand>(tempReg, true));
                 loadInst->addOperand(std::make_unique<MemoryOperand>(
-                    std::make_unique<RegisterOperand>(2, false),  // sp
+                    std::make_unique<RegisterOperand>(2, false),
                     std::make_unique<ImmediateOperand>(spillOffset)));
+
                 it = bb->insert(it, std::move(loadInst));
                 ++it;
+
+                // 更新原指令中的寄存器引用
+                updateRegisterInInstruction(inst, reg, tempReg);
             }
 
             // 检查指令是否定义了溢出的寄存器
             auto definedRegs = getDefinedRegs(inst);
             if (std::find(definedRegs.begin(), definedRegs.end(), reg) !=
                 definedRegs.end()) {
-                // 在指令后插入存储
+                // 创建独立的临时寄存器用于store
+                unsigned tempReg = createTempReg();
+
+                // 更新原指令中的寄存器引用
+                updateRegisterInInstruction(inst, reg, tempReg);
+
                 auto storeInst = std::make_unique<Instruction>(SD);
                 storeInst->addOperand(
-                    std::make_unique<RegisterOperand>(reg, false));
+                    std::make_unique<RegisterOperand>(tempReg, true));
                 storeInst->addOperand(std::make_unique<MemoryOperand>(
-                    std::make_unique<RegisterOperand>(2, false),  // sp
+                    std::make_unique<RegisterOperand>(2, false),
                     std::make_unique<ImmediateOperand>(spillOffset)));
+
                 ++it;
                 it = bb->insert(it, std::move(storeInst));
+            }
+        }
+    }
+}
+
+// 更新指令中的寄存器引用
+void RegAllocChaitin::updateRegisterInInstruction(Instruction* inst,
+                                                  unsigned oldReg,
+                                                  unsigned newReg) {
+    const auto& operands = inst->getOperands();
+    for (const auto& operand : operands) {
+        if (operand->isReg()) {
+            RegisterOperand* regOp =
+                static_cast<RegisterOperand*>(operand.get());
+            if (regOp->getRegNum() == oldReg) {
+                regOp->setRegNum(newReg);
             }
         }
     }
@@ -486,15 +542,17 @@ void RegAllocChaitin::rewriteInstruction(Instruction* inst) {
     const auto& operands = inst->getOperands();
     for (const auto& operand : operands) {
         if (operand->isReg()) {
-            RegisterOperand* regOp = static_cast<RegisterOperand*>(operand.get());
+            RegisterOperand* regOp =
+                static_cast<RegisterOperand*>(operand.get());
             if (regOp->isVirtual()) {
                 unsigned virtualReg = regOp->getRegNum();
-                
+
                 // 首先检查是否被合并，如果被合并则使用合并后的寄存器
                 unsigned finalReg = getFinalCoalescedReg(virtualReg);
-                
+
                 // 然后查找物理寄存器映射
-                if (virtualToPhysical.find(finalReg) != virtualToPhysical.end()) {
+                if (virtualToPhysical.find(finalReg) !=
+                    virtualToPhysical.end()) {
                     regOp->setPhysicalReg(virtualToPhysical[finalReg]);
                 } else {
                     // 如果找不到映射，可能是被合并到了物理寄存器
@@ -510,17 +568,16 @@ void RegAllocChaitin::rewriteInstruction(Instruction* inst) {
 // 获取最终合并后的寄存器
 unsigned RegAllocChaitin::getFinalCoalescedReg(unsigned reg) {
     unsigned current = reg;
-    std::unordered_set<unsigned> visited; // 防止循环
-    
-    while (coalesceMap.find(current) != coalesceMap.end() && 
+    std::unordered_set<unsigned> visited;  // 防止循环
+
+    while (coalesceMap.find(current) != coalesceMap.end() &&
            visited.find(current) == visited.end()) {
         visited.insert(current);
         current = coalesceMap[current];
     }
-    
+
     return current;
 }
-
 
 // 执行寄存器合并的主要方法
 void RegAllocChaitin::performCoalescing() {
@@ -956,8 +1013,8 @@ void RegAllocChaitin::printAllocationResult() const {
     for (const auto& [virtualReg, physicalReg] : virtualToPhysical) {
         if (!isPhysicalReg(virtualReg)) {
             std::cout << "Virtual register " << virtualReg
-            << " -> Physical register " << physicalReg << " ("
-            << ABI::getABINameFromRegNum(physicalReg) << ")\n";
+                      << " -> Physical register " << physicalReg << " ("
+                      << ABI::getABINameFromRegNum(physicalReg) << ")\n";
         }
     }
 

@@ -41,6 +41,9 @@ class BasicBlock {
     const_iterator begin() const { return instructions.begin(); }
     const_iterator end() const { return instructions.end(); }
 
+    auto rbegin() { return instructions.rbegin(); }
+    auto rend() { return instructions.rend(); }
+
     iterator erase(iterator it) { return instructions.erase(it); }
     iterator insert(const_iterator pos, std::unique_ptr<Instruction> inst) {
         inst->setParent(this);
