@@ -30,6 +30,8 @@ std::unique_ptr<midend::Module> createArithmeticOpsTest();
 std::unique_ptr<midend::Module> createConditionalBranchTest();
 std::unique_ptr<midend::Module> createSimpleImmAddTest();
 std::unique_ptr<midend::Module> createVariableAssignmentTest();
+std::unique_ptr<midend::Module> createComplexAssignmentTest();
+std::unique_ptr<midend::Module> createComplexBranchTest();
 }  // namespace testcases
 
 class TestRunner {
@@ -294,8 +296,8 @@ std::unique_ptr<midend::Module> createVariableAssignmentTest() {
 
     // 分配局部变量: %x = alloca i32
     auto* varX = builder.createAlloca(i32Type, nullptr, "x");
-    
-    // 分配另一个局部变量: %y = alloca i32  
+
+    // 分配另一个局部变量: %y = alloca i32
     auto* varY = builder.createAlloca(i32Type, nullptr, "y");
 
     // 存储输入参数到 x: store i32 %input, i32* %x
@@ -320,6 +322,196 @@ std::unique_ptr<midend::Module> createVariableAssignmentTest() {
     return module;
 }
 
+std::unique_ptr<midend::Module> createComplexAssignmentTest() {
+    static auto context = std::make_unique<midend::Context>();
+    auto module =
+        std::make_unique<midend::Module>("complex_assignment", context.get());
+
+    // 创建函数类型: i32 complex_assign(i32, i32, i32)
+    auto* i32Type = context->getInt32Type();
+    auto* funcType =
+        midend::FunctionType::get(i32Type, {i32Type, i32Type, i32Type});
+
+    // 创建函数
+    auto* func =
+        midend::Function::Create(funcType, "complex_assign", module.get());
+
+    // 获取参数
+    auto* arg1 = func->getArg(0);
+    auto* arg2 = func->getArg(1);
+    auto* arg3 = func->getArg(2);
+    arg1->setName("a");
+    arg2->setName("b");
+    arg3->setName("c");
+
+    // 创建基本块
+    auto* entry = midend::BasicBlock::Create(context.get(), "entry", func);
+
+    // 创建IRBuilder
+    midend::IRBuilder builder(context.get());
+    builder.setInsertPoint(entry);
+
+    // 分配多个局部变量
+    auto* varX = builder.createAlloca(i32Type, nullptr, "x");
+    auto* varY = builder.createAlloca(i32Type, nullptr, "y");
+    auto* varZ = builder.createAlloca(i32Type, nullptr, "z");
+    auto* varW = builder.createAlloca(i32Type, nullptr, "w");
+    auto* varResult = builder.createAlloca(i32Type, nullptr, "result");
+
+    // 复杂的赋值序列
+    // x = a + b
+    auto* temp1 = builder.createAdd(arg1, arg2, "temp1");
+    builder.createStore(temp1, varX);
+
+    // y = a * c
+    auto* temp2 = builder.createMul(arg1, arg3, "temp2");
+    builder.createStore(temp2, varY);
+
+    // z = b - c
+    auto* temp3 = builder.createSub(arg2, arg3, "temp3");
+    builder.createStore(temp3, varZ);
+
+    // 加载变量进行更复杂的计算
+    auto* loadX = builder.createLoad(varX, "load_x");
+    auto* loadY = builder.createLoad(varY, "load_y");
+    auto* loadZ = builder.createLoad(varZ, "load_z");
+
+    // w = (x + y) * z
+    auto* temp4 = builder.createAdd(loadX, loadY, "temp4");
+    auto* temp5 = builder.createMul(temp4, loadZ, "temp5");
+    builder.createStore(temp5, varW);
+
+    // 最终计算: result = w + (x - y) + 100
+    auto* loadW = builder.createLoad(varW, "load_w");
+    auto* temp6 = builder.createSub(loadX, loadY, "temp6");
+    auto* constant100 = midend::ConstantInt::get(i32Type, 100);
+    auto* temp7 = builder.createAdd(loadW, temp6, "temp7");
+    auto* finalResult = builder.createAdd(temp7, constant100, "final_result");
+
+    builder.createStore(finalResult, varResult);
+
+    // 返回结果
+    auto* returnValue = builder.createLoad(varResult, "return_value");
+    builder.createRet(returnValue);
+
+    return module;
+}
+
+std::unique_ptr<midend::Module> createComplexBranchTest() {
+    static auto context = std::make_unique<midend::Context>();
+    auto module =
+        std::make_unique<midend::Module>("complex_branch", context.get());
+
+    // 创建函数类型: i32 complex_branch(i32, i32)
+    auto* i32Type = context->getInt32Type();
+    auto* funcType = midend::FunctionType::get(i32Type, {i32Type, i32Type});
+
+    // 创建函数
+    auto* func =
+        midend::Function::Create(funcType, "complex_branch", module.get());
+
+    // 获取参数
+    auto* arg1 = func->getArg(0);
+    auto* arg2 = func->getArg(1);
+    arg1->setName("x");
+    arg2->setName("y");
+
+    // 创建基本块
+    auto* entry = midend::BasicBlock::Create(context.get(), "entry", func);
+    auto* cond1BB = midend::BasicBlock::Create(context.get(), "cond1", func);
+    auto* cond2BB = midend::BasicBlock::Create(context.get(), "cond2", func);
+    auto* case1BB = midend::BasicBlock::Create(context.get(), "case1", func);
+    auto* case2BB = midend::BasicBlock::Create(context.get(), "case2", func);
+    auto* case3BB = midend::BasicBlock::Create(context.get(), "case3", func);
+    auto* case4BB = midend::BasicBlock::Create(context.get(), "case4", func);
+    auto* merge1BB = midend::BasicBlock::Create(context.get(), "merge1", func);
+    auto* merge2BB = midend::BasicBlock::Create(context.get(), "merge2", func);
+    auto* finalBB = midend::BasicBlock::Create(context.get(), "final", func);
+
+    // 创建IRBuilder
+    midend::IRBuilder builder(context.get());
+
+    // entry块: 第一个条件判断 x > 0
+    builder.setInsertPoint(entry);
+    auto* zero = midend::ConstantInt::get(i32Type, 0);
+    auto* cmp1 = builder.createICmpSGT(arg1, zero, "x_gt_0");
+    builder.createCondBr(cmp1, cond1BB, cond2BB);
+
+    // cond1块: x > 0 时，判断 y > 10
+    builder.setInsertPoint(cond1BB);
+    auto* ten = midend::ConstantInt::get(i32Type, 10);
+    auto* cmp2 = builder.createICmpSGT(arg2, ten, "y_gt_10");
+    builder.createCondBr(cmp2, case1BB, case2BB);
+
+    // cond2块: x <= 0 时，判断 y < -5
+    builder.setInsertPoint(cond2BB);
+    auto* minusFive = midend::ConstantInt::get(i32Type, -5);
+    auto* cmp3 = builder.createICmpSLT(arg2, minusFive, "y_lt_minus5");
+    builder.createCondBr(cmp3, case3BB, case4BB);
+
+    // case1块: x > 0 && y > 10, 计算 x * y + 100
+    builder.setInsertPoint(case1BB);
+    auto* mul1 = builder.createMul(arg1, arg2, "mul1");
+    auto* hundred = midend::ConstantInt::get(i32Type, 100);
+    auto* result1 = builder.createAdd(mul1, hundred, "result1");
+    builder.createBr(merge1BB);
+
+    // case2块: x > 0 && y <= 10, 计算 x + y * 2
+    builder.setInsertPoint(case2BB);
+    auto* two = midend::ConstantInt::get(i32Type, 2);
+    auto* mul2 = builder.createMul(arg2, two, "mul2");
+    auto* result2 = builder.createAdd(arg1, mul2, "result2");
+    builder.createBr(merge1BB);
+
+    // case3块: x <= 0 && y < -5, 计算 x - y + 50
+    builder.setInsertPoint(case3BB);
+    auto* sub1 = builder.createSub(arg1, arg2, "sub1");
+    auto* fifty = midend::ConstantInt::get(i32Type, 50);
+    auto* result3 = builder.createAdd(sub1, fifty, "result3");
+    builder.createBr(merge2BB);
+
+    // case4块: x <= 0 && y >= -5, 计算 x * 3 - y
+    builder.setInsertPoint(case4BB);
+    auto* three = midend::ConstantInt::get(i32Type, 3);
+    auto* mul3 = builder.createMul(arg1, three, "mul3");
+    auto* result4 = builder.createSub(mul3, arg2, "result4");
+    builder.createBr(merge2BB);
+
+    // merge1块: 合并 case1 和 case2 的结果
+    builder.setInsertPoint(merge1BB);
+    auto* phi1 = builder.createPHI(i32Type, "phi1");
+    phi1->addIncoming(result1, case1BB);
+    phi1->addIncoming(result2, case2BB);
+    builder.createBr(finalBB);
+
+    // merge2块: 合并 case3 和 case4 的结果
+    builder.setInsertPoint(merge2BB);
+    auto* phi2 = builder.createPHI(i32Type, "phi2");
+    phi2->addIncoming(result3, case3BB);
+    phi2->addIncoming(result4, case4BB);
+    builder.createBr(finalBB);
+
+    // final块: 最终的 phi 节点选择结果
+    builder.setInsertPoint(finalBB);
+    auto* finalPhi = builder.createPHI(i32Type, "final_result");
+    finalPhi->addIncoming(phi1, merge1BB);
+    finalPhi->addIncoming(phi2, merge2BB);
+
+    // 最后再做一次计算: 如果结果 > 50 则减 10，否则加 5
+    auto* one = midend::ConstantInt::get(i32Type, 1);
+    auto* fifty_threshold = midend::ConstantInt::get(i32Type, 50);
+    auto* five = midend::ConstantInt::get(i32Type, 5);
+    auto* minusTen = midend::ConstantInt::get(i32Type, -10);
+    
+    auto* isGreaterThan50 = builder.createICmpSGT(finalPhi, fifty_threshold, "is_gt_50");
+    auto* adjustment = builder.createSelect(isGreaterThan50, minusTen, five, "adjustment");
+    auto* adjustedResult = builder.createAdd(finalPhi, adjustment, "adjusted_result");
+
+    builder.createRet(adjustedResult);
+
+    return module;
+}
+
 }  // namespace testcases
 
 // TestRunner 构造函数实现
@@ -330,7 +522,9 @@ TestRunner::TestRunner() {
     testCases_["2_simple_add"] = testcases::createSimpleAddTest;
     testCases_["3_arithmetic_ops"] = testcases::createArithmeticOpsTest;
     testCases_["4_conditional_branch"] = testcases::createConditionalBranchTest;
-    testCases_["5_variable_assignment"] = testcases::createVariableAssignmentTest; // 添加这行
+    testCases_["5_variable_assignment"] = testcases::createVariableAssignmentTest;
+    testCases_["6_complex_assignment"] = testcases::createComplexAssignmentTest;
+    testCases_["7_complex_branch"] = testcases::createComplexBranchTest;
 }
 
 std::unique_ptr<midend::Module> TestRunner::loadTestCase(
@@ -392,7 +586,7 @@ void TestRunner::executeCodeGeneration(const std::string& testCaseName,
 
         // 执行寄存器分配pass
         std::cout << "\n--- Running Register Allocation Pass ---" << std::endl;
-        auto allocatedModule = target.registerAllocationPass(riscvModule);
+        auto& allocatedModule = target.registerAllocationPass(riscvModule);
 
         // 打印寄存器分配后的代码
         std::cout << "\n--- Final RISC-V Assembly (with physical registers) ---"
