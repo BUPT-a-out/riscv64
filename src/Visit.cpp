@@ -181,8 +181,8 @@ std::unique_ptr<MachineOperand> Visitor::visitCallInst(
                 " is null in call instruction: " + inst->toString());
         }
 
-        // 将参数转换为寄存器
-        auto dest_arg_operand = visit(dest_arg, parent_bb);
+        // 将参数转换为寄存器（真实的寄存器）
+        auto dest_arg_operand = funcArgToReg(dest_arg);
 
         // Cast to RegisterOperand since function arguments should be in
         // registers
@@ -683,6 +683,19 @@ std::optional<RegisterOperand*> Visitor::findRegForValue(
     }
 }
 
+std::unique_ptr<MachineOperand> Visitor::funcArgToReg(
+    const midend::Argument* argument) {
+    // 获取函数参数对应的物理寄存器或者栈帧
+    if (argument->getArgNo() < 8) {
+        // 如果参数编号小于的寄存器数量，直接返回对应的寄存器
+        return std::make_unique<RegisterOperand>(
+            "a" + std::to_string(argument->getArgNo()));
+    }
+    // 否则，从栈帧中取出来
+    // TODO(rikka): 处理栈帧中的参数
+    throw std::runtime_error("Stack frame arguments not implemented yet");
+}
+
 std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
                                                BasicBlock* parent_bb) {
     // 处理值的访问
@@ -725,17 +738,19 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         return visit(midend::cast<midend::Instruction>(value), parent_bb);
     }
 
-    // 如果是函数参数，则直接映射到对应的寄存器
+    // 如果是函数参数，先看是否已经有对应的虚拟寄存器（开头处已经完成），如果没有则需要分配虚拟寄存器（在这一步完成）
     if (value->getValueKind() == midend::ValueKind::Argument) {
         const auto* argument = midend::cast<midend::Argument>(value);
-        if (argument->getArgNo() < 8) {
-            // 如果参数编号小于的寄存器数量，直接返回对应的寄存器
-            return std::make_unique<RegisterOperand>(
-                "a" + std::to_string(argument->getArgNo()));
-        }
-        // 否则，从栈帧中取出来
-        // TODO(rikka): 处理栈帧中的参数
-        throw std::runtime_error("Stack frame arguments not implemented yet");
+        auto new_reg = codeGen_->allocateReg();
+        codeGen_->mapValueToReg(value, new_reg->getRegNum(),
+                                new_reg->isVirtual());
+        auto source_reg = funcArgToReg(argument);
+        storeOperandToReg(std::move(source_reg),
+                          std::make_unique<RegisterOperand>(
+                              new_reg->getRegNum(), new_reg->isVirtual()),
+                          parent_bb, parent_bb->begin());
+
+        return new_reg;
     }
 
     // 如果是指针，则直接返回对应的寄存器

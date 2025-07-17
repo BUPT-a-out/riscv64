@@ -27,6 +27,8 @@ class Visitor {
     void visit(const midend::BasicBlock* bb, Function* parent_func);
     std::unique_ptr<MachineOperand> visit(const midend::Instruction* inst,
                                           BasicBlock* parent_bb);
+    std::unique_ptr<MachineOperand> visit(const midend::Value* value,
+                                          BasicBlock* parent_bb);
     void visitRetInstruction(const midend::Instruction* retInst,
                              BasicBlock* parent_bb);
     std::unique_ptr<MachineOperand> visitBinaryOp(
@@ -49,9 +51,11 @@ class Visitor {
         std::unique_ptr<RegisterOperand> reg_operand, BasicBlock* parent_bb,
         std::list<std::unique_ptr<Instruction>>::const_iterator insert_pos =
             {});
+    std::unique_ptr<MachineOperand> funcArgToReg(
+        const midend::Argument* argument);
 
-    std::unique_ptr<MachineOperand> visit(const midend::Value* value,
-                                          BasicBlock* parent_bb);
+    void assignVirtRegsToFuncArgs(midend::Function* func);
+
     void visit(const midend::Constant* constant);
     void visit(const midend::GlobalVariable* var);
 
