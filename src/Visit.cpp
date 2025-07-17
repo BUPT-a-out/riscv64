@@ -126,13 +126,19 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
         throw std::runtime_error("Invalid immediate operand type");
     }
 
+    if (imm_operand->getValue() == 0) {
+        // 如果立即数是 0，直接返回 zero
+        return std::make_unique<RegisterOperand>("zero");
+    }
+
     // 生成一个新的寄存器，并将立即数加载到该寄存器中
     auto instruction = std::make_unique<Instruction>(Opcode::LI, parent_bb);
     auto new_reg = codeGen_->allocateReg();  // 分配一个新的寄存器
     auto reg_num = new_reg->getRegNum();
     auto is_virtual = new_reg->isVirtual();
     instruction->addOperand(std::move(new_reg));  // rd
-    instruction->addOperand(std::make_unique<ImmediateOperand>(imm_operand->getValue()));  // imm
+    instruction->addOperand(
+        std::make_unique<ImmediateOperand>(imm_operand->getValue()));  // imm
     parent_bb->addInstruction(std::move(instruction));
 
     return std::make_unique<RegisterOperand>(reg_num, is_virtual);
