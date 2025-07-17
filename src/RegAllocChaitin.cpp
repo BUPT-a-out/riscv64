@@ -219,6 +219,7 @@ bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
     for (auto& [regNum, node] : interferenceGraph) {
         if (node->isPrecolored) {
             node->color = regNum;
+            virtualToPhysical[regNum] = regNum; // 确保物理寄存器有映射
         }
     }
 
@@ -226,6 +227,11 @@ bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
     for (unsigned regNum : order) {
         if (spilledRegs.find(regNum) != spilledRegs.end()) {
             continue;  // 跳过溢出的寄存器
+        }
+
+        // 跳过已经被合并的寄存器
+        if (coalescedRegs.find(regNum) != coalescedRegs.end()) {
+            continue;
         }
 
         auto& node = interferenceGraph[regNum];
@@ -255,6 +261,14 @@ bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
 
         node->color = selectedColor;
         virtualToPhysical[regNum] = selectedColor;
+    }
+
+    // 为被合并的寄存器建立映射关系
+    for (const auto& [src, dst] : coalesceMap) {
+        unsigned finalDst = getFinalCoalescedReg(dst);
+        if (virtualToPhysical.find(finalDst) != virtualToPhysical.end()) {
+            virtualToPhysical[src] = virtualToPhysical[finalDst];
+        }
     }
 
     return spilledRegs.empty();
@@ -343,25 +357,41 @@ void RegAllocChaitin::rewriteInstruction(Instruction* inst) {
     const auto& operands = inst->getOperands();
     for (const auto& operand : operands) {
         if (operand->isReg()) {
-            RegisterOperand* regOp =
-                static_cast<RegisterOperand*>(operand.get());
+            RegisterOperand* regOp = static_cast<RegisterOperand*>(operand.get());
             if (regOp->isVirtual()) {
                 unsigned virtualReg = regOp->getRegNum();
-
-                // 首先检查是否被合并
-                if (coalesceMap.find(virtualReg) != coalesceMap.end()) {
-                    virtualReg = coalesceMap[virtualReg];
-                }
-
+                
+                // 首先检查是否被合并，如果被合并则使用合并后的寄存器
+                unsigned finalReg = getFinalCoalescedReg(virtualReg);
+                
                 // 然后查找物理寄存器映射
-                if (virtualToPhysical.find(virtualReg) !=
-                    virtualToPhysical.end()) {
-                    regOp->setPhysicalReg(virtualToPhysical[virtualReg]);
+                if (virtualToPhysical.find(finalReg) != virtualToPhysical.end()) {
+                    regOp->setPhysicalReg(virtualToPhysical[finalReg]);
+                } else {
+                    // 如果找不到映射，可能是被合并到了物理寄存器
+                    if (isPhysicalReg(finalReg)) {
+                        regOp->setPhysicalReg(finalReg);
+                    }
                 }
             }
         }
     }
 }
+
+// 获取最终合并后的寄存器
+unsigned RegAllocChaitin::getFinalCoalescedReg(unsigned reg) {
+    unsigned current = reg;
+    std::unordered_set<unsigned> visited; // 防止循环
+    
+    while (coalesceMap.find(current) != coalesceMap.end() && 
+           visited.find(current) == visited.end()) {
+        visited.insert(current);
+        current = coalesceMap[current];
+    }
+    
+    return current;
+}
+
 
 // 执行寄存器合并的主要方法
 void RegAllocChaitin::performCoalescing() {
@@ -594,6 +624,15 @@ bool RegAllocChaitin::canCoalesce(unsigned src, unsigned dst) {
         return false;
     }
 
+    // 获取最终的合并目标
+    unsigned finalSrc = getFinalCoalescedReg(src);
+    unsigned finalDst = getFinalCoalescedReg(dst);
+
+    // 如果最终目标相同，则不需要合并
+    if (finalSrc == finalDst) {
+        return false;
+    }
+
     // 2. 检查是否存在冲突
     if (interferenceGraph.find(src) != interferenceGraph.end() &&
         interferenceGraph.find(dst) != interferenceGraph.end()) {
@@ -786,9 +825,11 @@ void RegAllocChaitin::printInterferenceGraph() const {
 void RegAllocChaitin::printAllocationResult() const {
     std::cout << "Register Allocation Result:\n";
     for (const auto& [virtualReg, physicalReg] : virtualToPhysical) {
-        std::cout << "Virtual register " << virtualReg
-                  << " -> Physical register " << physicalReg << " ("
-                  << ABI::getABINameFromRegNum(physicalReg) << ")\n";
+        if (!isPhysicalReg(virtualReg)) {
+            std::cout << "Virtual register " << virtualReg
+            << " -> Physical register " << physicalReg << " ("
+            << ABI::getABINameFromRegNum(physicalReg) << ")\n";
+        }
     }
 
     if (!spilledRegs.empty()) {

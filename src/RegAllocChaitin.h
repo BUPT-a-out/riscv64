@@ -90,6 +90,7 @@ class RegAllocChaitin {
     // 重写指令中的寄存器
     void rewriteInstructions();
     void rewriteInstruction(Instruction* inst);
+    unsigned getFinalCoalescedReg(unsigned reg);
 
     // 寄存器合并方法
     void performCoalescing();
