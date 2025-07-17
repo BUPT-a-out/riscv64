@@ -48,7 +48,7 @@ class Visitor {
         const midend::Instruction* inst, BasicBlock* parent_bb);
     void storeOperandToReg(
         std::unique_ptr<MachineOperand> source_operand,
-        std::unique_ptr<RegisterOperand> reg_operand, BasicBlock* parent_bb,
+        std::unique_ptr<MachineOperand> reg_operand, BasicBlock* parent_bb,
         std::list<std::unique_ptr<Instruction>>::const_iterator insert_pos =
             {});
     std::unique_ptr<MachineOperand> funcArgToReg(

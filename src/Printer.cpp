@@ -16,6 +16,8 @@ std::string MachineOperand::toString() const {
             return dynamic_cast<const LabelOperand*>(this)->toString();
         case OperandType::Memory:
             return dynamic_cast<const MemoryOperand*>(this)->toString();
+        case OperandType::FrameIndex:
+            return dynamic_cast<const FrameIndexOperand*>(this)->toString();
         default:
             throw std::runtime_error("Unknown operand type");
     }
@@ -40,13 +42,30 @@ std::string MemoryOperand::toString() const {
            getBaseReg()->toString() + ")";
 }
 
+std::string FrameIndexOperand::toString() const {
+    return "FI(" + std::to_string(getIndex()) + ")";
+}
+
 std::string getInstructionName(Opcode opcode) {
     static const std::unordered_map<Opcode, std::string> opcodeNames = {
-        {Opcode::ADD, "add"},   {Opcode::SUB, "sub"},   {Opcode::MUL, "mul"},
-        {Opcode::DIV, "div"},   {Opcode::RET, "ret"},   {Opcode::LI, "li"},
-        {Opcode::MV, "mv"},     {Opcode::ADDI, "addi"}, {Opcode::BNEZ, "bnez"},
-        {Opcode::J, "j"},       {Opcode::SLT, "slt"},   {Opcode::SGT, "sgt"},
-        {Opcode::SLTI, "slti"}, {Opcode::CALL, "call"},
+        {Opcode::ADD, "add"},
+        {Opcode::SUB, "sub"},
+        {Opcode::MUL, "mul"},
+        {Opcode::DIV, "div"},
+        {Opcode::RET, "ret"},
+        {Opcode::LI, "li"},
+        {Opcode::MV, "mv"},
+        {Opcode::ADDI, "addi"},
+        {Opcode::BNEZ, "bnez"},
+        {Opcode::J, "j"},
+        {Opcode::SLT, "slt"},
+        {Opcode::SGT, "sgt"},
+        {Opcode::SLTI, "slti"},
+        {Opcode::CALL, "call"},
+        {Opcode::FRAMEADDR, "frameaddr"},
+        {Opcode::SW, "sw"},
+        {Opcode::LW, "lw"},
+        {Opcode::BEQZ, "beqz"},
         // TODO(rikka): 添加其他操作码的名称...
     };
 
