@@ -80,6 +80,7 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Instruction* inst,
         case midend::Opcode::Shl:
         case midend::Opcode::Shr:
         case midend::Opcode::ICmpSGT:
+        case midend::Opcode::ICmpSLT:
             // 处理算术指令，此处直接生成
             // 关于 0 和 1 的判断优化等，后期写一个 Pass 来优化
             return visitBinaryOp(inst, parent_bb);
@@ -465,6 +466,29 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             break;
         }
 
+        case midend::Opcode::ICmpSLT: {
+            // 处理有符号大于比较
+            if ((lhs->getType() == OperandType::Immediate) &&
+                (rhs->getType() == OperandType::Immediate)) {
+                auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
+                auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                return std::make_unique<ImmediateOperand>(
+                    lhs_imm->getValue() < rhs_imm->getValue() ? 1 : 0);
+            }
+
+            // 使用 sgt 指令
+            new_reg = codeGen_->allocateReg();
+            auto instruction =
+                std::make_unique<Instruction>(Opcode::SGT, parent_bb);
+            instruction->addOperand(std::make_unique<RegisterOperand>(
+                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+            instruction->addOperand(std::move(lhs));           // rs1
+            instruction->addOperand(std::move(rhs));           // rs2
+
+            parent_bb->addInstruction(std::move(instruction));
+            break;
+        }
+
         // 其他二元运算...
         default:
             throw std::runtime_error("Unsupported binary operation: " +
@@ -569,7 +593,8 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
     // 检查是否是常量
     if (midend::isa<midend::ConstantInt>(value)) {
         // 判断范围，是否在 [-2048, 2047] 之间
-        auto value_int = midend::cast<midend::ConstantInt>(value)->getValue();
+        auto value_int =
+            midend::cast<midend::ConstantInt>(value)->getSignedValue();
         constexpr int64_t IMM_MIN = -2048;
         constexpr int64_t IMM_MAX = 2047;
         auto signed_value = static_cast<int64_t>(value_int);

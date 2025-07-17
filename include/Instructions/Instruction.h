@@ -21,6 +21,7 @@ enum Opcode {
     SUB,
     SLL,
     SLT,
+    SGT,
     SLTU,
     XOR,
     SRL,
