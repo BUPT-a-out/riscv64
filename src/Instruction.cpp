@@ -1,6 +1,6 @@
 #include "Instructions/Instruction.h"
 #include "Instructions/MachineOperand.h"
-
+#include "Instructions/BasicBlock.h"
 
 namespace riscv64 {
 std::optional<DestSourcePair> Instruction::isCopyInstrImpl() const {
@@ -73,6 +73,72 @@ std::optional<DestSourcePair> Instruction::isCopyInstr() const {
 
     // 检查其他可能的复制指令形式
     return isCopyInstrImpl();
+}
+
+bool Instruction::isJumpInstr() const {
+    return opcode == JAL || opcode == JALR || opcode == J || opcode == JR || opcode == RET;
+}
+
+bool Instruction::isCallInstr() const {
+    // 直接的函数调用指令
+    if (opcode == CALL) {
+        return true;
+    }
+    
+    // JAL指令：如果目标寄存器是ra(x1)，则是函数调用
+    if (opcode == JAL) {
+        if (!operands.empty()) {
+            auto* dest_operand = operands[0].get();
+            if (dest_operand->getType() == OperandType::Register) {
+                RegisterOperand* reg_op = static_cast<RegisterOperand*>(dest_operand);
+                // 检查是否是ra寄存器(x1)
+                return reg_op->getRegNum() == 1;  // ra寄存器编号为1
+            }
+        }
+        return true;  // 如果无法确定，保守地认为是调用
+    }
+    
+    // JALR指令：如果目标寄存器是ra(x1)，则是函数调用
+    if (opcode == JALR) {
+        if (!operands.empty()) {
+            auto* dest_operand = operands[0].get();
+            if (dest_operand->getType() == OperandType::Register) {
+                RegisterOperand* reg_op = static_cast<RegisterOperand*>(dest_operand);
+                // 检查是否是ra寄存器(x1)
+                return reg_op->getRegNum() == 1;  // ra寄存器编号为1
+            }
+        }
+        return false;  // JALR如果不是写入ra，通常是间接跳转而非调用
+    }
+    
+    // TAIL伪指令也是函数调用的一种形式（尾调用）
+    if (opcode == TAIL) {
+        return true;
+    }
+    
+    return false;
+}
+
+bool Instruction::isBranch() const {
+    // 条件分支指令
+    if (opcode == BEQ || opcode == BNE || opcode == BLT || opcode == BGE || 
+        opcode == BLTU || opcode == BGEU || opcode == BEQZ || opcode == BNEZ || 
+        opcode == BLEZ || opcode == BGEZ || opcode == BLTZ || opcode == BGTZ || 
+        opcode == BGT || opcode == BLE || opcode == BGTU || opcode == BLEU) {
+        return true;
+    }
+    
+    // 无条件跳转指令
+    if (isJumpInstr()) {
+        return true;
+    }
+    
+    // 函数调用指令
+    if (isCallInstr()) {
+        return true;
+    }
+    
+    return false;
 }
 
 }  // namespace riscv64

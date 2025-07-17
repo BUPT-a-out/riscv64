@@ -1,20 +1,22 @@
 #include "RegAllocChaitin.h"
-#include "StackFrameManager.h"
 
+#include <algorithm>
 #include <iostream>
+#include <stack>
+
+#include "StackFrameManager.h"
 namespace riscv64 {
 
 void RegAllocChaitin::allocateRegisters() {
-    // 1. 活跃性分析
     computeLiveness();
 
-    // 2. 构建冲突图
     buildInterferenceGraph();
 
-    // 3. 图着色
+    performCoalescing();
+
     bool success = colorGraph();
 
-    // 4. 如果着色失败，处理溢出
+    // 如果着色失败，处理溢出
     if (!success) {
         handleSpills();
         // 重新尝试分配
@@ -22,11 +24,12 @@ void RegAllocChaitin::allocateRegisters() {
         return;
     }
 
-    // 5. 重写指令
+    removeCoalescedCopies();
+
     rewriteInstructions();
 
-    // 6. 输出结果（调试用）
     printAllocationResult();
+    printCoalesceResult();
 }
 
 void RegAllocChaitin::computeLiveness() {
@@ -286,39 +289,41 @@ std::vector<unsigned> RegAllocChaitin::selectSpillCandidates() {
 void RegAllocChaitin::insertSpillCode(unsigned reg) {
     // 获取栈帧管理器
     StackFrameManager stackManager(function);
-    
+
     // 为溢出寄存器分配栈槽
     int spillSlot = stackManager.allocateSpillSlot(reg);
     int spillOffset = stackManager.getSpillSlotOffset(reg);
-    
+
     for (auto& bb : *function) {
         for (auto it = bb->begin(); it != bb->end(); ++it) {
             Instruction* inst = it->get();
-            
+
             // 检查指令是否使用了溢出的寄存器
             auto usedRegs = getUsedRegs(inst);
-            if (std::find(usedRegs.begin(), usedRegs.end(), reg) != usedRegs.end()) {
+            if (std::find(usedRegs.begin(), usedRegs.end(), reg) !=
+                usedRegs.end()) {
                 // 在指令前插入加载
                 auto loadInst = std::make_unique<Instruction>(LD);
-                loadInst->addOperand(std::make_unique<RegisterOperand>(reg, false));
+                loadInst->addOperand(
+                    std::make_unique<RegisterOperand>(reg, false));
                 loadInst->addOperand(std::make_unique<MemoryOperand>(
                     std::make_unique<RegisterOperand>(2, false),  // sp
-                    std::make_unique<ImmediateOperand>(spillOffset)
-                ));
+                    std::make_unique<ImmediateOperand>(spillOffset)));
                 it = bb->insert(it, std::move(loadInst));
                 ++it;
             }
-            
+
             // 检查指令是否定义了溢出的寄存器
             auto definedRegs = getDefinedRegs(inst);
-            if (std::find(definedRegs.begin(), definedRegs.end(), reg) != definedRegs.end()) {
+            if (std::find(definedRegs.begin(), definedRegs.end(), reg) !=
+                definedRegs.end()) {
                 // 在指令后插入存储
                 auto storeInst = std::make_unique<Instruction>(SD);
-                storeInst->addOperand(std::make_unique<RegisterOperand>(reg, false));
+                storeInst->addOperand(
+                    std::make_unique<RegisterOperand>(reg, false));
                 storeInst->addOperand(std::make_unique<MemoryOperand>(
                     std::make_unique<RegisterOperand>(2, false),  // sp
-                    std::make_unique<ImmediateOperand>(spillOffset)
-                ));
+                    std::make_unique<ImmediateOperand>(spillOffset)));
                 ++it;
                 it = bb->insert(it, std::move(storeInst));
             }
@@ -335,7 +340,6 @@ void RegAllocChaitin::rewriteInstructions() {
 }
 
 void RegAllocChaitin::rewriteInstruction(Instruction* inst) {
-    // 遍历指令的所有操作数
     const auto& operands = inst->getOperands();
     for (auto& operand : operands) {
         if (operand->isReg()) {
@@ -343,12 +347,382 @@ void RegAllocChaitin::rewriteInstruction(Instruction* inst) {
                 static_cast<RegisterOperand*>(operand.get());
             if (regOp->isVirtual()) {
                 unsigned virtualReg = regOp->getRegNum();
+
+                // 首先检查是否被合并
+                if (coalesceMap.find(virtualReg) != coalesceMap.end()) {
+                    virtualReg = coalesceMap[virtualReg];
+                }
+
+                // 然后查找物理寄存器映射
                 if (virtualToPhysical.find(virtualReg) !=
                     virtualToPhysical.end()) {
-                    // 将虚拟寄存器替换为物理寄存器
                     regOp->setPhysicalReg(virtualToPhysical[virtualReg]);
                 }
             }
+        }
+    }
+}
+
+// 执行寄存器合并的主要方法
+void RegAllocChaitin::performCoalescing() {
+    // 识别合并候选
+    identifyCoalesceCandidates();
+
+    // 按优先级排序
+    std::sort(coalesceCandidates.begin(), coalesceCandidates.end(),
+              [](const CoalesceInfo& a, const CoalesceInfo& b) {
+                  return a.priority > b.priority;
+              });
+
+    // 尝试合并
+    for (const auto& candidate : coalesceCandidates) {
+        if (candidate.canCoalesce &&
+            coalescedRegs.find(candidate.src) == coalescedRegs.end() &&
+            coalescedRegs.find(candidate.dst) == coalescedRegs.end()) {
+            if (canCoalesce(candidate.src, candidate.dst)) {
+                coalesceRegisters(candidate.src, candidate.dst);
+            }
+        }
+    }
+}
+
+// 识别复制指令中的合并候选
+void RegAllocChaitin::identifyCoalesceCandidates() {
+    coalesceCandidates.clear();
+
+    for (auto& bb : *function) {
+        for (auto& inst : *bb) {
+            if (inst->isCopyInstr()) {
+                auto operands = inst->getOperands();
+                if (operands.size() >= 2 && operands[0]->isReg() &&
+                    operands[1]->isReg()) {
+                    unsigned dst = operands[0]->getRegNum();
+                    unsigned src = operands[1]->getRegNum();
+
+                    // 计算合并优先级（基于指令频次、循环嵌套等）
+                    int priority = calculateCoalescePriority(src, dst, bb.get(),
+                                                             inst.get());
+
+                    CoalesceInfo info;
+                    info.src = src;
+                    info.dst = dst;
+                    info.canCoalesce = true;
+                    info.priority = priority;
+
+                    coalesceCandidates.push_back(info);
+                }
+            }
+        }
+    }
+}
+
+int RegAllocChaitin::calculateCoalescePriority(unsigned src, unsigned dst,
+                                               BasicBlock* bb,
+                                               Instruction* inst) {
+    int priority = 0;
+
+    // 1. 基本块执行频率权重 (0-100)
+    int bbFrequency = getBasicBlockFrequency(bb);
+    priority += bbFrequency * 10;
+
+    // 2. 循环嵌套深度权重 (0-50)
+    // int loopDepth = getLoopNestingDepth(bb);
+    // priority += loopDepth * 50;
+
+    // 3. 寄存器使用频率权重 (0-30)
+    int srcUsageCount = getRegisterUsageCount(src);
+    int dstUsageCount = getRegisterUsageCount(dst);
+    priority += (srcUsageCount + dstUsageCount) * 2;
+
+    // 4. 冲突图度数权重 (度数越小优先级越高) (0-20)
+    int srcDegree = getRegisterDegree(src);
+    int dstDegree = getRegisterDegree(dst);
+    int avgDegree = (srcDegree + dstDegree) / 2;
+    priority += std::max(0, 20 - avgDegree);
+
+    // 5. 生命周期重叠度权重 (重叠越少优先级越高) (0-15)
+    int lifeOverlap = calculateLifetimeOverlap(src, dst);
+    priority += std::max(0, 15 - lifeOverlap);
+
+    // 6. 寄存器压力权重 (0-10)
+    int regPressure = getRegisterPressure(bb);
+    if (regPressure > static_cast<int>(availableRegs.size() * 0.8)) {
+        priority += 10;  // 高寄存器压力时更倾向于合并
+    }
+
+    // 7. 物理寄存器偏好权重 (0-25)
+    priority += calculatePhysicalRegPreference(src, dst);
+
+    // 8. 复制指令消除收益权重 (0-5)
+    priority += 5;  // 消除一条复制指令的基本收益
+
+    return priority;
+}
+
+/// 辅助函数
+
+int RegAllocChaitin::getBasicBlockFrequency(BasicBlock* bb) {
+    // 静态估算基本块频率
+    int frequency = 10;  // 基础频率
+
+    // 1. 如果是函数入口块，频率较高
+    if (bb == function->begin()->get()) {
+        frequency += 50;
+    }
+
+    // 2. 根据前驱块数量调整（更多前驱意味着可能被更频繁执行）
+    int predecessorCount = bb->getPredecessors().size();
+    if (predecessorCount > 1) {
+        frequency += predecessorCount * 10;  // 汇聚点通常执行频率更高
+    }
+
+    // 3. 根据后继块数量调整
+    int successorCount = bb->getSuccessors().size();
+    if (successorCount == 1) {
+        frequency += 20;  // 直线代码块
+    } else if (successorCount > 1) {
+        frequency += 15;  // 分支块
+    }
+
+    // 4. 根据基本块大小调整（更大的块可能在热路径上）
+    int blockSize = bb->size();
+    if (blockSize > 10) {
+        frequency += 10;
+    }
+
+    // 5. 检查是否包含函数调用（调用通常在较冷的路径上）
+    for (const auto& inst : *bb) {
+        if (inst->isCallInstr()) {
+            frequency -= 15;
+            break;
+        }
+    }
+
+    // 6. 检查是否包含循环相关指令
+    for (const auto& inst : *bb) {
+        if (inst->isBranch() && inst->isBackEdge()) {
+            frequency += 30;  // 循环回边
+            break;
+        }
+    }
+
+    return std::max(frequency, 1);  // 确保至少为1
+}
+
+int RegAllocChaitin::getRegisterUsageCount(unsigned reg) {
+    int count = 0;
+    for (auto& bb : *function) {
+        for (auto& inst : *bb) {
+            auto usedRegs = getUsedRegs(inst.get());
+            auto definedRegs = getDefinedRegs(inst.get());
+            if (std::find(usedRegs.begin(), usedRegs.end(), reg) !=
+                    usedRegs.end() ||
+                std::find(definedRegs.begin(), definedRegs.end(), reg) !=
+                    definedRegs.end()) {
+                count++;
+            }
+        }
+    }
+    return count;
+}
+
+int RegAllocChaitin::getRegisterDegree(unsigned reg) {
+    if (interferenceGraph.find(reg) == interferenceGraph.end()) {
+        return 0;
+    }
+    return interferenceGraph[reg]->neighbors.size();
+}
+
+int RegAllocChaitin::calculateLifetimeOverlap(unsigned src, unsigned dst) {
+    // 统计两个寄存器共同活跃的程序点数量
+    int overlap = 0;
+    for (auto& bb : *function) {
+        const auto& liveIn = livenessInfo[bb.get()].liveIn;
+        const auto& liveOut = livenessInfo[bb.get()].liveOut;
+        if ((liveIn.find(src) != liveIn.end() ||
+             liveOut.find(src) != liveOut.end()) &&
+            (liveIn.find(dst) != liveIn.end() ||
+             liveOut.find(dst) != liveOut.end())) {
+            overlap++;
+        }
+    }
+    return overlap;
+}
+
+int RegAllocChaitin::getRegisterPressure(BasicBlock* bb) {
+    // 计算基本块内活跃变量的峰值数量
+    int maxLive = 0;
+    std::unordered_set<unsigned> live = livenessInfo[bb].liveOut;
+
+    for (auto it = bb->begin(); it != bb->end(); ++it) {
+        auto definedRegs = getDefinedRegs(it->get());
+        for (unsigned reg : definedRegs) {
+            live.erase(reg);
+        }
+
+        auto usedRegs = getUsedRegs(it->get());
+        for (unsigned reg : usedRegs) {
+            live.insert(reg);
+        }
+
+        maxLive = std::max(maxLive, static_cast<int>(live.size()));
+    }
+    return maxLive;
+}
+
+int RegAllocChaitin::calculatePhysicalRegPreference(unsigned src,
+                                                    unsigned dst) {
+    int score = 0;
+    // 如果目标寄存器是物理寄存器，优先合并
+    if (isPhysicalReg(dst)) {
+        score += 15;
+    }
+    // 如果源寄存器是物理寄存器，次优先
+    else if (isPhysicalReg(src)) {
+        score += 10;
+    }
+    return score;
+}
+
+// 检查两个寄存器是否可以合并
+bool RegAllocChaitin::canCoalesce(unsigned src, unsigned dst) {
+    // 1. 检查是否已经被合并
+    if (coalescedRegs.find(src) != coalescedRegs.end() ||
+        coalescedRegs.find(dst) != coalescedRegs.end()) {
+        return false;
+    }
+
+    // 2. 检查是否存在冲突
+    if (interferenceGraph.find(src) != interferenceGraph.end() &&
+        interferenceGraph.find(dst) != interferenceGraph.end()) {
+        auto& srcNode = interferenceGraph[src];
+        auto& dstNode = interferenceGraph[dst];
+
+        // 如果两个寄存器直接冲突，不能合并
+        if (srcNode->neighbors.find(dst) != srcNode->neighbors.end()) {
+            return false;
+        }
+
+        // Briggs准则：合并后的节点度数要小于K（可用寄存器数量）
+        std::unordered_set<unsigned> combinedNeighbors = srcNode->neighbors;
+        for (unsigned neighbor : dstNode->neighbors) {
+            combinedNeighbors.insert(neighbor);
+        }
+
+        if (combinedNeighbors.size() >= availableRegs.size()) {
+            return false;
+        }
+
+        // George准则：对于每个高度数的邻居，它要么已经与目标寄存器冲突，要么度数小于K
+        for (unsigned neighbor : srcNode->neighbors) {
+            if (interferenceGraph[neighbor]->neighbors.size() >=
+                availableRegs.size()) {
+                if (dstNode->neighbors.find(neighbor) ==
+                    dstNode->neighbors.end()) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+// 执行寄存器合并
+void RegAllocChaitin::coalesceRegisters(unsigned src, unsigned dst) {
+    // 使用Union-Find结构管理合并
+    unsigned srcRoot = findCoalesceRoot(src);
+    unsigned dstRoot = findCoalesceRoot(dst);
+
+    if (srcRoot != dstRoot) {
+        // 合并到dst
+        unionCoalesce(srcRoot, dstRoot);
+        coalesceMap[src] = dst;
+        coalescedRegs.insert(src);
+
+        // 更新冲突图
+        updateInterferenceAfterCoalesce(dst, src);
+
+        std::cout << "Coalesced register " << src << " into " << dst
+                  << std::endl;
+    }
+}
+
+// Union-Find 查找根节点
+unsigned RegAllocChaitin::findCoalesceRoot(unsigned reg) {
+    if (interferenceGraph.find(reg) == interferenceGraph.end()) {
+        return reg;
+    }
+
+    auto& node = interferenceGraph[reg];
+    if (node->coalesceParent != reg) {
+        node->coalesceParent = findCoalesceRoot(node->coalesceParent);
+    }
+    return node->coalesceParent;
+}
+
+// Union-Find 合并操作
+void RegAllocChaitin::unionCoalesce(unsigned reg1, unsigned reg2) {
+    unsigned root1 = findCoalesceRoot(reg1);
+    unsigned root2 = findCoalesceRoot(reg2);
+
+    if (root1 != root2) {
+        // 简单合并，可以根据rank优化
+        if (interferenceGraph.find(root1) != interferenceGraph.end()) {
+            interferenceGraph[root1]->coalesceParent = root2;
+        }
+    }
+}
+
+// 合并后更新冲突图
+void RegAllocChaitin::updateInterferenceAfterCoalesce(unsigned merged,
+                                                      unsigned eliminated) {
+    if (interferenceGraph.find(eliminated) == interferenceGraph.end() ||
+        interferenceGraph.find(merged) == interferenceGraph.end()) {
+        return;
+    }
+
+    auto& eliminatedNode = interferenceGraph[eliminated];
+    auto& mergedNode = interferenceGraph[merged];
+
+    // 将eliminated的所有邻居转移到merged
+    for (unsigned neighbor : eliminatedNode->neighbors) {
+        if (neighbor != merged &&
+            interferenceGraph.find(neighbor) != interferenceGraph.end()) {
+            // 添加到merged的邻居
+            mergedNode->neighbors.insert(neighbor);
+            // 更新邻居的冲突信息
+            interferenceGraph[neighbor]->neighbors.erase(eliminated);
+            interferenceGraph[neighbor]->neighbors.insert(merged);
+        }
+    }
+
+    // 移除eliminated节点
+    interferenceGraph.erase(eliminated);
+}
+
+// 移除已合并的复制指令
+void RegAllocChaitin::removeCoalescedCopies() {
+    for (auto& bb : *function) {
+        for (auto it = bb->begin(); it != bb->end();) {
+            auto& inst = *it;
+            if (inst->isCopyInstr()) {
+                auto operands = inst->getOperands();
+                if (operands.size() >= 2 && operands[0]->isReg() &&
+                    operands[1]->isReg()) {
+                    unsigned dst = operands[0]->getRegNum();
+                    unsigned src = operands[1]->getRegNum();
+
+                    // 检查是否已经合并
+                    if (coalesceMap.find(src) != coalesceMap.end() &&
+                        coalesceMap[src] == dst) {
+                        // 移除这条复制指令
+                        it = bb->erase(it);
+                        continue;
+                    }
+                }
+            }
+            ++it;
         }
     }
 }
@@ -421,6 +795,18 @@ void RegAllocChaitin::printAllocationResult() const {
             std::cout << reg << " ";
         }
         std::cout << "\n";
+    }
+}
+
+// 打印合并结果
+void RegAllocChaitin::printCoalesceResult() const {
+    if (!coalesceMap.empty()) {
+        std::cout << "Register Coalescing Result:\n";
+        for (const auto& [src, dst] : coalesceMap) {
+            std::cout << "Register " << src << " coalesced into " << dst
+                      << std::endl;
+        }
+        std::cout << std::endl;
     }
 }
 

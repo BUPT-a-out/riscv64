@@ -47,6 +47,8 @@ class BasicBlock {
         return instructions.insert(pos, std::move(inst));
     }
 
+    auto size() const { return instructions.size(); }
+
     const std::string& getLabel() const { return label; }
 
     // CFG (控制流图) 信息 - 使用原始指针，因为这些是弱引用关系
