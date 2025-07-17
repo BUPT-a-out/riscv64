@@ -291,7 +291,6 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
     StackFrameManager stackManager(function);
 
     // 为溢出寄存器分配栈槽
-    int spillSlot = stackManager.allocateSpillSlot(reg);
     int spillOffset = stackManager.getSpillSlotOffset(reg);
 
     for (auto& bb : *function) {
@@ -341,7 +340,7 @@ void RegAllocChaitin::rewriteInstructions() {
 
 void RegAllocChaitin::rewriteInstruction(Instruction* inst) {
     const auto& operands = inst->getOperands();
-    for (auto& operand : operands) {
+    for (const auto& operand : operands) {
         if (operand->isReg()) {
             RegisterOperand* regOp =
                 static_cast<RegisterOperand*>(operand.get());
@@ -393,7 +392,7 @@ void RegAllocChaitin::identifyCoalesceCandidates() {
     for (auto& bb : *function) {
         for (auto& inst : *bb) {
             if (inst->isCopyInstr()) {
-                auto operands = inst->getOperands();
+                const auto& operands = inst->getOperands();
                 if (operands.size() >= 2 && operands[0]->isReg() &&
                     operands[1]->isReg()) {
                     unsigned dst = operands[0]->getRegNum();
@@ -419,6 +418,8 @@ void RegAllocChaitin::identifyCoalesceCandidates() {
 int RegAllocChaitin::calculateCoalescePriority(unsigned src, unsigned dst,
                                                BasicBlock* bb,
                                                Instruction* inst) {
+    (void)inst;  // Suppress unused parameter warning
+
     int priority = 0;
 
     // 1. 基本块执行频率权重 (0-100)
@@ -707,7 +708,7 @@ void RegAllocChaitin::removeCoalescedCopies() {
         for (auto it = bb->begin(); it != bb->end();) {
             auto& inst = *it;
             if (inst->isCopyInstr()) {
-                auto operands = inst->getOperands();
+                const auto& operands = inst->getOperands();
                 if (operands.size() >= 2 && operands[0]->isReg() &&
                     operands[1]->isReg()) {
                     unsigned dst = operands[0]->getRegNum();
