@@ -115,10 +115,9 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
     std::unique_ptr<MachineOperand> operand, BasicBlock* parent_bb) {
     // 将立即数存到寄存器中，如果已经是寄存器则直接返回
     if (operand->getType() == OperandType::Register) {
-        auto register_operand = dynamic_cast<RegisterOperand*>(operand.get());
-        return std::make_unique<RegisterOperand>(
-            dynamic_cast<RegisterOperand*>(operand.get())->getRegNum(),
-            register_operand->isVirtual());
+        auto* register_operand = dynamic_cast<RegisterOperand*>(operand.get());
+        return std::make_unique<RegisterOperand>(register_operand->getRegNum(),
+                                                 register_operand->isVirtual());
     }
 
     auto* imm_operand = dynamic_cast<ImmediateOperand*>(operand.get());
@@ -128,13 +127,13 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
 
     // 生成一个新的寄存器，并将立即数加载到该寄存器中
     auto instruction = std::make_unique<Instruction>(Opcode::LI, parent_bb);
-    auto new_reg = codeGen_->allocateReg();       // 分配一个新的寄存器
+    auto new_reg = codeGen_->allocateReg();  // 分配一个新的寄存器
+    auto reg_num = new_reg->getRegNum();
+    auto is_virtual = new_reg->isVirtual();
     instruction->addOperand(std::move(new_reg));  // rd
-    instruction->addOperand(
-        std::make_unique<ImmediateOperand>(imm_operand->getValue()));  // imm
     parent_bb->addInstruction(std::move(instruction));
 
-    return std::make_unique<RegisterOperand>(new_reg->getRegNum(), true);
+    return std::make_unique<RegisterOperand>(reg_num, is_virtual);
 }
 
 std::unique_ptr<MachineOperand> Visitor::visitPhiInst(
