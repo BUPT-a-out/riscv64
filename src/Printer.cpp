@@ -66,6 +66,8 @@ std::string getInstructionName(Opcode opcode) {
         {Opcode::SW, "sw"},
         {Opcode::LW, "lw"},
         {Opcode::BEQZ, "beqz"},
+        {Opcode::SD, "sd"},
+        {Opcode::LD, "ld"}
         // TODO(rikka): 添加其他操作码的名称...
     };
 
