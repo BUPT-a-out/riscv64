@@ -1,5 +1,7 @@
 #include "StackFrameManager.h"
 
+#include "Instructions/MachineOperand.h"
+
 namespace riscv64 {
 // 静态成员定义
 const std::vector<unsigned> StackFrameManager::callerSavedRegs = {
@@ -161,6 +163,11 @@ void StackFrameManager::assignStackOffsets() {
             case StackObjectType::ReturnAddress:
                 obj->offset = frameInfo.returnAddressOffset;
                 break;
+            case StackObjectType::AllocatedStackSlot:
+                // 为 alloca 产生的栈对象分配偏移量
+                obj->offset =
+                    frameInfo.localVariableOffset + obj->identifier * obj->size;
+                break;
             default:
                 break;
         }
@@ -268,6 +275,10 @@ int StackFrameManager::allocateStackSlot(StackObjectType type, int size,
             break;
         case StackObjectType::SavedRegister:
             frameInfo.savedRegisterSize += alignTo(size, alignment);
+            break;
+        case StackObjectType::AllocatedStackSlot:
+            // 对于 alloca 产生的栈对象，不需要特殊的映射处理
+            frameInfo.localVariableSize += alignTo(size, alignment);
             break;
         default:
             break;

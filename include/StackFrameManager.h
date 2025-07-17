@@ -20,7 +20,8 @@ enum class StackObjectType {
     SavedRegister,      // 保存的callee-saved寄存器
     Temporary,          // 临时变量
     Parameter,          // 参数（超过8个时）
-    ReturnAddress       // 返回地址
+    ReturnAddress,      // 返回地址
+    AllocatedStackSlot, // 分配的栈槽
 };
 
 // 栈帧对象
@@ -31,9 +32,20 @@ struct StackObject {
     int offset;         // 相对于栈指针的偏移量
     unsigned regNum;    // 对于溢出寄存器，记录寄存器编号
     bool isFixed;       // 是否是固定位置的对象
+    int identifier;     // 用于标识对象的唯一ID
     
     StackObject(StackObjectType t, int s, int a = 8, unsigned reg = 0)
         : type(t), size(s), alignment(a), offset(0), regNum(reg), isFixed(false) {}
+
+    StackObject(int s, int a = 8,
+                int id = 0)  // 这个用于记录 allocated stack slots
+        : type(StackObjectType::AllocatedStackSlot),
+          size(s),
+          alignment(a),
+          offset(0),
+          regNum(0),
+          isFixed(false),
+          identifier(id) {}
 };
 
 // 栈帧布局信息
@@ -63,6 +75,7 @@ private:
     std::vector<std::unique_ptr<StackObject>> stackObjects;
     std::unordered_map<unsigned, int> spilledRegToStackSlot;  // 溢出寄存器到栈槽的映射
     std::unordered_map<unsigned, int> localVarToStackSlot;    // 局部变量到栈槽的映射
+    std::unordered_map<const midend::Value*, int> allocaToStackSlot;// alloca指令到栈槽的映射
     std::unordered_set<unsigned> calleeSavedRegs;             // 需要保存的callee-saved寄存器
     
     // RISC-V ABI定义的寄存器使用约定
@@ -82,7 +95,30 @@ public:
     int allocateStackSlot(StackObjectType type, int size, int alignment = 8, unsigned regNum = 0);
     int getStackSlotOffset(int slotIndex) const;
     StackObject* getStackObject(int slotIndex) const;
-    
+
+    // alloca 对象管理
+    int getNewStackObjectIdentifier() {
+        static int nextId = 0;
+        return nextId++;
+    }
+    void addStackObject(std::unique_ptr<StackObject> obj) {
+        stackObjects.push_back(std::move(obj));
+    }
+    StackObject* getStackObjectByIdentifier(int id) const {
+        auto it = std::find_if(stackObjects.begin(), stackObjects.end(),
+                               [&id](const std::unique_ptr<StackObject>& obj) {
+                                   return obj->identifier == id;
+                               });
+        return it != stackObjects.end() ? it->get() : nullptr;
+    }
+    void mapAllocaToStackSlot(const midend::Value* alloca, int slotIndex) {
+        allocaToStackSlot[alloca] = slotIndex;
+    }
+    int getAllocaStackSlotId(const midend::Value* alloca) const {
+        auto it = allocaToStackSlot.find(alloca);
+        return it != allocaToStackSlot.end() ? it->second : -1;
+    }
+
     // 溢出寄存器管理
     int allocateSpillSlot(unsigned regNum);
     int getSpillSlotOffset(unsigned regNum) const;
