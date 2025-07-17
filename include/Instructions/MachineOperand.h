@@ -64,6 +64,7 @@ class RegisterOperand : public MachineOperand {
           is_virtual(false) {}
 
     unsigned getRegNum() const { return regNum; }
+    void setRegNum(unsigned reg) { regNum = reg; }
     bool isVirtual() const { return is_virtual; }
 
     // unsigned abiToRegNum() const;
