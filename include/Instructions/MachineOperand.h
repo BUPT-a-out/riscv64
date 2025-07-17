@@ -7,16 +7,19 @@
 
 #include "ABI.h"
 #include "IR/BasicBlock.h"
+// #include "Function.h"
 
 namespace riscv64 {
 
 class BasicBlock;  // 前向声明
+class Function;    // 前向声明
 
 enum class OperandType {
-    Register,   // 寄存器
-    Immediate,  // 立即数
-    Label,      // 标签 (指向一个基本块)
-    Memory      // 内存地址 [base + offset]
+    Register,    // 寄存器
+    Immediate,   // 立即数
+    Label,       // 标签 (指向一个基本块)
+    Memory,      // 内存地址 [base + offset]
+    FrameIndex,  // 栈帧索引 (用于访问栈上的变量)
 };
 
 // 操作数基类
@@ -91,6 +94,20 @@ class ImmediateOperand : public MachineOperand {
 
    private:
     std::int64_t value;
+};
+
+class FrameIndexOperand : public MachineOperand {
+   public:
+    // 用于栈帧索引的操作数
+    explicit FrameIndexOperand(int index)
+        : MachineOperand(OperandType::FrameIndex), index(index) {}
+
+    int getIndex() const { return index; }
+
+    std::string toString() const;
+
+   private:
+    int index;
 };
 
 // 派生类：内存操作数

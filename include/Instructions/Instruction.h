@@ -199,7 +199,8 @@ enum Opcode {
     NOP,
 
     // 特殊控制流伪指令
-    COPY  // 表示约束“这个虚拟寄存器的值，必须被放入那个特定的物理寄存器中”
+    COPY,  // 表示约束“这个虚拟寄存器的值，必须被放入那个特定的物理寄存器中”
+    FRAMEADDR   // 获取当前栈帧的地址，需要后期处理，参数为 rd 和 rs
 };
 using DestSourcePair = std::pair<MachineOperand*, MachineOperand*>;
 

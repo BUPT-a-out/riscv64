@@ -1,18 +1,23 @@
 #pragma once
 
+#include <iostream>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
-#include <iostream>
 
 #include "BasicBlock.h"
+#include "StackFrameManager.h"
 
 namespace riscv64 {
 
+class StackFrameManager;  // 前向声明
+
 class Function {
    public:
-    explicit Function(std::string name) : name(std::move(name)) {}
+    explicit Function(std::string name)
+        : name(std::move(name)),
+          stackFrameManager_(std::make_unique<StackFrameManager>(this)) {}
 
     void addBasicBlock(std::unique_ptr<BasicBlock> block) {
         basic_blocks.push_back(std::move(block));
@@ -38,9 +43,6 @@ class Function {
     const std::string& getName() const { return name; }
 
     // 管理函数的栈帧信息
-    void calculateStackFrame() {
-        // ... 计算需要多大的栈空间，哪些寄存器需要保存等
-    }
 
     BasicBlock* getBasicBlockByLabel(const std::string& label) const {
         for (const auto& block : basic_blocks) {
@@ -50,12 +52,16 @@ class Function {
         }
         return nullptr;  // 如果没有找到，返回 nullptr
     }
+    StackFrameManager* getStackFrameManager() const {
+        return stackFrameManager_.get();
+    }
 
     std::string toString() const;
 
    private:
     std::string name;
     std::vector<std::unique_ptr<BasicBlock>> basic_blocks;
+    std::unique_ptr<StackFrameManager> stackFrameManager_;
     // ... 还可以包含栈帧信息 (StackFrameInfo), 保存的寄存器列表等
 };
 
