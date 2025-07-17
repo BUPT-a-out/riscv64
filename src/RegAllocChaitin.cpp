@@ -291,6 +291,7 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
     StackFrameManager stackManager(function);
 
     // 为溢出寄存器分配栈槽
+    stackManager.allocateSpillSlot(reg);
     int spillOffset = stackManager.getSpillSlotOffset(reg);
 
     for (auto& bb : *function) {
