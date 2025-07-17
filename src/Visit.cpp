@@ -206,6 +206,7 @@ void Visitor::visitBranchInst(const midend::Instruction* inst,
         parent_bb->addInstruction(std::move(instruction));
     } else {
         // 处理条件跳转
+        // TODO(rikka): 根据 br 指令的 cond 类型生成不同的跳转指令
         auto condition = visit(branch_inst->getCondition(), parent_bb);
         auto* true_bb = branch_inst->getTrueBB();
         auto* false_bb = branch_inst->getFalseBB();
@@ -216,8 +217,6 @@ void Visitor::visitBranchInst(const midend::Instruction* inst,
         instruction->addOperand(std::move(condition));  // 条件
         instruction->addOperand(
             std::make_unique<LabelOperand>(true_bb));  // 真分支标签
-        instruction->addOperand(
-            std::make_unique<LabelOperand>(false_bb));  // 假分支标签
         parent_bb->addInstruction(std::move(instruction));
 
         // 生成无条件跳转到假分支的指令
