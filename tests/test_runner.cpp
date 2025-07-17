@@ -747,12 +747,12 @@ void TestRunner::executeCodeGeneration(const std::string& testCaseName,
         std::cout << allocatedModule.toString() << std::endl;
 
         // 可选：生成最终的汇编文本
-        auto assembly = target.compileToAssembly(*module);
-        std::cout << "\n--- Final Assembly Output ---" << std::endl;
-        // for (const auto& line : assemblyLines) {
-        //     std::cout << line << std::endl;
-        // }
-        std::cout << assembly << std::endl;
+        // auto assembly = target.compileToAssembly(*module);
+        // std::cout << "\n--- Final Assembly Output ---" << std::endl;
+        // // for (const auto& line : assemblyLines) {
+        // //     std::cout << line << std::endl;
+        // // }
+        // std::cout << assembly << std::endl;
 
     } catch (const std::exception& e) {
         std::cerr << "Error during code generation: " << e.what() << std::endl;
