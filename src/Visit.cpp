@@ -384,13 +384,49 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
     const auto* store_inst = dynamic_cast<const midend::StoreInst*>(inst);
 
     // 获取存储的值和目标地址
-    auto value_operand = visit(store_inst->getValueOperand(), parent_bb);
-    auto address_operand =
-        immToReg(visit(store_inst->getPointerOperand(), parent_bb), parent_bb);
+    auto value_operand =
+        immToReg(visit(store_inst->getValueOperand(), parent_bb), parent_bb);
+
+    // 获取指针操作数，应该是一个alloca指令的结果
+    auto* pointer_operand = store_inst->getPointerOperand();
+
+    // 查找对应的FrameIndex
+    auto* sfm = parent_bb->getParent()->getStackFrameManager();
+    int frame_id = sfm->getAllocaStackSlotId(pointer_operand);
+
+    if (frame_id == -1) {
+        // 如果没有找到映射，可能是因为指针操作数本身就是一个alloca指令
+        if (auto* alloca_inst =
+                midend::dyn_cast<midend::AllocaInst>(pointer_operand)) {
+            // 处理这个alloca指令
+            visitAllocaInst(alloca_inst, parent_bb);
+            frame_id = sfm->getAllocaStackSlotId(pointer_operand);
+        }
+
+        if (frame_id == -1) {
+            throw std::runtime_error(
+                "Cannot find frame index for pointer operand in store "
+                "instruction");
+        }
+    }
+
+    // 生成frameaddr指令来获取栈地址
+    auto frame_addr_reg = codeGen_->allocateReg();
+    auto store_frame_addr_inst =
+        std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
+    store_frame_addr_inst->addOperand(std::make_unique<RegisterOperand>(
+        frame_addr_reg->getRegNum(), frame_addr_reg->isVirtual()));  // rd
+    store_frame_addr_inst->addOperand(
+        std::make_unique<FrameIndexOperand>(frame_id));  // FI
+    parent_bb->addInstruction(std::move(store_frame_addr_inst));
 
     // 生成存储指令
-    storeOperandToReg(std::move(value_operand), std::move(address_operand),
-                      parent_bb);
+    auto sw_inst = std::make_unique<Instruction>(Opcode::SW, parent_bb);
+    sw_inst->addOperand(std::move(value_operand));  // source register
+    sw_inst->addOperand(std::make_unique<MemoryOperand>(
+        std::move(frame_addr_reg),
+        std::make_unique<ImmediateOperand>(0)));  // memory address
+    parent_bb->addInstruction(std::move(sw_inst));
 }
 
 // 处理 load 指令
