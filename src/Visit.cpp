@@ -556,8 +556,23 @@ std::unique_ptr<MachineOperand> Visitor::visitAllocaInst(
     }
 
     // 处理 alloca 指令
-    auto size = alloca_inst->getAllocatedType()->getBitWidth() /
-                8;  // 获取分配的大小（字节）
+    constexpr int BITS_PER_BYTE = 8;
+    auto* allocated_type = alloca_inst->getAllocatedType();
+    auto bit_width = allocated_type->getBitWidth();
+
+    // Handle types that don't have a direct bit width (like pointers)
+    if (bit_width == 0) {
+        // For pointer types or other types without direct bit width, use a
+        // default size
+        if (allocated_type->isPointerType()) {
+            bit_width = 64;  // Assume 64-bit pointers for RISC-V 64
+        } else {
+            // For other types, try to get a reasonable default
+            bit_width = 32;  // Default to 32 bits for unknown types
+        }
+    }
+
+    auto size = bit_width / BITS_PER_BYTE;  // 获取分配的大小（字节）
     if (size == 0) {
         throw std::runtime_error("Invalid alloca size: " +
                                  std::to_string(size));
@@ -581,7 +596,8 @@ std::unique_ptr<MachineOperand> Visitor::visitAllocaInst(
 
     // 为alloca指令本身也建立映射，这样后续引用这个指令时能找到对应的FI
     codeGen_->mapValueToReg(
-        inst, id, false);  // 使用id作为"寄存器号"，false表示这不是真正的寄存器
+        inst, id,
+        false);  // 使用id作为"寄存器号"，false表示这不是真正的寄存器
 
     // 返回分配的FrameIndexOperand
     return std::make_unique<FrameIndexOperand>(id);
@@ -602,31 +618,29 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
 
     const auto* store_inst = dynamic_cast<const midend::StoreInst*>(inst);
 
-    // 获取存储的值和目标地址
+    // 获取存储的值
     auto value_operand =
         immToReg(visit(store_inst->getValueOperand(), parent_bb), parent_bb);
 
-    // 获取指针操作数，应该是一个alloca指令的结果
+    // 获取指针操作数
     auto* pointer_operand = store_inst->getPointerOperand();
 
-    // 查找对应的FrameIndex
+    // 处理指针操作数 - 可能是 alloca 指令或者 GEP 指令
+    if (auto* alloca_inst =
+            midend::dyn_cast<midend::AllocaInst>(pointer_operand)) {
+        // 直接是 alloca 指令
     auto* sfm = parent_bb->getParent()->getStackFrameManager();
-    int frame_id = sfm->getAllocaStackSlotId(pointer_operand);
+        int frame_id = sfm->getAllocaStackSlotId(alloca_inst);
 
     if (frame_id == -1) {
-        // 如果没有找到映射，可能是因为指针操作数本身就是一个alloca指令
-        if (auto* alloca_inst =
-                midend::dyn_cast<midend::AllocaInst>(pointer_operand)) {
-            // 处理这个alloca指令
+            // 如果还没有为这个alloca分配FI，现在分配
             visitAllocaInst(alloca_inst, parent_bb);
-            frame_id = sfm->getAllocaStackSlotId(pointer_operand);
+            frame_id = sfm->getAllocaStackSlotId(alloca_inst);
         }
 
         if (frame_id == -1) {
             throw std::runtime_error(
-                "Cannot find frame index for pointer operand in store "
-                "instruction");
-        }
+                "Cannot find frame index for alloca instruction in store");
     }
 
     // 生成frameaddr指令来获取栈地址
@@ -646,6 +660,36 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
         std::move(frame_addr_reg),
         std::make_unique<ImmediateOperand>(0)));  // memory address
     parent_bb->addInstruction(std::move(sw_inst));
+
+    } else if (auto* gep_inst = midend::dyn_cast<midend::GetElementPtrInst>(
+                   pointer_operand)) {
+        // 是 GEP 指令的结果
+        // 访问 GEP 指令，它会返回计算出的地址寄存器
+        auto address_operand = visit(gep_inst, parent_bb);
+
+        // address_operand 应该是一个寄存器操作数，包含计算出的地址
+        auto* address_reg =
+            dynamic_cast<RegisterOperand*>(address_operand.get());
+        if (address_reg == nullptr) {
+            throw std::runtime_error(
+                "GEP instruction should return a register operand");
+        }
+
+        // 生成存储指令，直接使用 GEP 计算出的地址
+        auto sw_inst = std::make_unique<Instruction>(Opcode::SW, parent_bb);
+        sw_inst->addOperand(std::move(value_operand));  // source register
+        sw_inst->addOperand(std::make_unique<MemoryOperand>(
+            std::make_unique<RegisterOperand>(address_reg->getRegNum(),
+                                              address_reg->isVirtual()),
+            std::make_unique<ImmediateOperand>(0)));  // memory address
+        parent_bb->addInstruction(std::move(sw_inst));
+
+    } else {
+        // 其他类型的指针操作数
+        throw std::runtime_error(
+            "Unsupported pointer operand type in store instruction: " +
+            pointer_operand->toString());
+    }
 }
 
 // 处理 load 指令
