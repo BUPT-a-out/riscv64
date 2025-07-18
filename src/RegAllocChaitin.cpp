@@ -541,28 +541,34 @@ void RegAllocChaitin::rewriteInstructions() {
 void RegAllocChaitin::rewriteInstruction(Instruction* inst) {
     const auto& operands = inst->getOperands();
     for (const auto& operand : operands) {
-        if (operand->isReg()) {
-            RegisterOperand* regOp =
-                static_cast<RegisterOperand*>(operand.get());
-            if (regOp->isVirtual()) {
-                unsigned virtualReg = regOp->getRegNum();
+        rewriteOperand(operand.get());
+    }
+}
 
-                // 首先检查是否被合并，如果被合并则使用合并后的寄存器
-                unsigned finalReg = getFinalCoalescedReg(virtualReg);
-
-                // 然后查找物理寄存器映射
-                if (virtualToPhysical.find(finalReg) !=
-                    virtualToPhysical.end()) {
-                    regOp->setPhysicalReg(virtualToPhysical[finalReg]);
-                } else {
-                    // 如果找不到映射，可能是被合并到了物理寄存器
-                    if (isPhysicalReg(finalReg)) {
-                        regOp->setPhysicalReg(finalReg);
-                    }
-                }
+void RegAllocChaitin::rewriteOperand(MachineOperand* operand) {
+    if (operand->isReg()) {
+        RegisterOperand* regOp = static_cast<RegisterOperand*>(operand);
+        if (regOp->isVirtual()) {
+            unsigned virtualReg = regOp->getRegNum();
+            unsigned finalReg = getFinalCoalescedReg(virtualReg);
+            
+            if (virtualToPhysical.find(finalReg) != virtualToPhysical.end()) {
+                regOp->setPhysicalReg(virtualToPhysical[finalReg]);
+            } else if (isPhysicalReg(finalReg)) {
+                regOp->setPhysicalReg(finalReg);
             }
         }
+    } else if (operand->isMem()) {
+        MemoryOperand* memOp = static_cast<MemoryOperand*>(operand);
+        // 递归处理内存操作数中的基址寄存器和偏移量
+        if (memOp->getBaseReg()) {
+            rewriteOperand(memOp->getBaseReg());
+        }
+        if (memOp->getOffset()) {
+            rewriteOperand(memOp->getOffset());
+        }
     }
+    // 可以继续添加其他类型操作数的处理
 }
 
 // 获取最终合并后的寄存器

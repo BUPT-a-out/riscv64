@@ -108,6 +108,7 @@ class RegAllocChaitin {
     // 重写指令中的寄存器
     void rewriteInstructions();
     void rewriteInstruction(Instruction* inst);
+    void rewriteOperand(MachineOperand* operand);
     unsigned getFinalCoalescedReg(unsigned reg);
     void updateRegisterInInstruction(Instruction* inst, 
                                                   unsigned oldReg, 

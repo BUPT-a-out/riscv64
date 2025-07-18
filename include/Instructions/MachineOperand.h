@@ -42,6 +42,9 @@ class MachineOperand {
 
     bool isImm() const { return type == OperandType::Immediate; }
 
+    bool isMem() const { return type == OperandType::Memory; }
+
+
    protected:
     explicit MachineOperand(OperandType t) : type(t) {}
     OperandType type;
