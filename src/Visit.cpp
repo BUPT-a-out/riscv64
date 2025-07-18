@@ -709,28 +709,32 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
     // 获取指针操作数
     auto* pointer_operand = load_inst->getPointerOperand();
 
-    // 查找对应的FrameIndex
+    // 处理指针操作数 - 可能是 alloca 指令或者 GEP 指令
+    if (auto* alloca_inst =
+            midend::dyn_cast<midend::AllocaInst>(pointer_operand)) {
+        // 直接是 alloca 指令
     auto* sfm = parent_bb->getParent()->getStackFrameManager();
-    int frame_id = sfm->getAllocaStackSlotId(pointer_operand);
+        int frame_id = sfm->getAllocaStackSlotId(alloca_inst);
 
     if (frame_id == -1) {
         throw std::runtime_error(
-            "Cannot find frame index for pointer operand in load instruction");
+                "Cannot find frame index for alloca instruction in load");
     }
 
     // 生成frameaddr指令来获取栈地址
     auto frame_addr_reg = codeGen_->allocateReg();
-    auto store_frame_addr_inst =
+        auto load_frame_addr_inst =
         std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
-    store_frame_addr_inst->addOperand(std::make_unique<RegisterOperand>(
+        load_frame_addr_inst->addOperand(std::make_unique<RegisterOperand>(
         frame_addr_reg->getRegNum(), frame_addr_reg->isVirtual()));  // rd
-    store_frame_addr_inst->addOperand(
+        load_frame_addr_inst->addOperand(
         std::make_unique<FrameIndexOperand>(frame_id));  // FI
-    parent_bb->addInstruction(std::move(store_frame_addr_inst));
+        parent_bb->addInstruction(std::move(load_frame_addr_inst));
 
     // 加载到新的寄存器
     auto new_reg = codeGen_->allocateReg();
-    auto load_inst_ptr = std::make_unique<Instruction>(Opcode::LW, parent_bb);
+        auto load_inst_ptr =
+            std::make_unique<Instruction>(Opcode::LW, parent_bb);
     load_inst_ptr->addOperand(std::make_unique<RegisterOperand>(
         new_reg->getRegNum(), new_reg->isVirtual()));  // rd
     load_inst_ptr->addOperand(std::make_unique<MemoryOperand>(
@@ -738,11 +742,52 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
         std::make_unique<ImmediateOperand>(0)));  // memory address
     parent_bb->addInstruction(std::move(load_inst_ptr));
 
-    // 建立load指令结果值到寄存器的映射
-    codeGen_->mapValueToReg(inst, new_reg->getRegNum(), new_reg->isVirtual());
+        // 建立load指令结果值到寄存器的映射
+        codeGen_->mapValueToReg(inst, new_reg->getRegNum(),
+                                new_reg->isVirtual());
 
     return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
                                              new_reg->isVirtual());
+
+    } else if (auto* gep_inst = midend::dyn_cast<midend::GetElementPtrInst>(
+                   pointer_operand)) {
+        // 是 GEP 指令的结果
+        // 访问 GEP 指令，它会返回计算出的地址寄存器
+        auto address_operand = visit(gep_inst, parent_bb);
+
+        // address_operand 应该是一个寄存器操作数，包含计算出的地址
+        auto* address_reg =
+            dynamic_cast<RegisterOperand*>(address_operand.get());
+        if (address_reg == nullptr) {
+            throw std::runtime_error(
+                "GEP instruction should return a register operand");
+        }
+
+        // 加载到新的寄存器
+        auto new_reg = codeGen_->allocateReg();
+        auto load_inst_ptr =
+            std::make_unique<Instruction>(Opcode::LW, parent_bb);
+        load_inst_ptr->addOperand(std::make_unique<RegisterOperand>(
+            new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+        load_inst_ptr->addOperand(std::make_unique<MemoryOperand>(
+            std::make_unique<RegisterOperand>(address_reg->getRegNum(),
+                                              address_reg->isVirtual()),
+            std::make_unique<ImmediateOperand>(0)));  // memory address
+        parent_bb->addInstruction(std::move(load_inst_ptr));
+
+        // 建立load指令结果值到寄存器的映射
+        codeGen_->mapValueToReg(inst, new_reg->getRegNum(),
+                                new_reg->isVirtual());
+
+        return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                                 new_reg->isVirtual());
+
+    } else {
+        // 其他类型的指针操作数
+        throw std::runtime_error(
+            "Unsupported pointer operand type in load instruction: " +
+            pointer_operand->toString());
+    }
 }
 
 // 处理二元运算指令
