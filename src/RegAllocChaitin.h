@@ -58,7 +58,8 @@ class RegAllocChaitin {
     std::unordered_map<unsigned, unsigned> virtualToPhysical;
     std::unordered_set<unsigned> spilledRegs;  // 需要溢出的寄存器
 
-    std::unordered_map<unsigned, std::unordered_set<unsigned>> physicalConstraints;
+    std::unordered_map<unsigned, std::unordered_set<unsigned>>
+        physicalConstraints;
     void addPhysicalConstraint(unsigned virtualReg, unsigned physicalReg);
 
     // 强约束：必须分配到指定的物理寄存器
@@ -70,6 +71,8 @@ class RegAllocChaitin {
     std::unordered_set<unsigned> coalescedRegs;
     std::unordered_map<unsigned, unsigned> coalesceMap;  // 映射到代表元
 
+    StackFrameManager stackManager;
+
     // 维护度数缓存，避免重复计算
     std::unordered_map<unsigned, int> degreeCache;
     void initializeDegreeCache();
@@ -80,18 +83,16 @@ class RegAllocChaitin {
     void clearDegreeCache() { degreeCache.clear(); }
 
     unsigned nextTempReg = 1000;  // 临时寄存器起始编号
-    unsigned createTempReg() {
-        return nextTempReg++;
-    }
+    unsigned createTempReg() { return nextTempReg++; }
 
    public:
-    explicit RegAllocChaitin(Function* func) : function(func) {}
+    explicit RegAllocChaitin(Function* func)
+        : function(func), stackManager(StackFrameManager(function)) {}
 
     // 主要的寄存器分配接口
     void allocateRegisters();
 
    private:
-
     // 活跃性分析
     void computeLiveness();
     void computeDefUse(BasicBlock* bb, LivenessInfo& info);
@@ -115,9 +116,8 @@ class RegAllocChaitin {
     void rewriteInstruction(Instruction* inst);
     void rewriteOperand(MachineOperand* operand);
     unsigned getFinalCoalescedReg(unsigned reg);
-    void updateRegisterInInstruction(Instruction* inst, 
-                                                  unsigned oldReg, 
-                                                  unsigned newReg);
+    void updateRegisterInInstruction(Instruction* inst, unsigned oldReg,
+                                     unsigned newReg);
 
     // 寄存器合并方法
     void performCoalescing();
@@ -155,7 +155,7 @@ class RegAllocChaitin {
     bool isArgumentReg(unsigned reg) const;
     bool isReturnReg(unsigned reg) const;
     bool isReservedReg(unsigned reg) const;
-    
+
     // ABI约束
     void initializeABIConstraints();
     void setFunctionSpecificConstraints();
@@ -169,19 +169,18 @@ class RegAllocChaitin {
     void setFramePointerConstraints();
     void setReturnAddressConstraints();
 
-    void addStrongPhysicalConstraint(unsigned virtualReg, unsigned physicalReg) {
+    void addStrongPhysicalConstraint(unsigned virtualReg,
+                                     unsigned physicalReg) {
         strongConstraints[virtualReg] = physicalReg;
     }
-    
+
     void addReservedPhysicalReg(unsigned physicalReg) {
         reservedPhysicalRegs.insert(physicalReg);
     }
 
-
     std::vector<unsigned> getABIPreferredRegs(unsigned virtualReg) const;
     bool isUsedAsArgument(unsigned virtualReg) const;
     bool isUsedAcrossCalls(unsigned virtualReg) const;
-
 
     // 调试和统计
     void printInterferenceGraph() const;

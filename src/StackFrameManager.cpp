@@ -399,6 +399,11 @@ void StackFrameManager::printStackLayout() const {
                   << "\n";
     }
 
+    std::cout << "Spilled registers: " << std::endl;
+    for (auto reg : spilledRegToStackSlot) {
+        std::cout << "%vreg_" << reg.first << " -> " << reg.second << std::endl;
+    }
+
     if (frameInfo.localVariableSize > 0) {
         std::cout << "  Local variables: " << frameInfo.localVariableSize
                   << " bytes at offset " << frameInfo.localVariableOffset

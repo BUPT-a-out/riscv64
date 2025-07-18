@@ -18,7 +18,8 @@ void RegAllocChaitin::allocateRegisters() {
 
     buildInterferenceGraph();
 
-    performCoalescing();
+    // TODO: wrong coalesce.
+    // performCoalescing();
 
     bool success = colorGraph();
 
@@ -36,6 +37,7 @@ void RegAllocChaitin::allocateRegisters() {
 
     printAllocationResult();
     printCoalesceResult();
+    stackManager.printStackLayout();
 }
 
 /// degree cache
@@ -365,6 +367,7 @@ std::vector<unsigned> RegAllocChaitin::getSimplificationOrder() {
     return order;
 }
 
+// TODO: 没有保护callee saved寄存器s0-s11 
 bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
     for (unsigned regNum : order) {
         if (spilledRegs.find(regNum) != spilledRegs.end()) {
@@ -466,10 +469,9 @@ std::vector<unsigned> RegAllocChaitin::selectSpillCandidates() {
     return candidates;
 }
 
-// TODO: offset not right
 void RegAllocChaitin::insertSpillCode(unsigned reg) {
-    StackFrameManager stackManager(function);
     stackManager.allocateSpillSlot(reg);
+    stackManager.computeStackFrame();
     int spillOffset = stackManager.getSpillSlotOffset(reg);
 
     for (auto& bb : *function) {
