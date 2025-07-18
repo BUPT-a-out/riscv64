@@ -82,6 +82,8 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Instruction* inst,
         case midend::Opcode::Shr:
         case midend::Opcode::ICmpSGT:
         case midend::Opcode::ICmpSLT:
+        case midend::Opcode::ICmpEQ:
+        case midend::Opcode::ICmpNE:
             // 处理算术指令，此处直接生成
             // TODO(rikka): 关于 0, 1, 2^n(左移) 的判断优化等，后期写一个 Pass
             // 来优化
@@ -643,6 +645,101 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             instruction->addOperand(std::move(rhs_reg));       // rs2
 
             parent_bb->addInstruction(std::move(instruction));
+            break;
+        }
+
+        case midend::Opcode::Rem: {
+            // 处理取模操作
+            if ((lhs->getType() == OperandType::Immediate) &&
+                (rhs->getType() == OperandType::Immediate)) {
+                auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
+                auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                if (rhs_imm->getValue() == 0) {
+                    throw std::runtime_error(
+                        "Division by zero in modulo operation");
+                }
+                return std::make_unique<ImmediateOperand>(lhs_imm->getValue() %
+                                                          rhs_imm->getValue());
+            }
+
+            auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+            auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+            new_reg = codeGen_->allocateReg();
+            auto instruction =
+                std::make_unique<Instruction>(Opcode::REM, parent_bb);
+            instruction->addOperand(std::make_unique<RegisterOperand>(
+                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+            instruction->addOperand(std::move(lhs_reg));       // rs1
+            instruction->addOperand(std::move(rhs_reg));       // rs2
+
+            parent_bb->addInstruction(std::move(instruction));
+            break;
+        }
+
+        case midend::Opcode::ICmpEQ: {
+            // 处理相等比较
+            if ((lhs->getType() == OperandType::Immediate) &&
+                (rhs->getType() == OperandType::Immediate)) {
+                auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
+                auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                return std::make_unique<ImmediateOperand>(
+                    lhs_imm->getValue() == rhs_imm->getValue() ? 1 : 0);
+            }
+
+            auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+            auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+            // 使用 xor 指令计算差值，然后用 seqz 指令检查是否为0
+            auto xor_reg = codeGen_->allocateReg();
+            auto xor_inst =
+                std::make_unique<Instruction>(Opcode::XOR, parent_bb);
+            xor_inst->addOperand(std::make_unique<RegisterOperand>(
+                xor_reg->getRegNum(), xor_reg->isVirtual()));  // rd
+            xor_inst->addOperand(std::move(lhs_reg));          // rs1
+            xor_inst->addOperand(std::move(rhs_reg));          // rs2
+            parent_bb->addInstruction(std::move(xor_inst));
+
+            new_reg = codeGen_->allocateReg();
+            auto seqz_inst =
+                std::make_unique<Instruction>(Opcode::SEQZ, parent_bb);
+            seqz_inst->addOperand(std::make_unique<RegisterOperand>(
+                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+            seqz_inst->addOperand(std::move(xor_reg));         // rs1
+            parent_bb->addInstruction(std::move(seqz_inst));
+            break;
+        }
+
+        case midend::Opcode::ICmpNE: {
+            // 处理不等比较
+            if ((lhs->getType() == OperandType::Immediate) &&
+                (rhs->getType() == OperandType::Immediate)) {
+                auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
+                auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                return std::make_unique<ImmediateOperand>(
+                    lhs_imm->getValue() != rhs_imm->getValue() ? 1 : 0);
+            }
+
+            auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+            auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+            // 使用 xor 指令计算差值，然后用 snez 指令检查是否非0
+            auto xor_reg = codeGen_->allocateReg();
+            auto xor_inst =
+                std::make_unique<Instruction>(Opcode::XOR, parent_bb);
+            xor_inst->addOperand(std::make_unique<RegisterOperand>(
+                xor_reg->getRegNum(), xor_reg->isVirtual()));  // rd
+            xor_inst->addOperand(std::move(lhs_reg));          // rs1
+            xor_inst->addOperand(std::move(rhs_reg));          // rs2
+            parent_bb->addInstruction(std::move(xor_inst));
+
+            new_reg = codeGen_->allocateReg();
+            auto snez_inst =
+                std::make_unique<Instruction>(Opcode::SNEZ, parent_bb);
+            snez_inst->addOperand(std::make_unique<RegisterOperand>(
+                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+            snez_inst->addOperand(std::move(xor_reg));         // rs1
+            parent_bb->addInstruction(std::move(snez_inst));
             break;
         }
 
