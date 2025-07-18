@@ -237,10 +237,15 @@ class Instruction {
 
     std::optional<DestSourcePair> isCopyInstr() const;
     bool isCallInstr() const;
-
     bool isJumpInstr() const;
+    bool isReturnInstr() const;
+
     bool isBranch() const;
     bool isBackEdge() const;
+    bool involvesStackPointer() const;
+    bool isParameterMove() const;
+    bool isFrameSetup() const;
+    bool isFramePointerRelated() const;
 
    private:
     Opcode opcode;

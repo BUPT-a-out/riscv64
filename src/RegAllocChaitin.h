@@ -61,6 +61,11 @@ class RegAllocChaitin {
     std::unordered_map<unsigned, std::unordered_set<unsigned>> physicalConstraints;
     void addPhysicalConstraint(unsigned virtualReg, unsigned physicalReg);
 
+    // 强约束：必须分配到指定的物理寄存器
+    std::unordered_map<unsigned, unsigned> strongConstraints;
+    // 保留的物理寄存器：不能分配给任何虚拟寄存器
+    std::unordered_set<unsigned> reservedPhysicalRegs;
+
     std::vector<CoalesceInfo> coalesceCandidates;
     std::unordered_set<unsigned> coalescedRegs;
     std::unordered_map<unsigned, unsigned> coalesceMap;  // 映射到代表元
@@ -124,11 +129,14 @@ class RegAllocChaitin {
     void updateInterferenceAfterCoalesce(unsigned merged, unsigned eliminated);
     void removeCoalescedCopies();
 
+    bool canCoalesceWithABI(unsigned src, unsigned dst) const;
+    bool crossesFunctionCall(unsigned src, unsigned dst) const;
+
     // 计算合并权重
     int calculateCoalescePriority(unsigned src, unsigned dst, BasicBlock* bb,
                                   Instruction* inst);
     int getBasicBlockFrequency(BasicBlock* bb);
-
+    int calculateABIPriority(unsigned src, unsigned dst) const;
     int getRegisterUsageCount(unsigned reg);
     int getRegisterDegree(unsigned reg);
     int calculateLifetimeOverlap(unsigned src, unsigned dst);
@@ -140,6 +148,40 @@ class RegAllocChaitin {
     unsigned getPhysicalReg(unsigned virtualReg) const;
     std::vector<unsigned> getUsedRegs(const Instruction* inst) const;
     std::vector<unsigned> getDefinedRegs(const Instruction* inst) const;
+
+    // ABI辅助函数
+    bool isCallerSaved(unsigned reg) const;
+    bool isCalleeSaved(unsigned reg) const;
+    bool isArgumentReg(unsigned reg) const;
+    bool isReturnReg(unsigned reg) const;
+    bool isReservedReg(unsigned reg) const;
+    
+    // ABI约束
+    void initializeABIConstraints();
+    void setFunctionSpecificConstraints();
+    void setParameterConstraints();
+    void setReturnValueConstraints();
+    void setCallSiteConstraints();
+    void setPreCallConstraints(BasicBlock* bb, Instruction* callInst);
+    void setPostCallConstraints(BasicBlock* bb, Instruction* callInst);
+    void setSpecialRegisterConstraints();
+    bool usesFramePointer() const;
+    void setFramePointerConstraints();
+    void setReturnAddressConstraints();
+
+    void addStrongPhysicalConstraint(unsigned virtualReg, unsigned physicalReg) {
+        strongConstraints[virtualReg] = physicalReg;
+    }
+    
+    void addReservedPhysicalReg(unsigned physicalReg) {
+        reservedPhysicalRegs.insert(physicalReg);
+    }
+
+
+    std::vector<unsigned> getABIPreferredRegs(unsigned virtualReg) const;
+    bool isUsedAsArgument(unsigned virtualReg) const;
+    bool isUsedAcrossCalls(unsigned virtualReg) const;
+
 
     // 调试和统计
     void printInterferenceGraph() const;

@@ -40,6 +40,7 @@ class Function {
     const_iterator begin() const { return basic_blocks.begin(); }
     const_iterator end() const { return basic_blocks.end(); }
 
+    bool empty() const { return basic_blocks.empty(); }
     const std::string& getName() const { return name; }
 
     // 管理函数的栈帧信息

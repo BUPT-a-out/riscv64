@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <iostream>
+#include <map>
 #include <queue>
+#include <set>
 #include <stack>
 
 #include "StackFrameManager.h"
@@ -10,13 +12,13 @@ namespace riscv64 {
 
 /// Entry
 void RegAllocChaitin::allocateRegisters() {
+    initializeABIConstraints();
+
     computeLiveness();
 
     buildInterferenceGraph();
 
-    // TODO: correct coalescing on ABI reg a0-a7
-    // TODO: follor ABI constraint
-    // performCoalescing();
+    performCoalescing();
 
     bool success = colorGraph();
 
@@ -277,6 +279,7 @@ void RegAllocChaitin::addInterference(unsigned reg1, unsigned reg2) {
     }
 }
 
+/// Coloring
 bool RegAllocChaitin::colorGraph() {
     auto order = getSimplificationOrder();
     return attemptColoring(order);
@@ -363,68 +366,71 @@ std::vector<unsigned> RegAllocChaitin::getSimplificationOrder() {
 }
 
 bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
-    // 按顺序为每个虚拟寄存器着色
     for (unsigned regNum : order) {
         if (spilledRegs.find(regNum) != spilledRegs.end()) {
-            continue;  // 跳过溢出的寄存器
-        }
-
-        // 跳过已经被合并的寄存器
-        if (coalescedRegs.find(regNum) != coalescedRegs.end()) {
             continue;
         }
-
+        
         auto& node = interferenceGraph[regNum];
         std::unordered_set<int> usedColors;
-
-        // 收集邻居虚拟寄存器使用的颜色
+        
+        // 收集邻居使用的颜色
         for (unsigned neighbor : node->neighbors) {
             if (interferenceGraph[neighbor]->color != -1) {
                 usedColors.insert(interferenceGraph[neighbor]->color);
             }
         }
-
-        // 收集与物理寄存器的约束
-        if (physicalConstraints.find(regNum) != physicalConstraints.end()) {
-            for (unsigned physReg : physicalConstraints[regNum]) {
-                usedColors.insert(physReg);
-            }
-        }
-
-        // 选择第一个可用的颜色
+        
         int selectedColor = -1;
-        for (unsigned color : availableRegs) {
-            if (usedColors.find(color) == usedColors.end()) {
-                selectedColor = color;
-                break;
+        
+        // 首先检查强约束
+        if (strongConstraints.find(regNum) != strongConstraints.end()) {
+            unsigned requiredColor = strongConstraints[regNum];
+            if (usedColors.find(requiredColor) == usedColors.end()) {
+                selectedColor = requiredColor;
+            } else {
+                // 强约束冲突，必须溢出
+                spilledRegs.insert(regNum);
+                return false;
+            }
+        } else {
+            // 正常着色流程，但要避开保留寄存器
+            auto preferredRegs = getABIPreferredRegs(regNum);
+            for (unsigned color : preferredRegs) {
+                if (usedColors.find(color) == usedColors.end() &&
+                    reservedPhysicalRegs.find(color) == reservedPhysicalRegs.end() &&
+                    std::find(availableRegs.begin(), availableRegs.end(), color) != availableRegs.end()) {
+                    selectedColor = color;
+                    break;
+                }
+            }
+            
+            if (selectedColor == -1) {
+                for (unsigned color : availableRegs) {
+                    if (usedColors.find(color) == usedColors.end() &&
+                        reservedPhysicalRegs.find(color) == reservedPhysicalRegs.end() &&
+                        !isReservedReg(color)) {
+                        selectedColor = color;
+                        break;
+                    }
+                }
             }
         }
-
+        
         if (selectedColor == -1) {
-            // 着色失败，标记为溢出
             spilledRegs.insert(regNum);
             return false;
         }
-
+        
         node->color = selectedColor;
         virtualToPhysical[regNum] = selectedColor;
     }
-
-    // 修改后的映射建立逻辑
-    for (const auto& [src, dst] : coalesceMap) {
-        unsigned finalDst = getFinalCoalescedReg(dst);
-        if (isPhysicalReg(finalDst)) {
-            // 如果最终目标是物理寄存器，直接映射
-            virtualToPhysical[src] = finalDst;
-        } else if (virtualToPhysical.find(finalDst) !=
-                   virtualToPhysical.end()) {
-            virtualToPhysical[src] = virtualToPhysical[finalDst];
-        }
-    }
-
+    
     return spilledRegs.empty();
 }
 
+
+/// Spill
 void RegAllocChaitin::handleSpills() {
     auto spillCandidates = selectSpillCandidates();
 
@@ -460,6 +466,7 @@ std::vector<unsigned> RegAllocChaitin::selectSpillCandidates() {
     return candidates;
 }
 
+// TODO: offset not right
 void RegAllocChaitin::insertSpillCode(unsigned reg) {
     StackFrameManager stackManager(function);
     stackManager.allocateSpillSlot(reg);
@@ -551,7 +558,7 @@ void RegAllocChaitin::rewriteOperand(MachineOperand* operand) {
         if (regOp->isVirtual()) {
             unsigned virtualReg = regOp->getRegNum();
             unsigned finalReg = getFinalCoalescedReg(virtualReg);
-            
+
             if (virtualToPhysical.find(finalReg) != virtualToPhysical.end()) {
                 regOp->setPhysicalReg(virtualToPhysical[finalReg]);
             } else if (isPhysicalReg(finalReg)) {
@@ -571,6 +578,7 @@ void RegAllocChaitin::rewriteOperand(MachineOperand* operand) {
     // 可以继续添加其他类型操作数的处理
 }
 
+/// Coalesce
 // 获取最终合并后的寄存器
 unsigned RegAllocChaitin::getFinalCoalescedReg(unsigned reg) {
     unsigned current = reg;
@@ -642,43 +650,84 @@ int RegAllocChaitin::calculateCoalescePriority(unsigned src, unsigned dst,
                                                BasicBlock* bb,
                                                Instruction* inst) {
     (void)inst;  // Suppress unused parameter warning
-
     int priority = 0;
 
     // 1. 基本块执行频率权重 (0-100)
     int bbFrequency = getBasicBlockFrequency(bb);
     priority += bbFrequency * 10;
 
-    // 2. 循环嵌套深度权重 (0-50)
-    // int loopDepth = getLoopNestingDepth(bb);
-    // priority += loopDepth * 50;
-
-    // 3. 寄存器使用频率权重 (0-30)
+    // 2. 寄存器使用频率权重 (0-30)
     int srcUsageCount = getRegisterUsageCount(src);
     int dstUsageCount = getRegisterUsageCount(dst);
     priority += (srcUsageCount + dstUsageCount) * 2;
 
-    // 4. 冲突图度数权重 (度数越小优先级越高) (0-20)
+    // 3. 冲突图度数权重 (度数越小优先级越高) (0-20)
     int srcDegree = getRegisterDegree(src);
     int dstDegree = getRegisterDegree(dst);
     int avgDegree = (srcDegree + dstDegree) / 2;
     priority += std::max(0, 20 - avgDegree);
 
-    // 5. 生命周期重叠度权重 (重叠越少优先级越高) (0-15)
+    // 4. 生命周期重叠度权重 (重叠越少优先级越高) (0-15)
     int lifeOverlap = calculateLifetimeOverlap(src, dst);
     priority += std::max(0, 15 - lifeOverlap);
 
-    // 6. 寄存器压力权重 (0-10)
+    // 5. 寄存器压力权重 (0-10)
     int regPressure = getRegisterPressure(bb);
     if (regPressure > static_cast<int>(availableRegs.size() * 0.8)) {
         priority += 10;  // 高寄存器压力时更倾向于合并
     }
 
-    // 7. 物理寄存器偏好权重 (0-25)
+    // 6. 物理寄存器偏好权重 (0-25)
     priority += calculatePhysicalRegPreference(src, dst);
 
-    // 8. 复制指令消除收益权重 (0-5)
+    // 7. 复制指令消除收益权重 (0-5)
     priority += 5;  // 消除一条复制指令的基本收益
+
+    // 8. ABI约束权重 (0-40)
+    priority += calculateABIPriority(src, dst);
+
+    return priority;
+}
+
+int RegAllocChaitin::calculateABIPriority(unsigned src, unsigned dst) const {
+    int priority = 0;
+
+    // 如果目标是物理寄存器，根据ABI类型给予不同权重
+    if (isPhysicalReg(dst)) {
+        if (isArgumentReg(dst)) {
+            priority += 20;  // 参数寄存器优先级高
+        } else if (isCalleeSaved(dst)) {
+            priority += 15;  // 被调用者保存寄存器次之
+        } else if (isCallerSaved(dst)) {
+            priority += 10;  // 调用者保存寄存器再次之
+        }
+    } else if (isPhysicalReg(src)) {
+        if (isArgumentReg(src)) {
+            priority += 18;
+        } else if (isCalleeSaved(src)) {
+            priority += 13;
+        } else if (isCallerSaved(src)) {
+            priority += 8;
+        }
+    }
+
+    // 如果两个寄存器都跨越函数调用，且目标是被调用者保存寄存器，增加权重
+    if (crossesFunctionCall(src, dst)) {
+        if (isPhysicalReg(dst) && isCalleeSaved(dst)) {
+            priority += 25;
+        } else if (isPhysicalReg(src) && isCalleeSaved(src)) {
+            priority += 20;
+        }
+    }
+
+    // 如果不跨越函数调用，且目标是调用者保存寄存器，增加权重
+    if (!crossesFunctionCall(src, dst)) {
+        if (isPhysicalReg(dst) && isCallerSaved(dst)) {
+            priority += 15;
+        } else if (isPhysicalReg(src) && isCallerSaved(src)) {
+            priority += 12;
+        }
+    }
 
     return priority;
 }
@@ -822,7 +871,12 @@ bool RegAllocChaitin::canCoalesce(unsigned src, unsigned dst) {
         return false;
     }
 
-    // 2. 检查是否存在冲突
+    // 2. 检查ABI约束
+    if (!canCoalesceWithABI(src, dst)) {
+        return false;
+    }
+
+    // 3. 检查是否存在冲突
     if (interferenceGraph.find(src) != interferenceGraph.end() &&
         interferenceGraph.find(dst) != interferenceGraph.end()) {
         auto& srcNode = interferenceGraph[src];
@@ -838,7 +892,6 @@ bool RegAllocChaitin::canCoalesce(unsigned src, unsigned dst) {
         for (unsigned neighbor : dstNode->neighbors) {
             combinedNeighbors.insert(neighbor);
         }
-
         if (combinedNeighbors.size() >= availableRegs.size()) {
             return false;
         }
@@ -856,6 +909,55 @@ bool RegAllocChaitin::canCoalesce(unsigned src, unsigned dst) {
     }
 
     return true;
+}
+
+bool RegAllocChaitin::canCoalesceWithABI(unsigned src, unsigned dst) const {
+    // 不能合并保留寄存器
+    if (isReservedReg(src) || isReservedReg(dst)) {
+        return false;
+    }
+
+    // 如果其中一个是物理寄存器，检查ABI约束
+    if (isPhysicalReg(src) || isPhysicalReg(dst)) {
+        // 调用者保存和被调用者保存寄存器不能合并
+        if (isPhysicalReg(src) && isPhysicalReg(dst)) {
+            if (isCallerSaved(src) && isCalleeSaved(dst)) return false;
+            if (isCalleeSaved(src) && isCallerSaved(dst)) return false;
+        }
+
+        // 检查函数调用边界
+        if (crossesFunctionCall(src, dst)) {
+            unsigned physReg = isPhysicalReg(src) ? src : dst;
+            if (isCallerSaved(physReg)) {
+                return false;  // 调用者保存寄存器不能跨函数调用合并
+            }
+        }
+    }
+
+    return true;
+}
+
+bool RegAllocChaitin::crossesFunctionCall(unsigned src, unsigned dst) const {
+    // 检查两个寄存器的生命周期是否跨越函数调用
+    for (auto& bb : *function) {
+        const auto& liveIn = livenessInfo.at(bb.get()).liveIn;
+        const auto& liveOut = livenessInfo.at(bb.get()).liveOut;
+
+        bool srcLive = (liveIn.find(src) != liveIn.end()) ||
+                       (liveOut.find(src) != liveOut.end());
+        bool dstLive = (liveIn.find(dst) != liveIn.end()) ||
+                       (liveOut.find(dst) != liveOut.end());
+
+        if (srcLive && dstLive) {
+            // 检查基本块是否包含函数调用
+            for (const auto& inst : *bb) {
+                if (inst->isCallInstr()) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
 }
 
 // 执行寄存器合并
@@ -965,6 +1067,445 @@ bool RegAllocChaitin::isPhysicalReg(unsigned reg) const {
     return reg < 32;  // RISC-V有32个物理寄存器
 }
 
+bool RegAllocChaitin::isCallerSaved(unsigned reg) const {
+    // t0-t6: x5-x7, x28-x31
+    // a0-a7: x10-x17
+    return (reg >= 5 && reg <= 7) || (reg >= 10 && reg <= 17) ||
+           (reg >= 28 && reg <= 31);
+}
+
+bool RegAllocChaitin::isCalleeSaved(unsigned reg) const {
+    // s0-s11: x8-x9, x18-x27
+    return (reg >= 8 && reg <= 9) || (reg >= 18 && reg <= 27);
+}
+
+bool RegAllocChaitin::isArgumentReg(unsigned reg) const {
+    // a0-a7: x10-x17
+    return reg >= 10 && reg <= 17;
+}
+
+bool RegAllocChaitin::isReturnReg(unsigned reg) const {
+    // a0-a1: x10-x11
+    return reg == 10 || reg == 11;
+}
+
+bool RegAllocChaitin::isReservedReg(unsigned reg) const {
+    // x0 (zero), x1 (ra), x2 (sp), x3 (gp), x4 (tp)
+    return reg <= 4;
+}
+
+std::vector<unsigned> RegAllocChaitin::getABIPreferredRegs(
+    unsigned virtualReg) const {
+    std::vector<unsigned> preferredRegs;
+
+    // 如果虚拟寄存器有特定的ABI约束，优先考虑相应的物理寄存器
+    if (physicalConstraints.find(virtualReg) != physicalConstraints.end()) {
+        for (unsigned physReg : physicalConstraints.at(virtualReg)) {
+            if (!isReservedReg(physReg)) {
+                preferredRegs.push_back(physReg);
+            }
+        }
+    }
+
+    // 根据使用模式推荐寄存器
+    if (isUsedAsArgument(virtualReg)) {
+        // 优先使用参数寄存器
+        for (unsigned reg = 10; reg <= 17; ++reg) {  // a0-a7
+            if (std::find(preferredRegs.begin(), preferredRegs.end(), reg) ==
+                preferredRegs.end()) {
+                preferredRegs.push_back(reg);
+            }
+        }
+    }
+
+    if (isUsedAcrossCalls(virtualReg)) {
+        // 优先使用被调用者保存寄存器
+        for (unsigned reg = 8; reg <= 9; ++reg) {  // s0-s1
+            if (std::find(preferredRegs.begin(), preferredRegs.end(), reg) ==
+                preferredRegs.end()) {
+                preferredRegs.push_back(reg);
+            }
+        }
+        for (unsigned reg = 18; reg <= 27; ++reg) {  // s2-s11
+            if (std::find(preferredRegs.begin(), preferredRegs.end(), reg) ==
+                preferredRegs.end()) {
+                preferredRegs.push_back(reg);
+            }
+        }
+    } else {
+        // 优先使用调用者保存寄存器
+        for (unsigned reg = 5; reg <= 7; ++reg) {  // t0-t2
+            if (std::find(preferredRegs.begin(), preferredRegs.end(), reg) ==
+                preferredRegs.end()) {
+                preferredRegs.push_back(reg);
+            }
+        }
+        for (unsigned reg = 28; reg <= 31; ++reg) {  // t3-t6
+            if (std::find(preferredRegs.begin(), preferredRegs.end(), reg) ==
+                preferredRegs.end()) {
+                preferredRegs.push_back(reg);
+            }
+        }
+    }
+
+    return preferredRegs;
+}
+
+bool RegAllocChaitin::isUsedAsArgument(unsigned virtualReg) const {
+    // 检查虚拟寄存器是否在函数调用中用作参数
+    for (auto& bb : *function) {
+        for (const auto& inst : *bb) {
+            if (inst->isCallInstr()) {
+                auto usedRegs = getUsedRegs(inst.get());
+                if (std::find(usedRegs.begin(), usedRegs.end(), virtualReg) !=
+                    usedRegs.end()) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+bool RegAllocChaitin::isUsedAcrossCalls(unsigned virtualReg) const {
+    // 检查虚拟寄存器的生命周期是否跨越函数调用
+    for (auto& bb : *function) {
+        const auto& liveIn = livenessInfo.at(bb.get()).liveIn;
+        const auto& liveOut = livenessInfo.at(bb.get()).liveOut;
+
+        bool regLive = (liveIn.find(virtualReg) != liveIn.end()) ||
+                       (liveOut.find(virtualReg) != liveOut.end());
+
+        if (regLive) {
+            for (const auto& inst : *bb) {
+                if (inst->isCallInstr()) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+// TODO: once is enough
+void RegAllocChaitin::initializeABIConstraints() {
+    // 设置可用寄存器列表（排除保留寄存器）
+    availableRegs.clear();
+    
+    // 添加调用者保存寄存器
+    for (unsigned reg = 5; reg <= 7; ++reg) { // t0-t2
+        availableRegs.push_back(reg);
+    }
+
+    for (unsigned reg = 10; reg <= 17; ++reg) { // a0-a7
+        availableRegs.push_back(reg);
+    }
+    for (unsigned reg = 28; reg <= 31; ++reg) { // t3-t6
+        availableRegs.push_back(reg);
+    }
+    
+    // 添加被调用者保存寄存器
+    for (unsigned reg = 8; reg <= 9; ++reg) { // s0-s1
+        availableRegs.push_back(reg);
+    }
+    for (unsigned reg = 18; reg <= 27; ++reg) { // s2-s11
+        availableRegs.push_back(reg);
+    }
+    
+    // 根据函数特征设置特定约束
+    setFunctionSpecificConstraints();
+}
+
+void RegAllocChaitin::setFunctionSpecificConstraints() {
+    // 分析函数签名和调用模式，设置ABI相关约束
+    
+    // 1. 分析函数参数约束
+    setParameterConstraints();
+    
+    // 2. 分析函数返回值约束  
+    setReturnValueConstraints();
+    
+    // 3. 分析函数调用约束
+    setCallSiteConstraints();
+    
+    // 4. 分析特殊用途寄存器约束
+    setSpecialRegisterConstraints();
+}
+
+void RegAllocChaitin::setParameterConstraints() {
+    if (function->empty()) return;
+    BasicBlock* entryBlock = function->begin()->get();
+    if (!entryBlock) return;
+
+    // 首先标记哪些参数寄存器实际被使用
+    std::set<unsigned> usedParamRegs;
+    
+    // 扫描整个函数，识别哪些参数寄存器被使用
+    for (auto& bb : *function) {
+        for (const auto& inst : *bb) {
+            auto usedRegs = getUsedRegs(inst.get());
+            for (unsigned reg : usedRegs) {
+                if (reg >= 10 && reg <= 17) { // a0-a7
+                    usedParamRegs.insert(reg);
+                }
+            }
+        }
+    }
+
+    // 为实际使用的参数寄存器创建专门的虚拟寄存器映射
+    std::map<unsigned, unsigned> paramToVirtual;
+    
+    int paramIndex = 0;
+    for (const auto& inst : *entryBlock) {
+        if (inst->isCopyInstr() || inst->isParameterMove()) {
+            const auto& operands = inst->getOperands();
+            if (operands.size() >= 2 && operands[0]->isReg() && operands[1]->isReg()) {
+                unsigned dstReg = operands[0]->getRegNum();
+                unsigned srcReg = operands[1]->getRegNum();
+                
+                if (srcReg >= 10 && srcReg <= 17 && !isPhysicalReg(dstReg)) {
+                    // 强制约束：参数虚拟寄存器必须分配到对应的参数物理寄存器
+                    addStrongPhysicalConstraint(dstReg, srcReg);
+                    paramToVirtual[srcReg] = dstReg;
+                }
+            }
+        }
+        if (++paramIndex > 8) break; // 只处理前8个参数
+    }
+    
+    // 确保未被虚拟寄存器接管的参数寄存器不被分配给其他虚拟寄存器
+    for (unsigned paramReg = 10; paramReg <= 17; ++paramReg) {
+        if (usedParamRegs.count(paramReg) && !paramToVirtual.count(paramReg)) {
+            // 这个参数寄存器被直接使用，需要保护
+            addReservedPhysicalReg(paramReg);
+        }
+    }
+}
+
+
+void RegAllocChaitin::setReturnValueConstraints() {
+    // 查找函数中的返回指令
+    for (auto& bb : *function) {
+        for (auto& inst : *bb) {
+            if (inst->isReturnInstr()) {
+                // 分析返回指令前的值准备
+                auto it = std::find_if(bb->begin(), bb->end(), 
+                    [&inst](const auto& i) { return i.get() == inst.get(); });
+                
+                if (it != bb->begin()) {
+                    // 检查返回值准备指令
+                    auto prevIt = std::prev(it);
+                    Instruction* prevInst = prevIt->get();
+                    
+                    // 查找向a0, a1赋值的指令
+                    auto definedRegs = getDefinedRegs(prevInst);
+                    auto usedRegs = getUsedRegs(prevInst);
+                    
+                    // 如果指令定义了a0或a1
+                    for (unsigned reg : definedRegs) {
+                        if (reg == 10 || reg == 11) { // a0 或 a1
+                            // 查找产生返回值的虚拟寄存器
+                            for (unsigned srcReg : usedRegs) {
+                                if (!isPhysicalReg(srcReg)) {
+                                    addPhysicalConstraint(srcReg, reg);
+                                    
+                                    std::cout << "Added return value constraint: virtual reg " << srcReg 
+                                              << " -> physical reg " << reg << " (a" << (reg - 10) << ")" << std::endl;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // 检查复制到返回寄存器的指令
+                    if (prevInst->isCopyInstr()) {
+                        const auto& operands = prevInst->getOperands();
+                        if (operands.size() >= 2 && operands[0]->isReg() && operands[1]->isReg()) {
+                            unsigned dstReg = operands[0]->getRegNum();
+                            unsigned srcReg = operands[1]->getRegNum();
+                            
+                            // 如果目标是a0或a1，源是虚拟寄存器
+                            if ((dstReg == 10 || dstReg == 11) && !isPhysicalReg(srcReg)) {
+                                addPhysicalConstraint(srcReg, dstReg);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+void RegAllocChaitin::setCallSiteConstraints() {
+    // 分析函数调用点的约束
+    for (auto& bb : *function) {
+        for (auto& inst : *bb) {
+            if (inst->isCallInstr()) {
+                // 分析调用前的参数准备
+                setPreCallConstraints(bb.get(), inst.get());
+                
+                // 分析调用后的返回值处理
+                setPostCallConstraints(bb.get(), inst.get());
+            }
+        }
+    }
+}
+
+void RegAllocChaitin::setPreCallConstraints(BasicBlock* bb, Instruction* callInst) {
+    // 查找调用指令在基本块中的位置
+    auto callIt = std::find_if(bb->begin(), bb->end(), 
+        [callInst](const auto& inst) { return inst.get() == callInst; });
+    
+    if (callIt == bb->end()) return;
+    
+    // 向前扫描，查找参数准备指令
+    int paramCount = 0;
+    for (auto it = std::make_reverse_iterator(callIt); 
+         it != bb->rend() && paramCount < 8; ++it) {
+        
+        Instruction* inst = it->get();
+        auto definedRegs = getDefinedRegs(inst);
+        
+        // 查找向参数寄存器a0-a7赋值的指令
+        for (unsigned reg : definedRegs) {
+            if (reg >= 10 && reg <= 17) { // a0-a7
+                auto usedRegs = getUsedRegs(inst);
+                for (unsigned srcReg : usedRegs) {
+                    if (!isPhysicalReg(srcReg)) {
+                        addPhysicalConstraint(srcReg, reg);
+                        
+                        std::cout << "Added call argument constraint: virtual reg " << srcReg 
+                                  << " -> physical reg " << reg << " (a" << (reg - 10) << ")" << std::endl;
+                    }
+                }
+                paramCount++;
+            }
+        }
+    }
+}
+
+void RegAllocChaitin::setPostCallConstraints(BasicBlock* bb, Instruction* callInst) {
+    // 查找调用指令在基本块中的位置
+    auto callIt = std::find_if(bb->begin(), bb->end(), 
+        [callInst](const auto& inst) { return inst.get() == callInst; });
+    
+    if (callIt == bb->end() || std::next(callIt) == bb->end()) return;
+    
+    // 向后扫描几条指令，查找返回值使用
+    auto nextIt = std::next(callIt);
+    for (int i = 0; i < 3 && nextIt != bb->end(); ++i, ++nextIt) {
+        Instruction* inst = nextIt->get();
+        auto usedRegs = getUsedRegs(inst);
+        auto definedRegs = getDefinedRegs(inst);
+        
+        // 查找使用a0或a1的指令
+        for (unsigned reg : usedRegs) {
+            if (reg == 10 || reg == 11) { // a0 或 a1
+                // 如果指令将返回值复制到虚拟寄存器
+                for (unsigned dstReg : definedRegs) {
+                    if (!isPhysicalReg(dstReg)) {
+                        addPhysicalConstraint(dstReg, reg);
+                        
+                        std::cout << "Added call return constraint: virtual reg " << dstReg 
+                                  << " -> physical reg " << reg << " (a" << (reg - 10) << ")" << std::endl;
+                    }
+                }
+            }
+        }
+    }
+}
+
+void RegAllocChaitin::setSpecialRegisterConstraints() {
+    // 设置特殊用途寄存器的约束
+    
+    // 1. 栈指针约束 (sp = x2)
+    for (auto& bb : *function) {
+        for (auto& inst : *bb) {
+            auto usedRegs = getUsedRegs(inst.get());
+            auto definedRegs = getDefinedRegs(inst.get());
+            
+            // 禁止虚拟寄存器使用保留寄存器
+            for (unsigned reg : usedRegs) {
+                if (!isPhysicalReg(reg)) {
+                    // 确保虚拟寄存器不会分配到保留寄存器
+                    for (unsigned reservedReg = 0; reservedReg <= 4; ++reservedReg) {
+                        addPhysicalConstraint(reg, reservedReg);
+                    }
+                }
+            }
+            
+            for (unsigned reg : definedRegs) {
+                if (!isPhysicalReg(reg)) {
+                    // 确保虚拟寄存器不会分配到保留寄存器
+                    for (unsigned reservedReg = 0; reservedReg <= 4; ++reservedReg) {
+                        addPhysicalConstraint(reg, reservedReg);
+                    }
+                }
+            }
+        }
+    }
+    
+    // 2. 帧指针约束 (如果使用帧指针)
+    if (usesFramePointer()) {
+        // s0/fp约束处理
+        setFramePointerConstraints();
+    }
+    
+    // 3. 返回地址寄存器约束 (ra = x1)
+    setReturnAddressConstraints();
+}
+
+bool RegAllocChaitin::usesFramePointer() const {
+    // 检查函数是否使用帧指针
+    // 简单启发式：如果函数有复杂的栈操作或大量局部变量
+    for (auto& bb : *function) {
+        for (auto& inst : *bb) {
+            // 查找设置帧指针的指令模式
+            if (inst->isFrameSetup() || 
+                (inst->isCopyInstr() && inst->involvesStackPointer())) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void RegAllocChaitin::setFramePointerConstraints() {
+    // 为使用帧指针的虚拟寄存器添加s0约束
+    for (auto& bb : *function) {
+        for (auto& inst : *bb) {
+            if (inst->isFrameSetup() || inst->isFramePointerRelated()) {
+                auto definedRegs = getDefinedRegs(inst.get());
+                for (unsigned reg : definedRegs) {
+                    if (!isPhysicalReg(reg)) {
+                        addPhysicalConstraint(reg, 8); // s0/fp = x8
+                    }
+                }
+            }
+        }
+    }
+}
+
+void RegAllocChaitin::setReturnAddressConstraints() {
+    // 处理返回地址寄存器的约束
+    for (auto& bb : *function) {
+        for (auto& inst : *bb) {
+            if (inst->isCallInstr() || inst->isReturnInstr()) {
+                // 调用和返回指令会使用ra寄存器
+                auto usedRegs = getUsedRegs(inst.get());
+                auto definedRegs = getDefinedRegs(inst.get());
+                
+                // 确保相关虚拟寄存器不会冲突ra
+                for (unsigned reg : usedRegs) {
+                    if (!isPhysicalReg(reg)) {
+                        // 避免与ra冲突
+                        addPhysicalConstraint(reg, 1); // ra = x1
+                    }
+                }
+            }
+        }
+    }
+}
+
 unsigned RegAllocChaitin::getPhysicalReg(unsigned virtualReg) const {
     auto it = virtualToPhysical.find(virtualReg);
     if (it != virtualToPhysical.end()) {
@@ -1003,6 +1544,7 @@ std::vector<unsigned> RegAllocChaitin::getDefinedRegs(
     return definedRegs;
 }
 
+/// Print
 void RegAllocChaitin::printInterferenceGraph() const {
     std::cout << "Interference Graph:\n";
     for (const auto& [regNum, node] : interferenceGraph) {
