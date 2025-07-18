@@ -5,6 +5,7 @@
 #include <optional>
 #include <ostream>
 #include <stdexcept>
+#include <functional>
 
 #include "ABI.h"
 #include "CodeGen.h"
