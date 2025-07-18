@@ -18,7 +18,7 @@ void RegAllocChaitin::allocateRegisters() {
 
     buildInterferenceGraph();
 
-    // performCoalescing();
+    performCoalescing();
 
     bool success = colorGraph();
 
@@ -33,6 +33,8 @@ void RegAllocChaitin::allocateRegisters() {
     removeCoalescedCopies();
 
     rewriteInstructions();
+
+    stackManager.computeStackFrame();
 
     printAllocationResult();
     printCoalesceResult();
@@ -511,7 +513,7 @@ std::vector<unsigned> RegAllocChaitin::selectSpillCandidates() {
 
 void RegAllocChaitin::insertSpillCode(unsigned reg) {
     stackManager.allocateSpillSlot(reg);
-    stackManager.computeStackFrame();
+    // stackManager.computeStackFrame();
     int spillOffset = stackManager.getSpillSlotOffset(reg);
 
     for (auto& bb : *function) {
