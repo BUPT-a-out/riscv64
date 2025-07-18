@@ -629,10 +629,10 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
     if (auto* alloca_inst =
             midend::dyn_cast<midend::AllocaInst>(pointer_operand)) {
         // 直接是 alloca 指令
-    auto* sfm = parent_bb->getParent()->getStackFrameManager();
+        auto* sfm = parent_bb->getParent()->getStackFrameManager();
         int frame_id = sfm->getAllocaStackSlotId(alloca_inst);
 
-    if (frame_id == -1) {
+        if (frame_id == -1) {
             // 如果还没有为这个alloca分配FI，现在分配
             visitAllocaInst(alloca_inst, parent_bb);
             frame_id = sfm->getAllocaStackSlotId(alloca_inst);
@@ -641,25 +641,25 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
         if (frame_id == -1) {
             throw std::runtime_error(
                 "Cannot find frame index for alloca instruction in store");
-    }
+        }
 
-    // 生成frameaddr指令来获取栈地址
-    auto frame_addr_reg = codeGen_->allocateReg();
-    auto store_frame_addr_inst =
-        std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
-    store_frame_addr_inst->addOperand(std::make_unique<RegisterOperand>(
-        frame_addr_reg->getRegNum(), frame_addr_reg->isVirtual()));  // rd
-    store_frame_addr_inst->addOperand(
-        std::make_unique<FrameIndexOperand>(frame_id));  // FI
-    parent_bb->addInstruction(std::move(store_frame_addr_inst));
+        // 生成frameaddr指令来获取栈地址
+        auto frame_addr_reg = codeGen_->allocateReg();
+        auto store_frame_addr_inst =
+            std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
+        store_frame_addr_inst->addOperand(std::make_unique<RegisterOperand>(
+            frame_addr_reg->getRegNum(), frame_addr_reg->isVirtual()));  // rd
+        store_frame_addr_inst->addOperand(
+            std::make_unique<FrameIndexOperand>(frame_id));  // FI
+        parent_bb->addInstruction(std::move(store_frame_addr_inst));
 
-    // 生成存储指令
-    auto sw_inst = std::make_unique<Instruction>(Opcode::SW, parent_bb);
-    sw_inst->addOperand(std::move(value_operand));  // source register
-    sw_inst->addOperand(std::make_unique<MemoryOperand>(
-        std::move(frame_addr_reg),
-        std::make_unique<ImmediateOperand>(0)));  // memory address
-    parent_bb->addInstruction(std::move(sw_inst));
+        // 生成存储指令
+        auto sw_inst = std::make_unique<Instruction>(Opcode::SW, parent_bb);
+        sw_inst->addOperand(std::move(value_operand));  // source register
+        sw_inst->addOperand(std::make_unique<MemoryOperand>(
+            std::move(frame_addr_reg),
+            std::make_unique<ImmediateOperand>(0)));  // memory address
+        parent_bb->addInstruction(std::move(sw_inst));
 
     } else if (auto* gep_inst = midend::dyn_cast<midend::GetElementPtrInst>(
                    pointer_operand)) {
@@ -713,41 +713,41 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
     if (auto* alloca_inst =
             midend::dyn_cast<midend::AllocaInst>(pointer_operand)) {
         // 直接是 alloca 指令
-    auto* sfm = parent_bb->getParent()->getStackFrameManager();
+        auto* sfm = parent_bb->getParent()->getStackFrameManager();
         int frame_id = sfm->getAllocaStackSlotId(alloca_inst);
 
-    if (frame_id == -1) {
-        throw std::runtime_error(
+        if (frame_id == -1) {
+            throw std::runtime_error(
                 "Cannot find frame index for alloca instruction in load");
-    }
+        }
 
-    // 生成frameaddr指令来获取栈地址
-    auto frame_addr_reg = codeGen_->allocateReg();
+        // 生成frameaddr指令来获取栈地址
+        auto frame_addr_reg = codeGen_->allocateReg();
         auto load_frame_addr_inst =
-        std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
+            std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
         load_frame_addr_inst->addOperand(std::make_unique<RegisterOperand>(
-        frame_addr_reg->getRegNum(), frame_addr_reg->isVirtual()));  // rd
+            frame_addr_reg->getRegNum(), frame_addr_reg->isVirtual()));  // rd
         load_frame_addr_inst->addOperand(
-        std::make_unique<FrameIndexOperand>(frame_id));  // FI
+            std::make_unique<FrameIndexOperand>(frame_id));  // FI
         parent_bb->addInstruction(std::move(load_frame_addr_inst));
 
-    // 加载到新的寄存器
-    auto new_reg = codeGen_->allocateReg();
+        // 加载到新的寄存器
+        auto new_reg = codeGen_->allocateReg();
         auto load_inst_ptr =
             std::make_unique<Instruction>(Opcode::LW, parent_bb);
-    load_inst_ptr->addOperand(std::make_unique<RegisterOperand>(
-        new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-    load_inst_ptr->addOperand(std::make_unique<MemoryOperand>(
-        std::move(frame_addr_reg),
-        std::make_unique<ImmediateOperand>(0)));  // memory address
-    parent_bb->addInstruction(std::move(load_inst_ptr));
+        load_inst_ptr->addOperand(std::make_unique<RegisterOperand>(
+            new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+        load_inst_ptr->addOperand(std::make_unique<MemoryOperand>(
+            std::move(frame_addr_reg),
+            std::make_unique<ImmediateOperand>(0)));  // memory address
+        parent_bb->addInstruction(std::move(load_inst_ptr));
 
         // 建立load指令结果值到寄存器的映射
         codeGen_->mapValueToReg(inst, new_reg->getRegNum(),
                                 new_reg->isVirtual());
 
-    return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
-                                             new_reg->isVirtual());
+        return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                                 new_reg->isVirtual());
 
     } else if (auto* gep_inst = midend::dyn_cast<midend::GetElementPtrInst>(
                    pointer_operand)) {
@@ -791,10 +791,10 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
 }
 
 // 处理二元运算指令
-// Handles binary operation instructions by generating the appropriate RISC-V
-// instructions for the given midend instruction, allocating registers as
-// needed, and returning the result operand. Supports constant folding for
-// immediate operands and maps the result to a register.
+// Handles binary operation instructions by generating the appropriate
+// RISC-V instructions for the given midend instruction, allocating
+// registers as needed, and returning the result operand. Supports constant
+// folding for immediate operands and maps the result to a register.
 std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
     const midend::Instruction* inst, BasicBlock* parent_bb) {
     if (!inst->isBinaryOp() && !inst->isComparison()) {
@@ -858,7 +858,8 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 instruction->addOperand(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
                 instruction->addOperand(std::make_unique<RegisterOperand>(
-                    reg_operand->getRegNum(), new_reg->isVirtual()));  // rs1
+                    reg_operand->getRegNum(),
+                    new_reg->isVirtual()));  // rs1
                 instruction->addOperand(std::make_unique<ImmediateOperand>(
                     imm_operand->getValue()));  // imm
 
@@ -1135,7 +1136,8 @@ void Visitor::storeOperandToReg(
 
                 inst->addOperand(std::move(dest_reg));  // rd
                 inst->addOperand(std::make_unique<RegisterOperand>(
-                    reg_source->getRegNum(), reg_source->isVirtual()));  // rs
+                    reg_source->getRegNum(),
+                    reg_source->isVirtual()));  // rs
                 parent_bb->insert(insert_pos, std::move(inst));
                 break;
             }
@@ -1201,6 +1203,14 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
     // 检查是否已经处理过该值
     const auto foundReg = findRegForValue(value);
     if (foundReg.has_value()) {
+        // 对于alloca指令，即使已经处理过，如果它被用作指针，也应该返回FrameIndex
+        if (auto* alloca_inst = midend::dyn_cast<midend::AllocaInst>(value)) {
+            auto* sfm = parent_bb->getParent()->getStackFrameManager();
+            int frame_id = sfm->getAllocaStackSlotId(alloca_inst);
+            if (frame_id != -1) {
+                return std::make_unique<FrameIndexOperand>(frame_id);
+            }
+        }
         // 直接使用找到的寄存器操作数
         return std::make_unique<RegisterOperand>(foundReg.value()->getRegNum(),
                                                  foundReg.value()->isVirtual());
@@ -1268,6 +1278,18 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         if (frame_id != -1) {
             return std::make_unique<FrameIndexOperand>(frame_id);
         }
+    }
+
+    // 检查是否是指针类型
+    if (value->getType()->isPointerType()) {
+        // 如果是指针类型，可能是一个alloca指令的结果
+        if (const auto* alloca_inst =
+                midend::dyn_cast<midend::AllocaInst>(value)) {
+            return visitAllocaInst(alloca_inst, parent_bb);
+        }
+        // 其他指针类型的处理（如全局变量等）
+        throw std::runtime_error("Pointer type not handled: " +
+                                 value->toString());
     }
 
     throw std::runtime_error(
