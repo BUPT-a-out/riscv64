@@ -128,6 +128,7 @@ class RegAllocChaitin {
     void unionCoalesce(unsigned reg1, unsigned reg2);
     void updateInterferenceAfterCoalesce(unsigned merged, unsigned eliminated);
     void removeCoalescedCopies();
+    void removeRebundantCopies();
 
     bool canCoalesceWithABI(unsigned src, unsigned dst) const;
     bool crossesFunctionCall(unsigned src, unsigned dst) const;

@@ -235,7 +235,7 @@ class Instruction {
     // 生成文本表示
     std::string toString() const;
 
-    std::optional<DestSourcePair> isCopyInstr() const;
+    bool isCopyInstr() const;
     bool isCallInstr() const;
     bool isJumpInstr() const;
     bool isReturnInstr() const;
@@ -250,7 +250,6 @@ class Instruction {
    private:
     Opcode opcode;
     std::vector<std::unique_ptr<MachineOperand>> operands;
-    std::optional<DestSourcePair> isCopyInstrImpl() const;
 
     // 指向其所在的基本块 (可选，但非常有用) - 弱引用
     BasicBlock* parent{};

@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <functional>
 #include <vector>
 
 #include "BasicBlock.h"
@@ -39,9 +40,30 @@ class Function {
     iterator end() { return basic_blocks.end(); }
     const_iterator begin() const { return basic_blocks.begin(); }
     const_iterator end() const { return basic_blocks.end(); }
+    auto rbegin() { return basic_blocks.rbegin(); }
+    auto rend() { return basic_blocks.rend(); }
 
     bool empty() const { return basic_blocks.empty(); }
     const std::string& getName() const { return name; }
+
+    BasicBlock* getEntryBlock() const;
+
+    auto getPostOrder() {
+        std::vector<BasicBlock*> postOrder;
+        std::unordered_set<BasicBlock*> visited;
+
+        std::function<void(BasicBlock*)> dfs = [&](BasicBlock* bb) {
+            if (visited.count(bb)) return;
+            visited.insert(bb);
+            for (BasicBlock* succ : bb->getSuccessors()) {
+                dfs(succ);
+            }
+            postOrder.push_back(bb);
+        };
+
+        dfs(getEntryBlock());
+        return postOrder;
+    }
 
     // 管理函数的栈帧信息
 

@@ -33,13 +33,13 @@ void RegAllocChaitin::allocateRegisters() {
     removeCoalescedCopies();
 
     rewriteInstructions();
+    removeRebundantCopies();
 
     stackManager.computeStackFrame();
 
     printAllocationResult();
     printCoalesceResult();
     stackManager.printStackLayout();
-    // TODO: post opt
 }
 
 /// degree cache
@@ -69,69 +69,13 @@ int RegAllocChaitin::getCachedDegree(unsigned reg) {
 }
 
 void RegAllocChaitin::updateDegreeAfterRemoval(unsigned removedReg) {
-    if (interferenceGraph.find(removedReg) == interferenceGraph.end()) {
-        return;
-    }
-
-    // 更新所有邻居的度数
-    for (unsigned neighbor : interferenceGraph[removedReg]->neighbors) {
-        if (degreeCache.find(neighbor) != degreeCache.end()) {
-            degreeCache[neighbor]--;
-        }
-    }
-
-    // 移除被删除节点的度数缓存
-    degreeCache.erase(removedReg);
+    invalidateDegreeCache(removedReg);
 }
 
 void RegAllocChaitin::updateDegreeAfterCoalesce(unsigned merged,
                                                 unsigned eliminated) {
-    if (interferenceGraph.find(eliminated) == interferenceGraph.end() ||
-        interferenceGraph.find(merged) == interferenceGraph.end()) {
-        return;
-    }
-
-    auto& eliminatedNode = interferenceGraph[eliminated];
-    auto& mergedNode = interferenceGraph[merged];
-
-    // 计算合并后的度数变化
-    std::unordered_set<unsigned> newNeighbors;
-    std::unordered_set<unsigned> commonNeighbors;
-
-    // 找出eliminated的邻居中，merged原本没有的
-    for (unsigned neighbor : eliminatedNode->neighbors) {
-        if (neighbor != merged) {
-            if (mergedNode->neighbors.find(neighbor) ==
-                mergedNode->neighbors.end()) {
-                newNeighbors.insert(neighbor);
-            } else {
-                commonNeighbors.insert(neighbor);
-            }
-        }
-    }
-
-    // 更新merged节点的度数
-    if (degreeCache.find(merged) != degreeCache.end()) {
-        degreeCache[merged] += newNeighbors.size();
-    }
-
-    // 更新所有相关邻居的度数
-    // 1. eliminated的邻居需要减1（因为eliminated被移除）
-    // 2. 如果是新邻居，还需要加1（因为现在与merged连接）
-    for (unsigned neighbor : eliminatedNode->neighbors) {
-        if (neighbor != merged &&
-            degreeCache.find(neighbor) != degreeCache.end()) {
-            degreeCache[neighbor]--;  // 失去与eliminated的连接
-
-            // 如果是新连接的邻居，需要加1
-            if (newNeighbors.find(neighbor) != newNeighbors.end()) {
-                degreeCache[neighbor]++;
-            }
-        }
-    }
-
-    // 移除eliminated节点的度数缓存
-    degreeCache.erase(eliminated);
+    invalidateDegreeCache(eliminated);
+    invalidateDegreeCache(merged);
 }
 
 void RegAllocChaitin::invalidateDegreeCache(unsigned reg) {
@@ -139,20 +83,23 @@ void RegAllocChaitin::invalidateDegreeCache(unsigned reg) {
 }
 
 void RegAllocChaitin::computeLiveness() {
-    // 为每个基本块初始化活跃性信息
+    // 1. 计算 Post-Order
+    auto postOrder = function->getPostOrder();
+
+    // 2. 初始化活跃性信息
     for (auto& bb : *function) {
         livenessInfo[bb.get()] = LivenessInfo{};
         computeDefUse(bb.get(), livenessInfo[bb.get()]);
     }
 
-    // 迭代计算活跃性直到收敛
+    // 3. 使用 RPO（Post-Order 的逆序）进行活跃性分析
     bool changed = true;
     while (changed) {
         changed = false;
 
-        // 逆序遍历基本块（后向数据流分析）
-        for (auto it = function->begin(); it != function->end(); ++it) {
-            BasicBlock* bb = it->get();
+        // 逆后序（RPO）遍历
+        for (auto it = postOrder.rbegin(); it != postOrder.rend(); ++it) {
+            BasicBlock* bb = *it;
             LivenessInfo& info = livenessInfo[bb];
 
             // 计算新的 liveOut
@@ -324,6 +271,10 @@ void RegAllocChaitin::addInterference(unsigned reg1, unsigned reg2) {
 /// Coloring
 bool RegAllocChaitin::colorGraph() {
     auto order = getSimplificationOrder();
+    // std::cout << "order\n";
+    // for (auto r: order) {
+    //     std::cout << r << " ";
+    // }
     return attemptColoring(order);
 }
 
@@ -374,21 +325,17 @@ std::vector<unsigned> RegAllocChaitin::getSimplificationOrder() {
                 if (removed.find(neighbor) == removed.end() &&
                     !interferenceGraph[neighbor]->isPrecolored) {
                     // 更新邻居的度数
-                    if (degreeCache.find(neighbor) != degreeCache.end()) {
-                        degreeCache[neighbor]--;
-
-                        // 如果邻居的度数现在小于K，加入工作列表
-                        if (degreeCache[neighbor] <
-                            static_cast<int>(availableRegs.size())) {
-                            workList.push(neighbor);
-                        }
+                    invalidateDegreeCache(neighbor);
+                    int deg = getCachedDegree(neighbor);
+                    // 如果邻居的度数现在小于K，加入工作列表
+                    if (deg < static_cast<int>(availableRegs.size())) {
+                        workList.push(neighbor);
                     }
                 }
             }
         }
 
-        // 从度数缓存中移除当前节点
-        degreeCache.erase(regNum);
+        invalidateDegreeCache(regNum);
     }
 
     // 如果还有未移除的节点，选择溢出候选
@@ -513,7 +460,7 @@ std::vector<unsigned> RegAllocChaitin::selectSpillCandidates() {
 
 void RegAllocChaitin::insertSpillCode(unsigned reg) {
     stackManager.allocateSpillSlot(reg);
-    // stackManager.computeStackFrame();
+
     int spillOffset = stackManager.getSpillSlotOffset(reg);
 
     for (auto& bb : *function) {
@@ -1095,6 +1042,29 @@ void RegAllocChaitin::removeCoalescedCopies() {
                     // 检查是否已经合并
                     if (coalesceMap.find(src) != coalesceMap.end() &&
                         coalesceMap[src] == dst) {
+                        // 移除这条复制指令
+                        it = bb->erase(it);
+                        continue;
+                    }
+                }
+            }
+            ++it;
+        }
+    }
+}
+
+void RegAllocChaitin::removeRebundantCopies() {
+    for (auto& bb : *function) {
+        for (auto it = bb->begin(); it != bb->end();) {
+            auto& inst = *it;
+            if (inst->isCopyInstr()) {
+                const auto& operands = inst->getOperands();
+                if (operands.size() >= 2 && operands[0]->isReg() &&
+                    operands[1]->isReg()) {
+                    unsigned dst = operands[0]->getRegNum();
+                    unsigned src = operands[1]->getRegNum();
+
+                    if (src == dst) {
                         // 移除这条复制指令
                         it = bb->erase(it);
                         continue;
