@@ -33,6 +33,9 @@ std::unique_ptr<midend::Module> createVariableAssignmentTest();
 std::unique_ptr<midend::Module> createComplexAssignmentTest();
 std::unique_ptr<midend::Module> createComplexBranchTest();
 std::unique_ptr<midend::Module> createComplexFunctionCallTest();
+std::unique_ptr<midend::Module> createSimpleArray1DTest();
+std::unique_ptr<midend::Module> createSimpleArray2DTest();
+std::unique_ptr<midend::Module> createComplexMemoryArrayTest();
 }  // namespace testcases
 
 class TestRunner {
@@ -843,6 +846,390 @@ std::unique_ptr<midend::Module> createSmallRegisterSpillTest() {
     return module;
 }
 
+std::unique_ptr<midend::Module> createSimpleArray1DTest() {
+    static auto context = std::make_unique<midend::Context>();
+    auto module = std::make_unique<midend::Module>("simple_array_1d", context.get());
+
+    auto* i32Type = context->getInt32Type();
+    auto* arrayType = midend::ArrayType::get(i32Type, 5);  // int arr[5]
+    
+    // 创建函数类型: i32 array_sum()
+    auto* funcType = midend::FunctionType::get(i32Type, {});
+    auto* func = midend::Function::Create(funcType, "array_sum", module.get());
+
+    auto* entry = midend::BasicBlock::Create(context.get(), "entry", func);
+    midend::IRBuilder builder(context.get());
+    builder.setInsertPoint(entry);
+
+    // 分配数组: %arr = alloca [5 x i32]
+    auto* arrayAlloca = builder.createAlloca(arrayType, nullptr, "arr");
+    
+    // 分配求和变量: %sum = alloca i32
+    auto* sumAlloca = builder.createAlloca(i32Type, nullptr, "sum");
+    
+    // 初始化sum为0: store i32 0, i32* %sum
+    auto* zero = midend::ConstantInt::get(i32Type, 0);
+    builder.createStore(zero, sumAlloca);
+
+    // 初始化数组元素
+    // arr[0] = 10
+    auto* idx0 = midend::ConstantInt::get(i32Type, 0);
+    auto* val0 = midend::ConstantInt::get(i32Type, 10);
+    auto* ptr0 = builder.createGEP(arrayType, arrayAlloca, {zero, idx0}, "arr_0_ptr");
+    builder.createStore(val0, ptr0);
+
+    // arr[1] = 20
+    auto* idx1 = midend::ConstantInt::get(i32Type, 1);
+    auto* val1 = midend::ConstantInt::get(i32Type, 20);
+    auto* ptr1 = builder.createGEP(arrayType, arrayAlloca, {zero, idx1}, "arr_1_ptr");
+    builder.createStore(val1, ptr1);
+
+    // arr[2] = 30
+    auto* idx2 = midend::ConstantInt::get(i32Type, 2);
+    auto* val2 = midend::ConstantInt::get(i32Type, 30);
+    auto* ptr2 = builder.createGEP(arrayType, arrayAlloca, {zero, idx2}, "arr_2_ptr");
+    builder.createStore(val2, ptr2);
+
+    // arr[3] = 40
+    auto* idx3 = midend::ConstantInt::get(i32Type, 3);
+    auto* val3 = midend::ConstantInt::get(i32Type, 40);
+    auto* ptr3 = builder.createGEP(arrayType, arrayAlloca, {zero, idx3}, "arr_3_ptr");
+    builder.createStore(val3, ptr3);
+
+    // arr[4] = 50
+    auto* idx4 = midend::ConstantInt::get(i32Type, 4);
+    auto* val4 = midend::ConstantInt::get(i32Type, 50);
+    auto* ptr4 = builder.createGEP(arrayType, arrayAlloca, {zero, idx4}, "arr_4_ptr");
+    builder.createStore(val4, ptr4);
+
+    // 读取并累加数组元素
+    // sum += arr[0]
+    auto* currentSum = builder.createLoad(sumAlloca, "current_sum");
+    auto* elem0 = builder.createLoad(ptr0, "elem_0");
+    auto* newSum = builder.createAdd(currentSum, elem0, "sum_1");
+    builder.createStore(newSum, sumAlloca);
+
+    // sum += arr[1]
+    currentSum = builder.createLoad(sumAlloca, "current_sum_2");
+    auto* elem1 = builder.createLoad(ptr1, "elem_1");
+    newSum = builder.createAdd(currentSum, elem1, "sum_2");
+    builder.createStore(newSum, sumAlloca);
+
+    // sum += arr[2]
+    currentSum = builder.createLoad(sumAlloca, "current_sum_3");
+    auto* elem2 = builder.createLoad(ptr2, "elem_2");
+    newSum = builder.createAdd(currentSum, elem2, "sum_3");
+    builder.createStore(newSum, sumAlloca);
+
+    // sum += arr[3]
+    currentSum = builder.createLoad(sumAlloca, "current_sum_4");
+    auto* elem3 = builder.createLoad(ptr3, "elem_3");
+    newSum = builder.createAdd(currentSum, elem3, "sum_4");
+    builder.createStore(newSum, sumAlloca);
+
+    // sum += arr[4]
+    currentSum = builder.createLoad(sumAlloca, "current_sum_5");
+    auto* elem4 = builder.createLoad(ptr4, "elem_4");
+    auto* finalSum = builder.createAdd(currentSum, elem4, "final_sum");
+
+    // 返回总和
+    builder.createRet(finalSum);
+
+    return module;
+}
+
+std::unique_ptr<midend::Module> createSimpleArray2DTest() {
+    static auto context = std::make_unique<midend::Context>();
+    auto module = std::make_unique<midend::Module>("simple_array_2d", context.get());
+
+    auto* i32Type = context->getInt32Type();
+    // 创建 3x3 的二维数组类型: [3 x [3 x i32]]
+    auto* innerArrayType = midend::ArrayType::get(i32Type, 3);
+    auto* outerArrayType = midend::ArrayType::get(innerArrayType, 3);
+    
+    // 创建函数类型: i32 matrix_diagonal_sum()
+    auto* funcType = midend::FunctionType::get(i32Type, {});
+    auto* func = midend::Function::Create(funcType, "matrix_diagonal_sum", module.get());
+
+    auto* entry = midend::BasicBlock::Create(context.get(), "entry", func);
+    midend::IRBuilder builder(context.get());
+    builder.setInsertPoint(entry);
+
+    // 分配二维数组: %matrix = alloca [3 x [3 x i32]]
+    auto* matrixAlloca = builder.createAlloca(outerArrayType, nullptr, "matrix");
+    
+    // 分配对角线和变量: %diag_sum = alloca i32
+    auto* diagSumAlloca = builder.createAlloca(i32Type, nullptr, "diag_sum");
+    
+    // 初始化对角线和为0
+    auto* zero = midend::ConstantInt::get(i32Type, 0);
+    builder.createStore(zero, diagSumAlloca);
+
+    // 初始化矩阵元素（只初始化对角线和一些其他元素）
+    // matrix[0][0] = 1
+    auto* idx0 = midend::ConstantInt::get(i32Type, 0);
+    auto* idx1 = midend::ConstantInt::get(i32Type, 1);
+    auto* idx2 = midend::ConstantInt::get(i32Type, 2);
+    
+    auto* val1 = midend::ConstantInt::get(i32Type, 1);
+    auto* val5 = midend::ConstantInt::get(i32Type, 5);
+    auto* val9 = midend::ConstantInt::get(i32Type, 9);
+    auto* val2 = midend::ConstantInt::get(i32Type, 2);
+    auto* val3 = midend::ConstantInt::get(i32Type, 3);
+
+    // matrix[0][0] = 1 (对角线元素)
+    auto* ptr00 = builder.createGEP(outerArrayType, matrixAlloca, {zero, idx0, idx0}, "matrix_0_0_ptr");
+    builder.createStore(val1, ptr00);
+
+    // matrix[0][1] = 2
+    auto* ptr01 = builder.createGEP(outerArrayType, matrixAlloca, {zero, idx0, idx1}, "matrix_0_1_ptr");
+    builder.createStore(val2, ptr01);
+
+    // matrix[1][1] = 5 (对角线元素)
+    auto* ptr11 = builder.createGEP(outerArrayType, matrixAlloca, {zero, idx1, idx1}, "matrix_1_1_ptr");
+    builder.createStore(val5, ptr11);
+
+    // matrix[1][0] = 3
+    auto* ptr10 = builder.createGEP(outerArrayType, matrixAlloca, {zero, idx1, idx0}, "matrix_1_0_ptr");
+    builder.createStore(val3, ptr10);
+
+    // matrix[2][2] = 9 (对角线元素)
+    auto* ptr22 = builder.createGEP(outerArrayType, matrixAlloca, {zero, idx2, idx2}, "matrix_2_2_ptr");
+    builder.createStore(val9, ptr22);
+
+    // 计算对角线元素之和
+    // diag_sum += matrix[0][0]
+    auto* currentSum = builder.createLoad(diagSumAlloca, "current_diag_sum");
+    auto* elem00 = builder.createLoad(ptr00, "elem_0_0");
+    auto* newSum = builder.createAdd(currentSum, elem00, "diag_sum_1");
+    builder.createStore(newSum, diagSumAlloca);
+
+    // diag_sum += matrix[1][1]
+    currentSum = builder.createLoad(diagSumAlloca, "current_diag_sum_2");
+    auto* elem11 = builder.createLoad(ptr11, "elem_1_1");
+    newSum = builder.createAdd(currentSum, elem11, "diag_sum_2");
+    builder.createStore(newSum, diagSumAlloca);
+
+    // diag_sum += matrix[2][2]
+    currentSum = builder.createLoad(diagSumAlloca, "current_diag_sum_3");
+    auto* elem22 = builder.createLoad(ptr22, "elem_2_2");
+    auto* finalSum = builder.createAdd(currentSum, elem22, "final_diag_sum");
+
+    // 为了测试非对角线元素访问，再加上matrix[0][1] * matrix[1][0]
+    auto* elem01 = builder.createLoad(ptr01, "elem_0_1");
+    auto* elem10 = builder.createLoad(ptr10, "elem_1_0");
+    auto* product = builder.createMul(elem01, elem10, "off_diag_product");
+    auto* result = builder.createAdd(finalSum, product, "result");
+
+    // 返回结果
+    builder.createRet(result);
+
+    return module;
+}
+
+std::unique_ptr<midend::Module> createComplexMemoryArrayTest() {
+    static auto context = std::make_unique<midend::Context>();
+    auto module = std::make_unique<midend::Module>("complex_memory_array", context.get());
+
+    auto* i32Type = context->getInt32Type();
+    auto* arrayType = midend::ArrayType::get(i32Type, 8);  // int arr[8]
+    
+    // 创建函数类型: i32 complex_array_ops(i32 n)
+    auto* funcType = midend::FunctionType::get(i32Type, {i32Type});
+    auto* func = midend::Function::Create(funcType, "complex_array_ops", module.get());
+
+    auto* arg = func->getArg(0);
+    arg->setName("n");
+
+    // 创建基本块
+    auto* entry = midend::BasicBlock::Create(context.get(), "entry", func);
+    auto* initLoopBB = midend::BasicBlock::Create(context.get(), "init_loop", func);
+    auto* initCondBB = midend::BasicBlock::Create(context.get(), "init_cond", func);
+    auto* processLoopBB = midend::BasicBlock::Create(context.get(), "process_loop", func);
+    auto* processCondBB = midend::BasicBlock::Create(context.get(), "process_cond", func);
+    auto* finalBB = midend::BasicBlock::Create(context.get(), "final", func);
+
+    midend::IRBuilder builder(context.get());
+
+    // entry块: 初始化
+    builder.setInsertPoint(entry);
+    
+    // 分配数组和各种变量
+    auto* arrayAlloca = builder.createAlloca(arrayType, nullptr, "arr");
+    auto* iAlloca = builder.createAlloca(i32Type, nullptr, "i");
+    auto* sumAlloca = builder.createAlloca(i32Type, nullptr, "sum");
+    auto* tempAlloca = builder.createAlloca(i32Type, nullptr, "temp");
+    auto* maxAlloca = builder.createAlloca(i32Type, nullptr, "max_val");
+
+    // 初始化变量
+    auto* zero = midend::ConstantInt::get(i32Type, 0);
+    auto* one = midend::ConstantInt::get(i32Type, 1);
+    auto* eight = midend::ConstantInt::get(i32Type, 8);
+    auto* minusOne = midend::ConstantInt::get(i32Type, -1);
+
+    builder.createStore(zero, iAlloca);
+    builder.createStore(zero, sumAlloca);
+    builder.createStore(minusOne, maxAlloca);  // 初始最大值为-1
+    builder.createBr(initCondBB);
+
+    // 初始化循环条件检查
+    builder.setInsertPoint(initCondBB);
+    auto* currentI = builder.createLoad(iAlloca, "current_i");
+    auto* initCond = builder.createICmpSLT(currentI, eight, "init_cond");
+    builder.createCondBr(initCond, initLoopBB, processCondBB);
+
+    // 初始化循环体：arr[i] = i * n + (i % 3)
+    builder.setInsertPoint(initLoopBB);
+    currentI = builder.createLoad(iAlloca, "i_for_init");
+    
+    // 计算 i * n
+    auto* iTimesN = builder.createMul(currentI, arg, "i_times_n");
+    
+    // 计算 i % 3
+    auto* three = midend::ConstantInt::get(i32Type, 3);
+    auto* iMod3 = builder.createRem(currentI, three, "i_mod_3");
+    
+    // 计算最终值
+    auto* initValue = builder.createAdd(iTimesN, iMod3, "init_value");
+    
+    // 存储到数组
+    auto* elemPtr = builder.createGEP(arrayType, arrayAlloca, {zero, currentI}, "elem_ptr");
+    builder.createStore(initValue, elemPtr);
+    
+    // i++
+    auto* nextI = builder.createAdd(currentI, one, "next_i");
+    builder.createStore(nextI, iAlloca);
+    builder.createBr(initCondBB);
+
+    // 重置i为0，开始处理循环
+    builder.setInsertPoint(processCondBB);
+    builder.createStore(zero, iAlloca);
+    builder.createBr(processLoopBB);
+
+    // 处理循环体：复杂的数组操作
+    builder.setInsertPoint(processLoopBB);
+    currentI = builder.createLoad(iAlloca, "i_for_process");
+    
+    // 检查循环条件 i < 8
+    auto* processCond = builder.createICmpSLT(currentI, eight, "process_cond");
+    auto* afterLoopBB = midend::BasicBlock::Create(context.get(), "after_loop", func);
+    builder.createCondBr(processCond, afterLoopBB, finalBB);
+
+    builder.setInsertPoint(afterLoopBB);
+    currentI = builder.createLoad(iAlloca, "i_in_process");
+    
+    // 加载当前元素 arr[i]
+    auto* currentElemPtr = builder.createGEP(arrayType, arrayAlloca, {zero, currentI}, "current_elem_ptr");
+    auto* currentElem = builder.createLoad(currentElemPtr, "current_elem");
+    
+    // 更新sum: sum += arr[i]
+    auto* currentSum = builder.createLoad(sumAlloca, "current_sum");
+    auto* newSum = builder.createAdd(currentSum, currentElem, "new_sum");
+    builder.createStore(newSum, sumAlloca);
+    
+    // 更新最大值
+    auto* currentMax = builder.createLoad(maxAlloca, "current_max");
+    auto* isGreater = builder.createICmpSGT(currentElem, currentMax, "is_greater");
+    auto* updateMaxBB = midend::BasicBlock::Create(context.get(), "update_max", func);
+    auto* keepMaxBB = midend::BasicBlock::Create(context.get(), "keep_max", func);
+    auto* afterMaxBB = midend::BasicBlock::Create(context.get(), "after_max", func);
+    
+    builder.createCondBr(isGreater, updateMaxBB, keepMaxBB);
+    
+    // 更新最大值
+    builder.setInsertPoint(updateMaxBB);
+    builder.createStore(currentElem, maxAlloca);
+    builder.createBr(afterMaxBB);
+    
+    // 保持原最大值
+    builder.setInsertPoint(keepMaxBB);
+    builder.createBr(afterMaxBB);
+    
+    // 继续执行
+    builder.setInsertPoint(afterMaxBB);
+    auto* newMax = builder.createLoad(maxAlloca, "new_max");
+    builder.createStore(newMax, maxAlloca);
+    
+    // 如果i是偶数，将arr[i]乘以2
+    auto* two = midend::ConstantInt::get(i32Type, 2);
+    auto* iMod2 = builder.createRem(currentI, two, "i_mod_2");
+    auto* isEven = builder.createICmpEQ(iMod2, zero, "is_even");
+    auto* doubledElem = builder.createMul(currentElem, two, "doubled_elem");
+    auto* evenBB = midend::BasicBlock::Create(context.get(), "even", func);
+    auto* oddBB = midend::BasicBlock::Create(context.get(), "odd", func);
+    auto* afterEvenOddBB = midend::BasicBlock::Create(context.get(), "after_even_odd", func);
+    
+    builder.createCondBr(isEven, evenBB, oddBB);
+    
+    // 偶数情况：元素乘以2
+    builder.setInsertPoint(evenBB);
+    auto* updatedElemEven = doubledElem;
+    builder.createBr(afterEvenOddBB);
+    
+    // 奇数情况：保持原值
+    builder.setInsertPoint(oddBB);
+    auto* updatedElemOdd = currentElem;
+    builder.createBr(afterEvenOddBB);
+    
+    // 合并后继续
+    builder.setInsertPoint(afterEvenOddBB);
+    auto* updatedElem = builder.createPHI(i32Type, "updated_elem");
+    updatedElem->addIncoming(updatedElemEven, evenBB);
+    updatedElem->addIncoming(updatedElemOdd, oddBB);
+    builder.createStore(updatedElem, currentElemPtr);
+    
+    // 如果i > 0，将当前元素与前一个元素交换
+    auto* iPrevious = builder.createSub(currentI, one, "i_previous");
+    auto* hasPrevoius = builder.createICmpSGT(currentI, zero, "has_previous");
+    
+    // 创建条件块进行交换
+    auto* swapBB = midend::BasicBlock::Create(context.get(), "swap", func);
+    auto* noSwapBB = midend::BasicBlock::Create(context.get(), "no_swap", func);
+    auto* afterSwapBB = midend::BasicBlock::Create(context.get(), "after_swap", func);
+    
+    builder.createCondBr(hasPrevoius, swapBB, noSwapBB);
+    
+    // 交换逻辑
+    builder.setInsertPoint(swapBB);
+    auto* prevElemPtr = builder.createGEP(arrayType, arrayAlloca, {zero, iPrevious}, "prev_elem_ptr");
+    auto* currentElemForSwap = builder.createLoad(currentElemPtr, "current_for_swap");
+    auto* prevElem = builder.createLoad(prevElemPtr, "prev_elem");
+    builder.createStore(currentElemForSwap, prevElemPtr);
+    builder.createStore(prevElem, currentElemPtr);
+    builder.createBr(afterSwapBB);
+    
+    // 不交换
+    builder.setInsertPoint(noSwapBB);
+    builder.createBr(afterSwapBB);
+    
+    // 交换后继续
+    builder.setInsertPoint(afterSwapBB);
+    
+    // 存储临时计算结果
+    auto* tempValue = builder.createAdd(currentI, newSum, "temp_value");
+    builder.createStore(tempValue, tempAlloca);
+    
+    // i++
+    nextI = builder.createAdd(currentI, one, "next_i_process");
+    builder.createStore(nextI, iAlloca);
+    builder.createBr(processLoopBB);
+
+    // 最终计算
+    builder.setInsertPoint(finalBB);
+    auto* finalSum = builder.createLoad(sumAlloca, "final_sum");
+    auto* finalMax = builder.createLoad(maxAlloca, "final_max");
+    auto* tempVal = builder.createLoad(tempAlloca, "final_temp");
+    
+    // 计算最终结果: sum + max + temp - n
+    auto* intermediate1 = builder.createAdd(finalSum, finalMax, "intermediate1");
+    auto* intermediate2 = builder.createAdd(intermediate1, tempVal, "intermediate2");
+    auto* result = builder.createSub(intermediate2, arg, "result");
+
+    builder.createRet(result);
+
+    return module;
+}
+
 
 
 }  // namespace testcases
@@ -861,6 +1248,9 @@ TestRunner::TestRunner() {
     testCases_["8_complex_function_call"] = testcases::createComplexFunctionCallTest;
     testCases_["9_small_register_spill"] = testcases::createSmallRegisterSpillTest;
     testCases_["10_big_register_spill"] = testcases::createLargeRegisterSpillTest;
+    testCases_["11_simple_array_1d"] = testcases::createSimpleArray1DTest;
+    testCases_["12_simple_array_2d"] = testcases::createSimpleArray2DTest;
+    testCases_["13_complex_memory_array"] = testcases::createComplexMemoryArrayTest;
 
 }
 

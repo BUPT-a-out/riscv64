@@ -82,6 +82,8 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Instruction* inst,
         case midend::Opcode::Shr:
         case midend::Opcode::ICmpSGT:
         case midend::Opcode::ICmpSLT:
+        case midend::Opcode::ICmpEQ:
+        case midend::Opcode::ICmpNE:
             // 处理算术指令，此处直接生成
             // TODO(rikka): 关于 0, 1, 2^n(左移) 的判断优化等，后期写一个 Pass
             // 来优化
@@ -108,6 +110,9 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Instruction* inst,
             break;
         case midend::Opcode::Call:
             return visitCallInst(inst, parent_bb);
+            break;
+        case midend::Opcode::GetElementPtr:
+            return visitGEPInst(inst, parent_bb);
             break;
         default:
             // 其他指令类型
@@ -147,6 +152,219 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
     parent_bb->addInstruction(std::move(instruction));
 
     return std::make_unique<RegisterOperand>(reg_num, is_virtual);
+}
+
+std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
+    const midend::Instruction* inst, BasicBlock* parent_bb) {
+    if (inst->getOpcode() != midend::Opcode::GetElementPtr) {
+        throw std::runtime_error("Not a GEP instruction: " + inst->toString());
+    }
+
+    const auto* gep_inst = dynamic_cast<const midend::GetElementPtrInst*>(inst);
+    if (gep_inst == nullptr) {
+        throw std::runtime_error("Not a GEP instruction: " + inst->toString());
+    }
+
+    // 获取基地址
+    const auto* base_ptr = gep_inst->getPointerOperand();
+    auto base_addr = visit(base_ptr, parent_bb);
+    if (base_addr->getType() != OperandType::FrameIndex) {
+        throw std::runtime_error(
+            "Base address must be a frame index operand, got: " +
+            base_addr->toString());
+    }
+
+    // 生成 frameaddr 指令来获取基地址
+    auto get_base_addr_inst =
+        std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
+    auto base_addr_reg = codeGen_->allocateReg();
+    get_base_addr_inst->addOperand(std::make_unique<RegisterOperand>(
+        base_addr_reg->getRegNum(), base_addr_reg->isVirtual()));  // rd
+    get_base_addr_inst->addOperand(std::move(base_addr));          // FI
+    parent_bb->addInstruction(std::move(get_base_addr_inst));
+
+    // 计算偏移量
+    if (gep_inst->getNumIndices() > 3) {
+        throw std::runtime_error(
+            "GEP instruction must have <= 3 indices: " + inst->toString() +
+            ", got " + std::to_string(gep_inst->getNumIndices()));
+    }
+
+    // 获取指针指向的类型
+    auto* pointed_type = gep_inst->getSourceElementType();
+
+    // 初始化偏移量为0
+    auto offset_reg = codeGen_->allocateReg();
+    auto li_zero_inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
+    li_zero_inst->addOperand(std::make_unique<RegisterOperand>(
+        offset_reg->getRegNum(), offset_reg->isVirtual()));
+    li_zero_inst->addOperand(std::make_unique<ImmediateOperand>(0));
+    parent_bb->addInstruction(std::move(li_zero_inst));
+
+    // 辅助函数：计算类型的字节大小
+    std::function<size_t(const midend::Type*)> calculateTypeSize = [&](const midend::Type* type) -> size_t {
+        if (type->isPointerType()) {
+            return 8;  // 64位指针
+        } else if (type->isIntegerType()) {
+            return type->getBitWidth() / 8;
+        } else if (type->isArrayType()) {
+            auto* array_type = static_cast<const midend::ArrayType*>(type);
+            auto element_size = calculateTypeSize(array_type->getElementType());
+            return element_size * array_type->getNumElements();
+        } else {
+            return 4;  // 默认大小
+        }
+    };
+
+    // 第一个索引通常是0，用于"穿透"指针，我们可以跳过它
+    // 如果第一个索引不是0，我们需要计算指针本身的偏移
+    auto* current_type = pointed_type;
+
+    for (unsigned i = 0; i < gep_inst->getNumIndices(); ++i) {
+        auto* index_value = gep_inst->getIndex(i);
+        auto index_operand = visit(index_value, parent_bb);
+
+        // 对于第一个索引，如果不是0，需要计算指针偏移
+        if (i == 0) {
+            // 检查是否为常量0，如果是则跳过
+            if (auto* const_int =
+                    midend::dyn_cast<midend::ConstantInt>(index_value)) {
+                if (const_int->getSignedValue() == 0) {
+                    continue;  // 跳过第一个索引为0的情况
+                }
+            }
+
+            // 如果第一个索引不是0，计算指针偏移
+            size_t type_size = calculateTypeSize(current_type);
+
+            // 计算偏移：index * type_size
+            auto index_reg = immToReg(std::move(index_operand), parent_bb);
+            auto size_reg = codeGen_->allocateReg();
+            auto li_size_inst =
+                std::make_unique<Instruction>(Opcode::LI, parent_bb);
+            li_size_inst->addOperand(std::make_unique<RegisterOperand>(
+                size_reg->getRegNum(), size_reg->isVirtual()));
+            li_size_inst->addOperand(
+                std::make_unique<ImmediateOperand>(type_size));
+            parent_bb->addInstruction(std::move(li_size_inst));
+
+            auto mul_reg = codeGen_->allocateReg();
+            auto mul_inst =
+                std::make_unique<Instruction>(Opcode::MUL, parent_bb);
+            mul_inst->addOperand(std::make_unique<RegisterOperand>(
+                mul_reg->getRegNum(), mul_reg->isVirtual()));
+            mul_inst->addOperand(std::move(index_reg));
+            mul_inst->addOperand(std::move(size_reg));
+            parent_bb->addInstruction(std::move(mul_inst));
+
+            // 累加到总偏移量
+            auto new_offset_reg = codeGen_->allocateReg();
+            auto add_inst =
+                std::make_unique<Instruction>(Opcode::ADD, parent_bb);
+            add_inst->addOperand(std::make_unique<RegisterOperand>(
+                new_offset_reg->getRegNum(), new_offset_reg->isVirtual()));
+            add_inst->addOperand(std::make_unique<RegisterOperand>(
+                offset_reg->getRegNum(), offset_reg->isVirtual()));
+            add_inst->addOperand(std::move(mul_reg));
+            parent_bb->addInstruction(std::move(add_inst));
+
+            offset_reg = std::move(new_offset_reg);
+            continue;
+        }
+
+        // 处理第二个及以后的索引
+        if (current_type->isArrayType()) {
+            const auto* array_type =
+                dynamic_cast<const midend::ArrayType*>(current_type);
+
+            // 关键修复：计算当前维度的步长
+            // 步长 = 内层所有维度的元素总大小
+            size_t stride = calculateTypeSize(array_type->getElementType());
+
+            // 计算偏移：index * stride
+            auto index_reg = immToReg(std::move(index_operand), parent_bb);
+
+            std::unique_ptr<RegisterOperand> element_offset_reg;
+            if (stride == 1) {
+                // 如果步长是1，直接使用索引
+                element_offset_reg = std::move(index_reg);
+            } else if ((stride & (stride - 1)) == 0) {
+                // 如果步长是2的幂，使用左移
+                int shift_amount = 0;
+                auto temp = static_cast<unsigned int>(stride);
+                while (temp > 1) {
+                    temp >>= 1;
+                    shift_amount++;
+                }
+
+                element_offset_reg = codeGen_->allocateReg();
+                auto slli_inst =
+                    std::make_unique<Instruction>(Opcode::SLLI, parent_bb);
+                slli_inst->addOperand(std::make_unique<RegisterOperand>(
+                    element_offset_reg->getRegNum(),
+                    element_offset_reg->isVirtual()));
+                slli_inst->addOperand(std::move(index_reg));
+                slli_inst->addOperand(
+                    std::make_unique<ImmediateOperand>(shift_amount));
+                parent_bb->addInstruction(std::move(slli_inst));
+            } else {
+                // 一般情况，使用乘法
+                auto size_reg = codeGen_->allocateReg();
+                auto li_size_inst =
+                    std::make_unique<Instruction>(Opcode::LI, parent_bb);
+                li_size_inst->addOperand(std::make_unique<RegisterOperand>(
+                    size_reg->getRegNum(), size_reg->isVirtual()));
+                li_size_inst->addOperand(
+                    std::make_unique<ImmediateOperand>(stride));
+                parent_bb->addInstruction(std::move(li_size_inst));
+
+                element_offset_reg = codeGen_->allocateReg();
+                auto mul_inst =
+                    std::make_unique<Instruction>(Opcode::MUL, parent_bb);
+                mul_inst->addOperand(std::make_unique<RegisterOperand>(
+                    element_offset_reg->getRegNum(),
+                    element_offset_reg->isVirtual()));
+                mul_inst->addOperand(std::move(index_reg));
+                mul_inst->addOperand(std::move(size_reg));
+                parent_bb->addInstruction(std::move(mul_inst));
+            }
+
+            // 累加到总偏移量
+            auto new_offset_reg = codeGen_->allocateReg();
+            auto add_inst =
+                std::make_unique<Instruction>(Opcode::ADD, parent_bb);
+            add_inst->addOperand(std::make_unique<RegisterOperand>(
+                new_offset_reg->getRegNum(), new_offset_reg->isVirtual()));
+            add_inst->addOperand(std::make_unique<RegisterOperand>(
+                offset_reg->getRegNum(), offset_reg->isVirtual()));
+            add_inst->addOperand(std::move(element_offset_reg));
+            parent_bb->addInstruction(std::move(add_inst));
+
+            offset_reg = std::move(new_offset_reg);
+            current_type = array_type->getElementType();
+        } else {
+            throw std::runtime_error("Unsupported type for GEP indexing: " +
+                                     current_type->toString());
+        }
+    }
+
+    // 计算最终地址：基地址 + 总偏移量
+    auto final_addr_reg = codeGen_->allocateReg();
+    auto final_add_inst = std::make_unique<Instruction>(Opcode::ADD, parent_bb);
+    final_add_inst->addOperand(std::make_unique<RegisterOperand>(
+        final_addr_reg->getRegNum(), final_addr_reg->isVirtual()));
+    final_add_inst->addOperand(std::make_unique<RegisterOperand>(
+        base_addr_reg->getRegNum(), base_addr_reg->isVirtual()));
+    final_add_inst->addOperand(std::make_unique<RegisterOperand>(
+        offset_reg->getRegNum(), offset_reg->isVirtual()));
+    parent_bb->addInstruction(std::move(final_add_inst));
+
+    // 建立GEP指令结果到寄存器的映射
+    codeGen_->mapValueToReg(inst, final_addr_reg->getRegNum(),
+                            final_addr_reg->isVirtual());
+
+    return std::make_unique<RegisterOperand>(final_addr_reg->getRegNum(),
+                                             final_addr_reg->isVirtual());
 }
 
 std::unique_ptr<MachineOperand> Visitor::visitCallInst(
@@ -338,8 +556,23 @@ std::unique_ptr<MachineOperand> Visitor::visitAllocaInst(
     }
 
     // 处理 alloca 指令
-    auto size = alloca_inst->getAllocatedType()->getBitWidth() /
-                8;  // 获取分配的大小（字节）
+    constexpr int BITS_PER_BYTE = 8;
+    auto* allocated_type = alloca_inst->getAllocatedType();
+    auto bit_width = allocated_type->getBitWidth();
+
+    // Handle types that don't have a direct bit width (like pointers)
+    if (bit_width == 0) {
+        // For pointer types or other types without direct bit width, use a
+        // default size
+        if (allocated_type->isPointerType()) {
+            bit_width = 64;  // Assume 64-bit pointers for RISC-V 64
+        } else {
+            // For other types, try to get a reasonable default
+            bit_width = 32;  // Default to 32 bits for unknown types
+        }
+    }
+
+    auto size = bit_width / BITS_PER_BYTE;  // 获取分配的大小（字节）
     if (size == 0) {
         throw std::runtime_error("Invalid alloca size: " +
                                  std::to_string(size));
@@ -363,7 +596,8 @@ std::unique_ptr<MachineOperand> Visitor::visitAllocaInst(
 
     // 为alloca指令本身也建立映射，这样后续引用这个指令时能找到对应的FI
     codeGen_->mapValueToReg(
-        inst, id, false);  // 使用id作为"寄存器号"，false表示这不是真正的寄存器
+        inst, id,
+        false);  // 使用id作为"寄存器号"，false表示这不是真正的寄存器
 
     // 返回分配的FrameIndexOperand
     return std::make_unique<FrameIndexOperand>(id);
@@ -384,50 +618,78 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
 
     const auto* store_inst = dynamic_cast<const midend::StoreInst*>(inst);
 
-    // 获取存储的值和目标地址
+    // 获取存储的值
     auto value_operand =
         immToReg(visit(store_inst->getValueOperand(), parent_bb), parent_bb);
 
-    // 获取指针操作数，应该是一个alloca指令的结果
+    // 获取指针操作数
     auto* pointer_operand = store_inst->getPointerOperand();
 
-    // 查找对应的FrameIndex
-    auto* sfm = parent_bb->getParent()->getStackFrameManager();
-    int frame_id = sfm->getAllocaStackSlotId(pointer_operand);
+    // 处理指针操作数 - 可能是 alloca 指令或者 GEP 指令
+    if (auto* alloca_inst =
+            midend::dyn_cast<midend::AllocaInst>(pointer_operand)) {
+        // 直接是 alloca 指令
+        auto* sfm = parent_bb->getParent()->getStackFrameManager();
+        int frame_id = sfm->getAllocaStackSlotId(alloca_inst);
 
-    if (frame_id == -1) {
-        // 如果没有找到映射，可能是因为指针操作数本身就是一个alloca指令
-        if (auto* alloca_inst =
-                midend::dyn_cast<midend::AllocaInst>(pointer_operand)) {
-            // 处理这个alloca指令
+        if (frame_id == -1) {
+            // 如果还没有为这个alloca分配FI，现在分配
             visitAllocaInst(alloca_inst, parent_bb);
-            frame_id = sfm->getAllocaStackSlotId(pointer_operand);
+            frame_id = sfm->getAllocaStackSlotId(alloca_inst);
         }
 
         if (frame_id == -1) {
             throw std::runtime_error(
-                "Cannot find frame index for pointer operand in store "
-                "instruction");
+                "Cannot find frame index for alloca instruction in store");
         }
+
+        // 生成frameaddr指令来获取栈地址
+        auto frame_addr_reg = codeGen_->allocateReg();
+        auto store_frame_addr_inst =
+            std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
+        store_frame_addr_inst->addOperand(std::make_unique<RegisterOperand>(
+            frame_addr_reg->getRegNum(), frame_addr_reg->isVirtual()));  // rd
+        store_frame_addr_inst->addOperand(
+            std::make_unique<FrameIndexOperand>(frame_id));  // FI
+        parent_bb->addInstruction(std::move(store_frame_addr_inst));
+
+        // 生成存储指令
+        auto sw_inst = std::make_unique<Instruction>(Opcode::SW, parent_bb);
+        sw_inst->addOperand(std::move(value_operand));  // source register
+        sw_inst->addOperand(std::make_unique<MemoryOperand>(
+            std::move(frame_addr_reg),
+            std::make_unique<ImmediateOperand>(0)));  // memory address
+        parent_bb->addInstruction(std::move(sw_inst));
+
+    } else if (auto* gep_inst = midend::dyn_cast<midend::GetElementPtrInst>(
+                   pointer_operand)) {
+        // 是 GEP 指令的结果
+        // 访问 GEP 指令，它会返回计算出的地址寄存器
+        auto address_operand = visit(gep_inst, parent_bb);
+
+        // address_operand 应该是一个寄存器操作数，包含计算出的地址
+        auto* address_reg =
+            dynamic_cast<RegisterOperand*>(address_operand.get());
+        if (address_reg == nullptr) {
+            throw std::runtime_error(
+                "GEP instruction should return a register operand");
+        }
+
+        // 生成存储指令，直接使用 GEP 计算出的地址
+        auto sw_inst = std::make_unique<Instruction>(Opcode::SW, parent_bb);
+        sw_inst->addOperand(std::move(value_operand));  // source register
+        sw_inst->addOperand(std::make_unique<MemoryOperand>(
+            std::make_unique<RegisterOperand>(address_reg->getRegNum(),
+                                              address_reg->isVirtual()),
+            std::make_unique<ImmediateOperand>(0)));  // memory address
+        parent_bb->addInstruction(std::move(sw_inst));
+
+    } else {
+        // 其他类型的指针操作数
+        throw std::runtime_error(
+            "Unsupported pointer operand type in store instruction: " +
+            pointer_operand->toString());
     }
-
-    // 生成frameaddr指令来获取栈地址
-    auto frame_addr_reg = codeGen_->allocateReg();
-    auto store_frame_addr_inst =
-        std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
-    store_frame_addr_inst->addOperand(std::make_unique<RegisterOperand>(
-        frame_addr_reg->getRegNum(), frame_addr_reg->isVirtual()));  // rd
-    store_frame_addr_inst->addOperand(
-        std::make_unique<FrameIndexOperand>(frame_id));  // FI
-    parent_bb->addInstruction(std::move(store_frame_addr_inst));
-
-    // 生成存储指令
-    auto sw_inst = std::make_unique<Instruction>(Opcode::SW, parent_bb);
-    sw_inst->addOperand(std::move(value_operand));  // source register
-    sw_inst->addOperand(std::make_unique<MemoryOperand>(
-        std::move(frame_addr_reg),
-        std::make_unique<ImmediateOperand>(0)));  // memory address
-    parent_bb->addInstruction(std::move(sw_inst));
 }
 
 // 处理 load 指令
@@ -447,47 +709,92 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
     // 获取指针操作数
     auto* pointer_operand = load_inst->getPointerOperand();
 
-    // 查找对应的FrameIndex
-    auto* sfm = parent_bb->getParent()->getStackFrameManager();
-    int frame_id = sfm->getAllocaStackSlotId(pointer_operand);
+    // 处理指针操作数 - 可能是 alloca 指令或者 GEP 指令
+    if (auto* alloca_inst =
+            midend::dyn_cast<midend::AllocaInst>(pointer_operand)) {
+        // 直接是 alloca 指令
+        auto* sfm = parent_bb->getParent()->getStackFrameManager();
+        int frame_id = sfm->getAllocaStackSlotId(alloca_inst);
 
-    if (frame_id == -1) {
+        if (frame_id == -1) {
+            throw std::runtime_error(
+                "Cannot find frame index for alloca instruction in load");
+        }
+
+        // 生成frameaddr指令来获取栈地址
+        auto frame_addr_reg = codeGen_->allocateReg();
+        auto load_frame_addr_inst =
+            std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
+        load_frame_addr_inst->addOperand(std::make_unique<RegisterOperand>(
+            frame_addr_reg->getRegNum(), frame_addr_reg->isVirtual()));  // rd
+        load_frame_addr_inst->addOperand(
+            std::make_unique<FrameIndexOperand>(frame_id));  // FI
+        parent_bb->addInstruction(std::move(load_frame_addr_inst));
+
+        // 加载到新的寄存器
+        auto new_reg = codeGen_->allocateReg();
+        auto load_inst_ptr =
+            std::make_unique<Instruction>(Opcode::LW, parent_bb);
+        load_inst_ptr->addOperand(std::make_unique<RegisterOperand>(
+            new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+        load_inst_ptr->addOperand(std::make_unique<MemoryOperand>(
+            std::move(frame_addr_reg),
+            std::make_unique<ImmediateOperand>(0)));  // memory address
+        parent_bb->addInstruction(std::move(load_inst_ptr));
+
+        // 建立load指令结果值到寄存器的映射
+        codeGen_->mapValueToReg(inst, new_reg->getRegNum(),
+                                new_reg->isVirtual());
+
+        return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                                 new_reg->isVirtual());
+
+    } else if (auto* gep_inst = midend::dyn_cast<midend::GetElementPtrInst>(
+                   pointer_operand)) {
+        // 是 GEP 指令的结果
+        // 访问 GEP 指令，它会返回计算出的地址寄存器
+        auto address_operand = visit(gep_inst, parent_bb);
+
+        // address_operand 应该是一个寄存器操作数，包含计算出的地址
+        auto* address_reg =
+            dynamic_cast<RegisterOperand*>(address_operand.get());
+        if (address_reg == nullptr) {
+            throw std::runtime_error(
+                "GEP instruction should return a register operand");
+        }
+
+        // 加载到新的寄存器
+        auto new_reg = codeGen_->allocateReg();
+        auto load_inst_ptr =
+            std::make_unique<Instruction>(Opcode::LW, parent_bb);
+        load_inst_ptr->addOperand(std::make_unique<RegisterOperand>(
+            new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+        load_inst_ptr->addOperand(std::make_unique<MemoryOperand>(
+            std::make_unique<RegisterOperand>(address_reg->getRegNum(),
+                                              address_reg->isVirtual()),
+            std::make_unique<ImmediateOperand>(0)));  // memory address
+        parent_bb->addInstruction(std::move(load_inst_ptr));
+
+        // 建立load指令结果值到寄存器的映射
+        codeGen_->mapValueToReg(inst, new_reg->getRegNum(),
+                                new_reg->isVirtual());
+
+        return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                                 new_reg->isVirtual());
+
+    } else {
+        // 其他类型的指针操作数
         throw std::runtime_error(
-            "Cannot find frame index for pointer operand in load instruction");
+            "Unsupported pointer operand type in load instruction: " +
+            pointer_operand->toString());
     }
-
-    // 生成frameaddr指令来获取栈地址
-    auto frame_addr_reg = codeGen_->allocateReg();
-    auto store_frame_addr_inst =
-        std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
-    store_frame_addr_inst->addOperand(std::make_unique<RegisterOperand>(
-        frame_addr_reg->getRegNum(), frame_addr_reg->isVirtual()));  // rd
-    store_frame_addr_inst->addOperand(
-        std::make_unique<FrameIndexOperand>(frame_id));  // FI
-    parent_bb->addInstruction(std::move(store_frame_addr_inst));
-
-    // 加载到新的寄存器
-    auto new_reg = codeGen_->allocateReg();
-    auto load_inst_ptr = std::make_unique<Instruction>(Opcode::LW, parent_bb);
-    load_inst_ptr->addOperand(std::make_unique<RegisterOperand>(
-        new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-    load_inst_ptr->addOperand(std::make_unique<MemoryOperand>(
-        std::move(frame_addr_reg),
-        std::make_unique<ImmediateOperand>(0)));  // memory address
-    parent_bb->addInstruction(std::move(load_inst_ptr));
-
-    // 建立load指令结果值到寄存器的映射
-    codeGen_->mapValueToReg(inst, new_reg->getRegNum(), new_reg->isVirtual());
-
-    return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
-                                             new_reg->isVirtual());
 }
 
 // 处理二元运算指令
-// Handles binary operation instructions by generating the appropriate RISC-V
-// instructions for the given midend instruction, allocating registers as
-// needed, and returning the result operand. Supports constant folding for
-// immediate operands and maps the result to a register.
+// Handles binary operation instructions by generating the appropriate
+// RISC-V instructions for the given midend instruction, allocating
+// registers as needed, and returning the result operand. Supports constant
+// folding for immediate operands and maps the result to a register.
 std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
     const midend::Instruction* inst, BasicBlock* parent_bb) {
     if (!inst->isBinaryOp() && !inst->isComparison()) {
@@ -551,7 +858,8 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 instruction->addOperand(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
                 instruction->addOperand(std::make_unique<RegisterOperand>(
-                    reg_operand->getRegNum(), new_reg->isVirtual()));  // rs1
+                    reg_operand->getRegNum(),
+                    new_reg->isVirtual()));  // rs1
                 instruction->addOperand(std::make_unique<ImmediateOperand>(
                     imm_operand->getValue()));  // imm
 
@@ -646,6 +954,101 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             break;
         }
 
+        case midend::Opcode::Rem: {
+            // 处理取模操作
+            if ((lhs->getType() == OperandType::Immediate) &&
+                (rhs->getType() == OperandType::Immediate)) {
+                auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
+                auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                if (rhs_imm->getValue() == 0) {
+                    throw std::runtime_error(
+                        "Division by zero in modulo operation");
+                }
+                return std::make_unique<ImmediateOperand>(lhs_imm->getValue() %
+                                                          rhs_imm->getValue());
+            }
+
+            auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+            auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+            new_reg = codeGen_->allocateReg();
+            auto instruction =
+                std::make_unique<Instruction>(Opcode::REM, parent_bb);
+            instruction->addOperand(std::make_unique<RegisterOperand>(
+                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+            instruction->addOperand(std::move(lhs_reg));       // rs1
+            instruction->addOperand(std::move(rhs_reg));       // rs2
+
+            parent_bb->addInstruction(std::move(instruction));
+            break;
+        }
+
+        case midend::Opcode::ICmpEQ: {
+            // 处理相等比较
+            if ((lhs->getType() == OperandType::Immediate) &&
+                (rhs->getType() == OperandType::Immediate)) {
+                auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
+                auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                return std::make_unique<ImmediateOperand>(
+                    lhs_imm->getValue() == rhs_imm->getValue() ? 1 : 0);
+            }
+
+            auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+            auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+            // 使用 xor 指令计算差值，然后用 seqz 指令检查是否为0
+            auto xor_reg = codeGen_->allocateReg();
+            auto xor_inst =
+                std::make_unique<Instruction>(Opcode::XOR, parent_bb);
+            xor_inst->addOperand(std::make_unique<RegisterOperand>(
+                xor_reg->getRegNum(), xor_reg->isVirtual()));  // rd
+            xor_inst->addOperand(std::move(lhs_reg));          // rs1
+            xor_inst->addOperand(std::move(rhs_reg));          // rs2
+            parent_bb->addInstruction(std::move(xor_inst));
+
+            new_reg = codeGen_->allocateReg();
+            auto seqz_inst =
+                std::make_unique<Instruction>(Opcode::SEQZ, parent_bb);
+            seqz_inst->addOperand(std::make_unique<RegisterOperand>(
+                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+            seqz_inst->addOperand(std::move(xor_reg));         // rs1
+            parent_bb->addInstruction(std::move(seqz_inst));
+            break;
+        }
+
+        case midend::Opcode::ICmpNE: {
+            // 处理不等比较
+            if ((lhs->getType() == OperandType::Immediate) &&
+                (rhs->getType() == OperandType::Immediate)) {
+                auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
+                auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                return std::make_unique<ImmediateOperand>(
+                    lhs_imm->getValue() != rhs_imm->getValue() ? 1 : 0);
+            }
+
+            auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+            auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+            // 使用 xor 指令计算差值，然后用 snez 指令检查是否非0
+            auto xor_reg = codeGen_->allocateReg();
+            auto xor_inst =
+                std::make_unique<Instruction>(Opcode::XOR, parent_bb);
+            xor_inst->addOperand(std::make_unique<RegisterOperand>(
+                xor_reg->getRegNum(), xor_reg->isVirtual()));  // rd
+            xor_inst->addOperand(std::move(lhs_reg));          // rs1
+            xor_inst->addOperand(std::move(rhs_reg));          // rs2
+            parent_bb->addInstruction(std::move(xor_inst));
+
+            new_reg = codeGen_->allocateReg();
+            auto snez_inst =
+                std::make_unique<Instruction>(Opcode::SNEZ, parent_bb);
+            snez_inst->addOperand(std::make_unique<RegisterOperand>(
+                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+            snez_inst->addOperand(std::move(xor_reg));         // rs1
+            parent_bb->addInstruction(std::move(snez_inst));
+            break;
+        }
+
         case midend::Opcode::ICmpSLT: {
             // 处理有符号小于比较
             if ((lhs->getType() == OperandType::Immediate) &&
@@ -733,7 +1136,8 @@ void Visitor::storeOperandToReg(
 
                 inst->addOperand(std::move(dest_reg));  // rd
                 inst->addOperand(std::make_unique<RegisterOperand>(
-                    reg_source->getRegNum(), reg_source->isVirtual()));  // rs
+                    reg_source->getRegNum(),
+                    reg_source->isVirtual()));  // rs
                 parent_bb->insert(insert_pos, std::move(inst));
                 break;
             }
@@ -799,6 +1203,14 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
     // 检查是否已经处理过该值
     const auto foundReg = findRegForValue(value);
     if (foundReg.has_value()) {
+        // 对于alloca指令，即使已经处理过，如果它被用作指针，也应该返回FrameIndex
+        if (auto* alloca_inst = midend::dyn_cast<midend::AllocaInst>(value)) {
+            auto* sfm = parent_bb->getParent()->getStackFrameManager();
+            int frame_id = sfm->getAllocaStackSlotId(alloca_inst);
+            if (frame_id != -1) {
+                return std::make_unique<FrameIndexOperand>(frame_id);
+            }
+        }
         // 直接使用找到的寄存器操作数
         return std::make_unique<RegisterOperand>(foundReg.value()->getRegNum(),
                                                  foundReg.value()->isVirtual());
@@ -866,6 +1278,18 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         if (frame_id != -1) {
             return std::make_unique<FrameIndexOperand>(frame_id);
         }
+    }
+
+    // 检查是否是指针类型
+    if (value->getType()->isPointerType()) {
+        // 如果是指针类型，可能是一个alloca指令的结果
+        if (const auto* alloca_inst =
+                midend::dyn_cast<midend::AllocaInst>(value)) {
+            return visitAllocaInst(alloca_inst, parent_bb);
+        }
+        // 其他指针类型的处理（如全局变量等）
+        throw std::runtime_error("Pointer type not handled: " +
+                                 value->toString());
     }
 
     throw std::runtime_error(
