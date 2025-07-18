@@ -111,6 +111,9 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Instruction* inst,
         case midend::Opcode::Call:
             return visitCallInst(inst, parent_bb);
             break;
+        case midend::Opcode::GetElementPtr:
+            return visitGEPInst(inst, parent_bb);
+            break;
         default:
             // 其他指令类型
             throw std::runtime_error("Unsupported instruction: " +
@@ -149,6 +152,219 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
     parent_bb->addInstruction(std::move(instruction));
 
     return std::make_unique<RegisterOperand>(reg_num, is_virtual);
+}
+
+std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
+    const midend::Instruction* inst, BasicBlock* parent_bb) {
+    if (inst->getOpcode() != midend::Opcode::GetElementPtr) {
+        throw std::runtime_error("Not a GEP instruction: " + inst->toString());
+    }
+
+    const auto* gep_inst = dynamic_cast<const midend::GetElementPtrInst*>(inst);
+    if (gep_inst == nullptr) {
+        throw std::runtime_error("Not a GEP instruction: " + inst->toString());
+    }
+
+    // 获取基地址
+    const auto* base_ptr = gep_inst->getPointerOperand();
+    auto base_addr = visit(base_ptr, parent_bb);
+    if (base_addr->getType() != OperandType::FrameIndex) {
+        throw std::runtime_error(
+            "Base address must be a frame index operand, got: " +
+            base_addr->toString());
+    }
+
+    // 生成 frameaddr 指令来获取基地址
+    auto get_base_addr_inst =
+        std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
+    auto base_addr_reg = codeGen_->allocateReg();
+    get_base_addr_inst->addOperand(std::make_unique<RegisterOperand>(
+        base_addr_reg->getRegNum(), base_addr_reg->isVirtual()));  // rd
+    get_base_addr_inst->addOperand(std::move(base_addr));          // FI
+    parent_bb->addInstruction(std::move(get_base_addr_inst));
+
+    // 计算偏移量
+    if (gep_inst->getNumIndices() > 3) {
+        throw std::runtime_error(
+            "GEP instruction must have <= 3 indices: " + inst->toString() +
+            ", got " + std::to_string(gep_inst->getNumIndices()));
+    }
+
+    // 获取指针指向的类型
+    auto* pointed_type = gep_inst->getSourceElementType();
+
+    // 初始化偏移量为0
+    auto offset_reg = codeGen_->allocateReg();
+    auto li_zero_inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
+    li_zero_inst->addOperand(std::make_unique<RegisterOperand>(
+        offset_reg->getRegNum(), offset_reg->isVirtual()));
+    li_zero_inst->addOperand(std::make_unique<ImmediateOperand>(0));
+    parent_bb->addInstruction(std::move(li_zero_inst));
+
+    // 辅助函数：计算类型的字节大小
+    std::function<size_t(const midend::Type*)> calculateTypeSize = [&](const midend::Type* type) -> size_t {
+        if (type->isPointerType()) {
+            return 8;  // 64位指针
+        } else if (type->isIntegerType()) {
+            return type->getBitWidth() / 8;
+        } else if (type->isArrayType()) {
+            auto* array_type = static_cast<const midend::ArrayType*>(type);
+            auto element_size = calculateTypeSize(array_type->getElementType());
+            return element_size * array_type->getNumElements();
+        } else {
+            return 4;  // 默认大小
+        }
+    };
+
+    // 第一个索引通常是0，用于"穿透"指针，我们可以跳过它
+    // 如果第一个索引不是0，我们需要计算指针本身的偏移
+    auto* current_type = pointed_type;
+
+    for (unsigned i = 0; i < gep_inst->getNumIndices(); ++i) {
+        auto* index_value = gep_inst->getIndex(i);
+        auto index_operand = visit(index_value, parent_bb);
+
+        // 对于第一个索引，如果不是0，需要计算指针偏移
+        if (i == 0) {
+            // 检查是否为常量0，如果是则跳过
+            if (auto* const_int =
+                    midend::dyn_cast<midend::ConstantInt>(index_value)) {
+                if (const_int->getSignedValue() == 0) {
+                    continue;  // 跳过第一个索引为0的情况
+                }
+            }
+
+            // 如果第一个索引不是0，计算指针偏移
+            size_t type_size = calculateTypeSize(current_type);
+
+            // 计算偏移：index * type_size
+            auto index_reg = immToReg(std::move(index_operand), parent_bb);
+            auto size_reg = codeGen_->allocateReg();
+            auto li_size_inst =
+                std::make_unique<Instruction>(Opcode::LI, parent_bb);
+            li_size_inst->addOperand(std::make_unique<RegisterOperand>(
+                size_reg->getRegNum(), size_reg->isVirtual()));
+            li_size_inst->addOperand(
+                std::make_unique<ImmediateOperand>(type_size));
+            parent_bb->addInstruction(std::move(li_size_inst));
+
+            auto mul_reg = codeGen_->allocateReg();
+            auto mul_inst =
+                std::make_unique<Instruction>(Opcode::MUL, parent_bb);
+            mul_inst->addOperand(std::make_unique<RegisterOperand>(
+                mul_reg->getRegNum(), mul_reg->isVirtual()));
+            mul_inst->addOperand(std::move(index_reg));
+            mul_inst->addOperand(std::move(size_reg));
+            parent_bb->addInstruction(std::move(mul_inst));
+
+            // 累加到总偏移量
+            auto new_offset_reg = codeGen_->allocateReg();
+            auto add_inst =
+                std::make_unique<Instruction>(Opcode::ADD, parent_bb);
+            add_inst->addOperand(std::make_unique<RegisterOperand>(
+                new_offset_reg->getRegNum(), new_offset_reg->isVirtual()));
+            add_inst->addOperand(std::make_unique<RegisterOperand>(
+                offset_reg->getRegNum(), offset_reg->isVirtual()));
+            add_inst->addOperand(std::move(mul_reg));
+            parent_bb->addInstruction(std::move(add_inst));
+
+            offset_reg = std::move(new_offset_reg);
+            continue;
+        }
+
+        // 处理第二个及以后的索引
+        if (current_type->isArrayType()) {
+            const auto* array_type =
+                dynamic_cast<const midend::ArrayType*>(current_type);
+
+            // 关键修复：计算当前维度的步长
+            // 步长 = 内层所有维度的元素总大小
+            size_t stride = calculateTypeSize(array_type->getElementType());
+
+            // 计算偏移：index * stride
+            auto index_reg = immToReg(std::move(index_operand), parent_bb);
+
+            std::unique_ptr<RegisterOperand> element_offset_reg;
+            if (stride == 1) {
+                // 如果步长是1，直接使用索引
+                element_offset_reg = std::move(index_reg);
+            } else if ((stride & (stride - 1)) == 0) {
+                // 如果步长是2的幂，使用左移
+                int shift_amount = 0;
+                auto temp = static_cast<unsigned int>(stride);
+                while (temp > 1) {
+                    temp >>= 1;
+                    shift_amount++;
+                }
+
+                element_offset_reg = codeGen_->allocateReg();
+                auto slli_inst =
+                    std::make_unique<Instruction>(Opcode::SLLI, parent_bb);
+                slli_inst->addOperand(std::make_unique<RegisterOperand>(
+                    element_offset_reg->getRegNum(),
+                    element_offset_reg->isVirtual()));
+                slli_inst->addOperand(std::move(index_reg));
+                slli_inst->addOperand(
+                    std::make_unique<ImmediateOperand>(shift_amount));
+                parent_bb->addInstruction(std::move(slli_inst));
+            } else {
+                // 一般情况，使用乘法
+                auto size_reg = codeGen_->allocateReg();
+                auto li_size_inst =
+                    std::make_unique<Instruction>(Opcode::LI, parent_bb);
+                li_size_inst->addOperand(std::make_unique<RegisterOperand>(
+                    size_reg->getRegNum(), size_reg->isVirtual()));
+                li_size_inst->addOperand(
+                    std::make_unique<ImmediateOperand>(stride));
+                parent_bb->addInstruction(std::move(li_size_inst));
+
+                element_offset_reg = codeGen_->allocateReg();
+                auto mul_inst =
+                    std::make_unique<Instruction>(Opcode::MUL, parent_bb);
+                mul_inst->addOperand(std::make_unique<RegisterOperand>(
+                    element_offset_reg->getRegNum(),
+                    element_offset_reg->isVirtual()));
+                mul_inst->addOperand(std::move(index_reg));
+                mul_inst->addOperand(std::move(size_reg));
+                parent_bb->addInstruction(std::move(mul_inst));
+            }
+
+            // 累加到总偏移量
+            auto new_offset_reg = codeGen_->allocateReg();
+            auto add_inst =
+                std::make_unique<Instruction>(Opcode::ADD, parent_bb);
+            add_inst->addOperand(std::make_unique<RegisterOperand>(
+                new_offset_reg->getRegNum(), new_offset_reg->isVirtual()));
+            add_inst->addOperand(std::make_unique<RegisterOperand>(
+                offset_reg->getRegNum(), offset_reg->isVirtual()));
+            add_inst->addOperand(std::move(element_offset_reg));
+            parent_bb->addInstruction(std::move(add_inst));
+
+            offset_reg = std::move(new_offset_reg);
+            current_type = array_type->getElementType();
+        } else {
+            throw std::runtime_error("Unsupported type for GEP indexing: " +
+                                     current_type->toString());
+        }
+    }
+
+    // 计算最终地址：基地址 + 总偏移量
+    auto final_addr_reg = codeGen_->allocateReg();
+    auto final_add_inst = std::make_unique<Instruction>(Opcode::ADD, parent_bb);
+    final_add_inst->addOperand(std::make_unique<RegisterOperand>(
+        final_addr_reg->getRegNum(), final_addr_reg->isVirtual()));
+    final_add_inst->addOperand(std::make_unique<RegisterOperand>(
+        base_addr_reg->getRegNum(), base_addr_reg->isVirtual()));
+    final_add_inst->addOperand(std::make_unique<RegisterOperand>(
+        offset_reg->getRegNum(), offset_reg->isVirtual()));
+    parent_bb->addInstruction(std::move(final_add_inst));
+
+    // 建立GEP指令结果到寄存器的映射
+    codeGen_->mapValueToReg(inst, final_addr_reg->getRegNum(),
+                            final_addr_reg->isVirtual());
+
+    return std::make_unique<RegisterOperand>(final_addr_reg->getRegNum(),
+                                             final_addr_reg->isVirtual());
 }
 
 std::unique_ptr<MachineOperand> Visitor::visitCallInst(
