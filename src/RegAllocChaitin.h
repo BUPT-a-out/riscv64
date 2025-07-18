@@ -82,7 +82,7 @@ class RegAllocChaitin {
     int getCachedDegree(unsigned reg);
     void clearDegreeCache() { degreeCache.clear(); }
 
-    unsigned nextTempReg = 1000;  // 临时寄存器起始编号
+    unsigned nextTempReg = 1000;  // 临时寄存器起始编号 TODO: make it big enough
     unsigned createTempReg() { return nextTempReg++; }
 
    public:
