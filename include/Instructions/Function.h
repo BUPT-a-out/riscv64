@@ -46,7 +46,16 @@ class Function {
     bool empty() const { return basic_blocks.empty(); }
     const std::string& getName() const { return name; }
 
-    BasicBlock* getEntryBlock() const;
+    BasicBlock* getEntryBlock() const {
+        auto it = std::find_if(
+            basic_blocks.begin(), basic_blocks.end(),
+            [](const auto& block) { return block->getLabel() == "entry"; });
+        if (it != basic_blocks.end()) {
+            // std::cout << "Found entry block: " << (*it)->getLabel() << std::endl;
+            return it->get();
+        }
+        return nullptr;
+    }
 
     auto getPostOrder() {
         std::vector<BasicBlock*> postOrder;
