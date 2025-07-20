@@ -104,7 +104,9 @@ void Visitor::createCFG(Function* func) {
                 }
 
                 case Opcode::BNEZ:
-                case Opcode::BEQZ: {
+                case Opcode::BEQZ:
+                case Opcode::BLEZ:
+                case Opcode::BGEZ: {
                     // 条件跳转，取第 1 个操作数作为条件，第 2
                     // 个操作数作为目标基本块
                     auto* condition =
@@ -122,6 +124,39 @@ void Visitor::createCFG(Function* func) {
                             "No basic block found for label: " +
                             target->getLabelName());
                     }
+                    bb->addSuccessor(successor);
+                    successor->addPredecessor(bb.get());
+                    break;
+                }
+
+                case Opcode::BEQ:
+                case Opcode::BNE:
+                case Opcode::BLT:
+                case Opcode::BGE:
+                case Opcode::BLTU:
+                case Opcode::BGEU:
+                case Opcode::BGT:
+                case Opcode::BLE:
+                case Opcode::BGTU:
+                case Opcode::BLEU: {
+                    // 第 1 和 2 个操作数为比较对象，第 3 个为跳转目标
+                    auto* lhs =
+                        dynamic_cast<RegisterOperand*>(inst->getOperand(0));
+                    auto* rhs =
+                        dynamic_cast<RegisterOperand*>(inst->getOperand(1));
+                    auto* target =
+                        dynamic_cast<LabelOperand*>(inst->getOperand(2));
+                    if (lhs == nullptr || rhs == nullptr || target == nullptr) {
+                        throw std::runtime_error(
+                            "Invalid operands for conditional branch");
+                    }
+                    successor = getBBForLabel(target->getLabelName(), func);
+                    if (successor == nullptr) {
+                        throw std::runtime_error(
+                            "No basic block found for label: " +
+                            target->getLabelName());
+                    }
+                    
                     bb->addSuccessor(successor);
                     successor->addPredecessor(bb.get());
                     break;
