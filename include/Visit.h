@@ -58,6 +58,8 @@ class Visitor {
 
     void assignVirtRegsToFuncArgs(midend::Function* func);
 
+    void createCFG(Function* func);
+
     void visit(const midend::Constant* constant);
     void visit(const midend::GlobalVariable* var);
 

@@ -1,11 +1,11 @@
 #include "Visit.h"
 
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <optional>
 #include <ostream>
 #include <stdexcept>
-#include <functional>
 
 #include "ABI.h"
 #include "CodeGen.h"
@@ -45,6 +45,93 @@ void Visitor::visit(const midend::Function* func, Module* parent_module) {
 
     for (const auto& bb : *func) {
         visit(bb, func_ptr);
+    }
+
+    // 此时 func_ptr 已经包含了所有基本块，开始维护 CFG
+    createCFG(func_ptr);
+    // 调试：打印出 CFG 信息
+    std::cout << "Function: " << func_ptr->getName() << "\n";
+    for (const auto& bb : *func_ptr) {
+        std::cout << "  BasicBlock: " << bb->getLabel() << "\n";
+        std::cout << "    Successors: ";
+        for (const auto* succ : bb->getSuccessors()) {
+            std::cout << succ->getLabel() << " ";
+        }
+        std::cout << "\n    Predecessors: ";
+        for (const auto* pred : bb->getPredecessors()) {
+            std::cout << pred->getLabel() << " ";
+        }
+        std::cout << "\n";
+    }
+}
+
+BasicBlock* getBBForLabel(const std::string& label, Function* func) {
+    for (const auto& bb : *func) {
+        if (bb->getLabel() == label) {
+            return bb.get();
+        }
+    }
+    throw std::runtime_error("No basic block found for label: " + label);
+}
+
+void Visitor::createCFG(Function* func) {
+    // 创建基本块之间的控制流图
+    for (const auto& bb : *func) {
+        for (const auto& inst : *bb) {
+            BasicBlock* successor = nullptr;
+            BasicBlock* predecessor = nullptr;
+            switch (inst->getOpcode()) {
+                case Opcode::J: {
+                    // 无条件跳转，取第 1 个操作数作为目标基本块
+                    auto* target =
+                        dynamic_cast<LabelOperand*>(inst->getOperand(0));
+                    if (target == nullptr) {
+                        throw std::runtime_error(
+                            "Invalid target for unconditional jump");
+                    }
+
+                    successor = getBBForLabel(
+                        target->getLabelName(),
+                        func);  // TODO(rikka): 这里或许会有重名的问题
+                    if (successor == nullptr) {
+                        throw std::runtime_error(
+                            "No basic block found for label: " +
+                            target->getLabelName());
+                    }
+                    bb->addSuccessor(successor);
+                    successor->addPredecessor(bb.get());
+                    break;
+                }
+
+                case Opcode::BNEZ:
+                case Opcode::BEQZ: {
+                    // 条件跳转，取第 1 个操作数作为条件，第 2
+                    // 个操作数作为目标基本块
+                    auto* condition =
+                        dynamic_cast<RegisterOperand*>(inst->getOperand(0));
+                    auto* target =
+                        dynamic_cast<LabelOperand*>(inst->getOperand(1));
+                    if (condition == nullptr || target == nullptr) {
+                        throw std::runtime_error(
+                            "Invalid operands for conditional branch");
+                    }
+
+                    successor = getBBForLabel(target->getLabelName(), func);
+                    if (successor == nullptr) {
+                        throw std::runtime_error(
+                            "No basic block found for label: " +
+                            target->getLabelName());
+                    }
+                    bb->addSuccessor(successor);
+                    successor->addPredecessor(bb.get());
+                    break;
+                }
+
+                default:
+                    // 对于其他指令，没有跳转目标
+                    break;
+            }
+        }
     }
 }
 
@@ -203,7 +290,8 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
     parent_bb->addInstruction(std::move(li_zero_inst));
 
     // 辅助函数：计算类型的字节大小
-    std::function<size_t(const midend::Type*)> calculateTypeSize = [&](const midend::Type* type) -> size_t {
+    std::function<size_t(const midend::Type*)> calculateTypeSize =
+        [&](const midend::Type* type) -> size_t {
         if (type->isPointerType()) {
             return 8;  // 64位指针
         } else if (type->isIntegerType()) {
