@@ -790,7 +790,7 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
                 "Cannot find frame index for alloca instruction in store");
         }
 
-        // 生成frameaddr指令来获取栈地址
+        // 生成frameaddr指令来获取栈地址（每次都使用新的寄存器）
         auto frame_addr_reg = codeGen_->allocateReg();
         auto store_frame_addr_inst =
             std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
@@ -804,7 +804,8 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
         auto sw_inst = std::make_unique<Instruction>(Opcode::SW, parent_bb);
         sw_inst->addOperand(std::move(value_operand));  // source register
         sw_inst->addOperand(std::make_unique<MemoryOperand>(
-            std::move(frame_addr_reg),
+            std::make_unique<RegisterOperand>(frame_addr_reg->getRegNum(),
+                                              frame_addr_reg->isVirtual()),
             std::make_unique<ImmediateOperand>(0)));  // memory address
         parent_bb->addInstruction(std::move(sw_inst));
 
@@ -868,7 +869,7 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
                 "Cannot find frame index for alloca instruction in load");
         }
 
-        // 生成frameaddr指令来获取栈地址
+        // 生成frameaddr指令来获取栈地址（每次都使用新的寄存器）
         auto frame_addr_reg = codeGen_->allocateReg();
         auto load_frame_addr_inst =
             std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
@@ -878,14 +879,15 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
             std::make_unique<FrameIndexOperand>(frame_id));  // FI
         parent_bb->addInstruction(std::move(load_frame_addr_inst));
 
-        // 加载到新的寄存器
+        // 加载到新的寄存器（也使用新的寄存器）
         auto new_reg = codeGen_->allocateReg();
         auto load_inst_ptr =
             std::make_unique<Instruction>(Opcode::LW, parent_bb);
         load_inst_ptr->addOperand(std::make_unique<RegisterOperand>(
             new_reg->getRegNum(), new_reg->isVirtual()));  // rd
         load_inst_ptr->addOperand(std::make_unique<MemoryOperand>(
-            std::move(frame_addr_reg),
+            std::make_unique<RegisterOperand>(frame_addr_reg->getRegNum(),
+                                              frame_addr_reg->isVirtual()),
             std::make_unique<ImmediateOperand>(0)));  // memory address
         parent_bb->addInstruction(std::move(load_inst_ptr));
 
