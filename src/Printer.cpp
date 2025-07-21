@@ -104,6 +104,7 @@ std::string getInstructionName(Opcode opcode) {
         {Opcode::XORI, "xori"},
         {Opcode::ANDI, "andi"},
         {Opcode::LUI, "lui"},
+        {Opcode::SLTIU, "sltiu"},
         // TODO(rikka): 添加其他操作码的名称...
     };
 

@@ -214,6 +214,12 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Instruction* inst,
             // 来优化
             return visitBinaryOp(inst, parent_bb);
             break;
+        case midend::Opcode::UAdd:
+        case midend::Opcode::USub:
+        case midend::Opcode::Not:
+            // 处理一元操作指令
+            return visitUnaryOp(inst, parent_bb);
+            break;
         case midend::Opcode::Load:
             return visitLoadInst(inst, parent_bb);
             break;
@@ -941,6 +947,101 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
     }
 }
 
+std::unique_ptr<MachineOperand> Visitor::visitUnaryOp(
+    const midend::Instruction* inst, BasicBlock* parent_bb) {
+    if (!inst->isUnaryOp()) {
+        throw std::runtime_error("Not a unary operation instruction: " +
+                                 inst->toString());
+    }
+
+    if (inst->getNumOperands() != 1) {
+        throw std::runtime_error("Unary operation must have one operand, got " +
+                                 std::to_string(inst->getNumOperands()));
+    }
+
+    // Handle UAdd (unary plus): +operand
+    // This is essentially a no-op, just return the operand
+    if (inst->getOpcode() == midend::Opcode::UAdd) {
+        auto operand = visit(inst->getOperand(0), parent_bb);
+        
+        // If it's already a register, return it directly
+        if (operand->getType() == OperandType::Register) {
+            auto* reg_operand = dynamic_cast<RegisterOperand*>(operand.get());
+            codeGen_->mapValueToReg(inst, reg_operand->getRegNum(), 
+                                   reg_operand->isVirtual());
+            return std::make_unique<RegisterOperand>(reg_operand->getRegNum(),
+                                                    reg_operand->isVirtual());
+        }
+        
+        // If it's an immediate, we can return it directly or load to register
+        if (operand->getType() == OperandType::Immediate) {
+            auto* imm_operand = dynamic_cast<ImmediateOperand*>(operand.get());
+            // For unary plus, the value remains the same
+            return std::make_unique<ImmediateOperand>(imm_operand->getValue());
+        }
+        
+        throw std::runtime_error("Unsupported operand type for UAdd");
+    }
+
+    // Handle USub (unary minus): -operand
+    if (inst->getOpcode() == midend::Opcode::USub) {
+        auto operand = visit(inst->getOperand(0), parent_bb);
+        
+        // If both are immediates, do constant folding
+        if (operand->getType() == OperandType::Immediate) {
+            auto* imm_operand = dynamic_cast<ImmediateOperand*>(operand.get());
+            return std::make_unique<ImmediateOperand>(-imm_operand->getValue());
+        }
+        
+        // Convert operand to register if needed
+        auto operand_reg = immToReg(std::move(operand), parent_bb);
+        
+        // Generate sub instruction: 0 - operand
+        auto new_reg = codeGen_->allocateReg();
+        auto instruction = std::make_unique<Instruction>(Opcode::SUB, parent_bb);
+        instruction->addOperand(std::make_unique<RegisterOperand>(
+            new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+        instruction->addOperand(std::make_unique<RegisterOperand>("zero"));  // rs1 (zero register)
+        instruction->addOperand(std::move(operand_reg));  // rs2
+        parent_bb->addInstruction(std::move(instruction));
+        
+        codeGen_->mapValueToReg(inst, new_reg->getRegNum(), new_reg->isVirtual());
+        return std::make_unique<RegisterOperand>(new_reg->getRegNum(), 
+                                               new_reg->isVirtual());
+    }
+
+    // Handle Not: !operand 
+    if (inst->getOpcode() == midend::Opcode::Not) {
+        auto operand = visit(inst->getOperand(0), parent_bb);
+        
+        // If it's an immediate, do constant folding
+        if (operand->getType() == OperandType::Immediate) {
+            auto* imm_operand = dynamic_cast<ImmediateOperand*>(operand.get());
+            // Bitwise NOT
+            return std::make_unique<ImmediateOperand>((imm_operand->getValue()) == 0);
+        }
+        
+        // Convert operand to register if needed
+        auto operand_reg = immToReg(std::move(operand), parent_bb);
+        
+        // Generate sltiu instruction: operand sltiu 1
+        auto new_reg = codeGen_->allocateReg();
+        auto instruction = std::make_unique<Instruction>(Opcode::SLTIU, parent_bb);
+        instruction->addOperand(std::make_unique<RegisterOperand>(
+            new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+        instruction->addOperand(std::move(operand_reg));  // rs1
+        instruction->addOperand(std::make_unique<ImmediateOperand>(1));  // imm
+        parent_bb->addInstruction(std::move(instruction));
+        
+        codeGen_->mapValueToReg(inst, new_reg->getRegNum(), new_reg->isVirtual());
+        return std::make_unique<RegisterOperand>(new_reg->getRegNum(), 
+                                               new_reg->isVirtual());
+    }
+
+    throw std::runtime_error("Unsupported unary operation: " + inst->toString());
+
+}
+
 // 处理二元运算指令
 // Handles binary operation instructions by generating the appropriate
 // RISC-V instructions for the given midend instruction, allocating
@@ -995,18 +1096,20 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             }
 
             // 处理立即数操作数，利用交换律
-            if (lhs->getType() == OperandType::Immediate || 
+            if (lhs->getType() == OperandType::Immediate ||
                 rhs->getType() == OperandType::Immediate) {
                 // 使用 addi 指令
                 new_reg = codeGen_->allocateReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
-                
+
                 auto* imm_operand = dynamic_cast<ImmediateOperand*>(
-                    lhs->getType() == OperandType::Immediate ? lhs.get() : rhs.get());
+                    lhs->getType() == OperandType::Immediate ? lhs.get()
+                                                             : rhs.get());
                 auto* reg_operand = dynamic_cast<RegisterOperand*>(
-                    (lhs->getType() == OperandType::Register ? lhs.get() : rhs.get()));
-                
+                    (lhs->getType() == OperandType::Register ? lhs.get()
+                                                             : rhs.get()));
+
                 instruction->addOperand(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -1163,17 +1266,19 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             }
 
             // 处理立即数操作数，利用交换律使用 andi
-            if (lhs->getType() == OperandType::Immediate || 
+            if (lhs->getType() == OperandType::Immediate ||
                 rhs->getType() == OperandType::Immediate) {
                 new_reg = codeGen_->allocateReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::ANDI, parent_bb);
-                
+
                 auto* imm_operand = dynamic_cast<ImmediateOperand*>(
-                    lhs->getType() == OperandType::Immediate ? lhs.get() : rhs.get());
+                    lhs->getType() == OperandType::Immediate ? lhs.get()
+                                                             : rhs.get());
                 auto* reg_operand = dynamic_cast<RegisterOperand*>(
-                    (lhs->getType() == OperandType::Register ? lhs.get() : rhs.get()));
-                
+                    (lhs->getType() == OperandType::Register ? lhs.get()
+                                                             : rhs.get()));
+
                 instruction->addOperand(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -1211,17 +1316,19 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             }
 
             // 处理立即数操作数，利用交换律使用 ori
-            if (lhs->getType() == OperandType::Immediate || 
+            if (lhs->getType() == OperandType::Immediate ||
                 rhs->getType() == OperandType::Immediate) {
                 new_reg = codeGen_->allocateReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::ORI, parent_bb);
-                
+
                 auto* imm_operand = dynamic_cast<ImmediateOperand*>(
-                    lhs->getType() == OperandType::Immediate ? lhs.get() : rhs.get());
+                    lhs->getType() == OperandType::Immediate ? lhs.get()
+                                                             : rhs.get());
                 auto* reg_operand = dynamic_cast<RegisterOperand*>(
-                    (lhs->getType() == OperandType::Register ? lhs.get() : rhs.get()));
-                
+                    (lhs->getType() == OperandType::Register ? lhs.get()
+                                                             : rhs.get()));
+
                 instruction->addOperand(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -1259,17 +1366,19 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             }
 
             // 处理立即数操作数，利用交换律使用 xori
-            if (lhs->getType() == OperandType::Immediate || 
+            if (lhs->getType() == OperandType::Immediate ||
                 rhs->getType() == OperandType::Immediate) {
                 new_reg = codeGen_->allocateReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::XORI, parent_bb);
-                
+
                 auto* imm_operand = dynamic_cast<ImmediateOperand*>(
-                    lhs->getType() == OperandType::Immediate ? lhs.get() : rhs.get());
+                    lhs->getType() == OperandType::Immediate ? lhs.get()
+                                                             : rhs.get());
                 auto* reg_operand = dynamic_cast<RegisterOperand*>(
-                    (lhs->getType() == OperandType::Register ? lhs.get() : rhs.get()));
-                
+                    (lhs->getType() == OperandType::Register ? lhs.get()
+                                                             : rhs.get()));
+
                 instruction->addOperand(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -1302,8 +1411,8 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 (rhs->getType() == OperandType::Immediate)) {
                 auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
                 auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
-                return std::make_unique<ImmediateOperand>(lhs_imm->getValue() 
-                                                          << rhs_imm->getValue());
+                return std::make_unique<ImmediateOperand>(
+                    lhs_imm->getValue() << rhs_imm->getValue());
             }
 
             // 处理右侧立即数：使用 slli
@@ -1342,8 +1451,8 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
                 auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
                 // 对于有符号整数，使用算术右移
-                return std::make_unique<ImmediateOperand>(lhs_imm->getValue() 
-                                                          >> rhs_imm->getValue());
+                return std::make_unique<ImmediateOperand>(lhs_imm->getValue() >>
+                                                          rhs_imm->getValue());
             }
 
             // 处理右侧立即数：使用 srai
@@ -1405,12 +1514,14 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto xori_inst =
                     std::make_unique<Instruction>(Opcode::XORI, parent_bb);
                 xori_inst->addOperand(std::make_unique<RegisterOperand>(
-                    result_reg->getRegNum(), result_reg->isVirtual()));  // rd
+                    result_reg->getRegNum(),
+                    result_reg->isVirtual()));  // rd
                 xori_inst->addOperand(std::make_unique<RegisterOperand>(
-                    new_reg->getRegNum(), new_reg->isVirtual()));       // rs1
-                xori_inst->addOperand(std::make_unique<ImmediateOperand>(1));  // 1
+                    new_reg->getRegNum(), new_reg->isVirtual()));  // rs1
+                xori_inst->addOperand(
+                    std::make_unique<ImmediateOperand>(1));  // 1
                 parent_bb->addInstruction(std::move(xori_inst));
-                
+
                 new_reg = std::move(result_reg);
             } else {
                 auto lhs_reg = immToReg(std::move(lhs), parent_bb);
@@ -1441,12 +1552,14 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             }
 
             // 优化：a == imm 可以用 addi + seqz
-            if (lhs->getType() == OperandType::Immediate || 
+            if (lhs->getType() == OperandType::Immediate ||
                 rhs->getType() == OperandType::Immediate) {
                 auto* imm_operand = dynamic_cast<ImmediateOperand*>(
-                    lhs->getType() == OperandType::Immediate ? lhs.get() : rhs.get());
+                    lhs->getType() == OperandType::Immediate ? lhs.get()
+                                                             : rhs.get());
                 auto* reg_operand = dynamic_cast<RegisterOperand*>(
-                    (lhs->getType() == OperandType::Register ? lhs.get() : rhs.get()));
+                    (lhs->getType() == OperandType::Register ? lhs.get()
+                                                             : rhs.get()));
 
                 // a == imm 等价于 (a - imm) == 0
                 auto sub_reg = codeGen_->allocateReg();
@@ -1455,7 +1568,8 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 addi_inst->addOperand(std::make_unique<RegisterOperand>(
                     sub_reg->getRegNum(), sub_reg->isVirtual()));  // rd
                 addi_inst->addOperand(std::make_unique<RegisterOperand>(
-                    reg_operand->getRegNum(), reg_operand->isVirtual()));     // rs1
+                    reg_operand->getRegNum(),
+                    reg_operand->isVirtual()));  // rs1
                 addi_inst->addOperand(std::make_unique<ImmediateOperand>(
                     -imm_operand->getValue()));  // -imm
                 parent_bb->addInstruction(std::move(addi_inst));
@@ -1504,13 +1618,15 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             }
 
             // 优化：a != imm 可以用 addi + snez
-            if (lhs->getType() == OperandType::Immediate || 
+            if (lhs->getType() == OperandType::Immediate ||
                 rhs->getType() == OperandType::Immediate) {
                 auto* imm_operand = dynamic_cast<ImmediateOperand*>(
-                    lhs->getType() == OperandType::Immediate ? lhs.get() : rhs.get());
+                    lhs->getType() == OperandType::Immediate ? lhs.get()
+                                                             : rhs.get());
                 auto* reg_operand = dynamic_cast<RegisterOperand*>(
-                    lhs->getType() == OperandType::Register ? lhs.get() : rhs.get());
-                
+                    lhs->getType() == OperandType::Register ? lhs.get()
+                                                            : rhs.get());
+
                 // a != imm 等价于 (a - imm) != 0
                 auto sub_reg = codeGen_->allocateReg();
                 auto addi_inst =
@@ -1518,7 +1634,8 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 addi_inst->addOperand(std::make_unique<RegisterOperand>(
                     sub_reg->getRegNum(), sub_reg->isVirtual()));  // rd
                 addi_inst->addOperand(std::make_unique<RegisterOperand>(
-                    reg_operand->getRegNum(), reg_operand->isVirtual()));     // rs1
+                    reg_operand->getRegNum(),
+                    reg_operand->isVirtual()));  // rs1
                 addi_inst->addOperand(std::make_unique<ImmediateOperand>(
                     -imm_operand->getValue()));  // -imm
                 parent_bb->addInstruction(std::move(addi_inst));
@@ -1610,7 +1727,8 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
 
             // 使用 sgt 指令然后取反: !(lhs > rhs) = (lhs <= rhs)
             auto sgt_reg = codeGen_->allocateReg();
-            auto sgt_inst = std::make_unique<Instruction>(Opcode::SGT, parent_bb);
+            auto sgt_inst =
+                std::make_unique<Instruction>(Opcode::SGT, parent_bb);
             sgt_inst->addOperand(std::make_unique<RegisterOperand>(
                 sgt_reg->getRegNum(), sgt_reg->isVirtual()));  // rd
             sgt_inst->addOperand(std::move(lhs_reg));          // rs1
@@ -1618,7 +1736,8 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             parent_bb->addInstruction(std::move(sgt_inst));
 
             new_reg = codeGen_->allocateReg();
-            auto seqz_inst = std::make_unique<Instruction>(Opcode::SEQZ, parent_bb);
+            auto seqz_inst =
+                std::make_unique<Instruction>(Opcode::SEQZ, parent_bb);
             seqz_inst->addOperand(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual()));  // rd
             seqz_inst->addOperand(std::move(sgt_reg));         // rs1
@@ -1641,7 +1760,8 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
 
             // 使用 slt 指令然后取反: !(lhs < rhs) = (lhs >= rhs)
             auto slt_reg = codeGen_->allocateReg();
-            auto slt_inst = std::make_unique<Instruction>(Opcode::SLT, parent_bb);
+            auto slt_inst =
+                std::make_unique<Instruction>(Opcode::SLT, parent_bb);
             slt_inst->addOperand(std::make_unique<RegisterOperand>(
                 slt_reg->getRegNum(), slt_reg->isVirtual()));  // rd
             slt_inst->addOperand(std::move(lhs_reg));          // rs1
@@ -1649,7 +1769,8 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             parent_bb->addInstruction(std::move(slt_inst));
 
             new_reg = codeGen_->allocateReg();
-            auto seqz_inst = std::make_unique<Instruction>(Opcode::SEQZ, parent_bb);
+            auto seqz_inst =
+                std::make_unique<Instruction>(Opcode::SEQZ, parent_bb);
             seqz_inst->addOperand(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual()));  // rd
             seqz_inst->addOperand(std::move(slt_reg));         // rs1
