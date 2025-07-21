@@ -86,6 +86,20 @@ std::string getInstructionName(Opcode opcode) {
         {Opcode::SRL, "srl"},
         {Opcode::SLLI, "slli"},
         {Opcode::SRLI, "srli"},
+        {Opcode::SRA, "sra"},
+        {Opcode::OR, "or"},
+        {Opcode::MULH, "mulh"},
+        {Opcode::MULHSU, "mulhsu"},
+        {Opcode::MULHU, "mulhu"},
+        {Opcode::DIVU, "divu"},
+        {Opcode::REMU, "remu"},
+        {Opcode::SLTU, "sltu"},
+        {Opcode::BEQ, "beq"},
+        {Opcode::BNE, "bne"},
+        {Opcode::BLT, "blt"},
+        {Opcode::BGE, "bge"},
+        {Opcode::BLTU, "bltu"},
+        {Opcode::BGEU, "bgeu"},
         // TODO(rikka): 添加其他操作码的名称...
     };
 

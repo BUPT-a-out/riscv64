@@ -207,6 +207,8 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Instruction* inst,
         case midend::Opcode::ICmpSLT:
         case midend::Opcode::ICmpEQ:
         case midend::Opcode::ICmpNE:
+        case midend::Opcode::ICmpSLE:
+        case midend::Opcode::ICmpSGE:
             // 处理算术指令，此处直接生成
             // TODO(rikka): 关于 0, 1, 2^n(左移) 的判断优化等，后期写一个 Pass
             // 来优化
@@ -1008,7 +1010,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
                 instruction->addOperand(std::make_unique<RegisterOperand>(
                     reg_operand->getRegNum(),
-                    new_reg->isVirtual()));  // rs1
+                    reg_operand->isVirtual()));  // rs1
                 instruction->addOperand(std::make_unique<ImmediateOperand>(
                     imm_operand->getValue()));  // imm
 
@@ -1077,23 +1079,25 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             break;
         }
 
-        case midend::Opcode::ICmpSGT: {
-            // 处理有符号大于比较
+        case midend::Opcode::Div: {
+            // 处理有符号除法
             if ((lhs->getType() == OperandType::Immediate) &&
                 (rhs->getType() == OperandType::Immediate)) {
                 auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
                 auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
-                return std::make_unique<ImmediateOperand>(
-                    lhs_imm->getValue() > rhs_imm->getValue() ? 1 : 0);
+                if (rhs_imm->getValue() == 0) {
+                    throw std::runtime_error("Division by zero");
+                }
+                return std::make_unique<ImmediateOperand>(lhs_imm->getValue() /
+                                                          rhs_imm->getValue());
             }
 
             auto lhs_reg = immToReg(std::move(lhs), parent_bb);
             auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
-            // 使用 sgt 指令
             new_reg = codeGen_->allocateReg();
             auto instruction =
-                std::make_unique<Instruction>(Opcode::SGT, parent_bb);
+                std::make_unique<Instruction>(Opcode::DIV, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual()));  // rd
             instruction->addOperand(std::move(lhs_reg));       // rs1
@@ -1123,6 +1127,159 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             new_reg = codeGen_->allocateReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::REM, parent_bb);
+            instruction->addOperand(std::make_unique<RegisterOperand>(
+                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+            instruction->addOperand(std::move(lhs_reg));       // rs1
+            instruction->addOperand(std::move(rhs_reg));       // rs2
+
+            parent_bb->addInstruction(std::move(instruction));
+            break;
+        }
+
+        case midend::Opcode::And: {
+            // 处理按位与运算
+            if ((lhs->getType() == OperandType::Immediate) &&
+                (rhs->getType() == OperandType::Immediate)) {
+                auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
+                auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                return std::make_unique<ImmediateOperand>(lhs_imm->getValue() &
+                                                          rhs_imm->getValue());
+            }
+
+            auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+            auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+            new_reg = codeGen_->allocateReg();
+            auto instruction =
+                std::make_unique<Instruction>(Opcode::AND, parent_bb);
+            instruction->addOperand(std::make_unique<RegisterOperand>(
+                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+            instruction->addOperand(std::move(lhs_reg));       // rs1
+            instruction->addOperand(std::move(rhs_reg));       // rs2
+
+            parent_bb->addInstruction(std::move(instruction));
+            break;
+        }
+
+        case midend::Opcode::Or: {
+            // 处理按位或运算
+            if ((lhs->getType() == OperandType::Immediate) &&
+                (rhs->getType() == OperandType::Immediate)) {
+                auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
+                auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                return std::make_unique<ImmediateOperand>(lhs_imm->getValue() |
+                                                          rhs_imm->getValue());
+            }
+
+            auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+            auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+            new_reg = codeGen_->allocateReg();
+            auto instruction =
+                std::make_unique<Instruction>(Opcode::OR, parent_bb);
+            instruction->addOperand(std::make_unique<RegisterOperand>(
+                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+            instruction->addOperand(std::move(lhs_reg));       // rs1
+            instruction->addOperand(std::move(rhs_reg));       // rs2
+
+            parent_bb->addInstruction(std::move(instruction));
+            break;
+        }
+
+        case midend::Opcode::Xor: {
+            // 处理按位异或运算
+            if ((lhs->getType() == OperandType::Immediate) &&
+                (rhs->getType() == OperandType::Immediate)) {
+                auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
+                auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                return std::make_unique<ImmediateOperand>(lhs_imm->getValue() ^
+                                                          rhs_imm->getValue());
+            }
+
+            auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+            auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+            new_reg = codeGen_->allocateReg();
+            auto instruction =
+                std::make_unique<Instruction>(Opcode::XOR, parent_bb);
+            instruction->addOperand(std::make_unique<RegisterOperand>(
+                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+            instruction->addOperand(std::move(lhs_reg));       // rs1
+            instruction->addOperand(std::move(rhs_reg));       // rs2
+
+            parent_bb->addInstruction(std::move(instruction));
+            break;
+        }
+
+        case midend::Opcode::Shl: {
+            // 处理左移运算
+            if ((lhs->getType() == OperandType::Immediate) &&
+                (rhs->getType() == OperandType::Immediate)) {
+                auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
+                auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                return std::make_unique<ImmediateOperand>(lhs_imm->getValue() 
+                                                          << rhs_imm->getValue());
+            }
+
+            auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+            auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+            new_reg = codeGen_->allocateReg();
+            auto instruction =
+                std::make_unique<Instruction>(Opcode::SLL, parent_bb);
+            instruction->addOperand(std::make_unique<RegisterOperand>(
+                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+            instruction->addOperand(std::move(lhs_reg));       // rs1
+            instruction->addOperand(std::move(rhs_reg));       // rs2
+
+            parent_bb->addInstruction(std::move(instruction));
+            break;
+        }
+
+        case midend::Opcode::Shr: {
+            // 处理右移运算（逻辑右移）
+            if ((lhs->getType() == OperandType::Immediate) &&
+                (rhs->getType() == OperandType::Immediate)) {
+                auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
+                auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                // 对于有符号整数，使用算术右移
+                return std::make_unique<ImmediateOperand>(lhs_imm->getValue() 
+                                                          >> rhs_imm->getValue());
+            }
+
+            auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+            auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+            new_reg = codeGen_->allocateReg();
+            // 使用算术右移（保持符号位）
+            auto instruction =
+                std::make_unique<Instruction>(Opcode::SRA, parent_bb);
+            instruction->addOperand(std::make_unique<RegisterOperand>(
+                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+            instruction->addOperand(std::move(lhs_reg));       // rs1
+            instruction->addOperand(std::move(rhs_reg));       // rs2
+
+            parent_bb->addInstruction(std::move(instruction));
+            break;
+        }
+
+        case midend::Opcode::ICmpSGT: {
+            // 处理有符号大于比较
+            if ((lhs->getType() == OperandType::Immediate) &&
+                (rhs->getType() == OperandType::Immediate)) {
+                auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
+                auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                return std::make_unique<ImmediateOperand>(
+                    lhs_imm->getValue() > rhs_imm->getValue() ? 1 : 0);
+            }
+
+            auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+            auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+            // 使用 sgt 指令
+            new_reg = codeGen_->allocateReg();
+            auto instruction =
+                std::make_unique<Instruction>(Opcode::SGT, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual()));  // rd
             instruction->addOperand(std::move(lhs_reg));       // rs1
@@ -1234,6 +1391,68 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
 
                 parent_bb->addInstruction(std::move(instruction));
             }
+            break;
+        }
+
+        case midend::Opcode::ICmpSLE: {
+            // 处理有符号小于等于比较 (a <= b 等价于 !(a > b))
+            if ((lhs->getType() == OperandType::Immediate) &&
+                (rhs->getType() == OperandType::Immediate)) {
+                auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
+                auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                return std::make_unique<ImmediateOperand>(
+                    lhs_imm->getValue() <= rhs_imm->getValue() ? 1 : 0);
+            }
+
+            auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+            auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+            // 使用 sgt 指令然后取反: !(lhs > rhs) = (lhs <= rhs)
+            auto sgt_reg = codeGen_->allocateReg();
+            auto sgt_inst = std::make_unique<Instruction>(Opcode::SGT, parent_bb);
+            sgt_inst->addOperand(std::make_unique<RegisterOperand>(
+                sgt_reg->getRegNum(), sgt_reg->isVirtual()));  // rd
+            sgt_inst->addOperand(std::move(lhs_reg));          // rs1
+            sgt_inst->addOperand(std::move(rhs_reg));          // rs2
+            parent_bb->addInstruction(std::move(sgt_inst));
+
+            new_reg = codeGen_->allocateReg();
+            auto seqz_inst = std::make_unique<Instruction>(Opcode::SEQZ, parent_bb);
+            seqz_inst->addOperand(std::make_unique<RegisterOperand>(
+                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+            seqz_inst->addOperand(std::move(sgt_reg));         // rs1
+            parent_bb->addInstruction(std::move(seqz_inst));
+            break;
+        }
+
+        case midend::Opcode::ICmpSGE: {
+            // 处理有符号大于等于比较 (a >= b 等价于 !(a < b))
+            if ((lhs->getType() == OperandType::Immediate) &&
+                (rhs->getType() == OperandType::Immediate)) {
+                auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
+                auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                return std::make_unique<ImmediateOperand>(
+                    lhs_imm->getValue() >= rhs_imm->getValue() ? 1 : 0);
+            }
+
+            auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+            auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+            // 使用 slt 指令然后取反: !(lhs < rhs) = (lhs >= rhs)
+            auto slt_reg = codeGen_->allocateReg();
+            auto slt_inst = std::make_unique<Instruction>(Opcode::SLT, parent_bb);
+            slt_inst->addOperand(std::make_unique<RegisterOperand>(
+                slt_reg->getRegNum(), slt_reg->isVirtual()));  // rd
+            slt_inst->addOperand(std::move(lhs_reg));          // rs1
+            slt_inst->addOperand(std::move(rhs_reg));          // rs2
+            parent_bb->addInstruction(std::move(slt_inst));
+
+            new_reg = codeGen_->allocateReg();
+            auto seqz_inst = std::make_unique<Instruction>(Opcode::SEQZ, parent_bb);
+            seqz_inst->addOperand(std::make_unique<RegisterOperand>(
+                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+            seqz_inst->addOperand(std::move(slt_reg));         // rs1
+            parent_bb->addInstruction(std::move(seqz_inst));
             break;
         }
 
