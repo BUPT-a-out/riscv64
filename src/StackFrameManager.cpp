@@ -180,7 +180,6 @@ void StackFrameManager::insertPrologueEpilogue() {
     }
 
     // 为函数的第一个基本块插入序言
-    BasicBlock* entryBlock = function->getBasicBlock(0);
     generatePrologue();
 
     // 为所有返回基本块插入尾声
@@ -196,7 +195,7 @@ void StackFrameManager::insertPrologueEpilogue() {
 }
 
 void StackFrameManager::generatePrologue() {
-    BasicBlock* entryBlock = function->getBasicBlock(0);
+    BasicBlock* entryBlock = function->getEntryBlock();
 
     // 1. 调整栈指针
     if (frameInfo.hasStackPointerAdjustment) {

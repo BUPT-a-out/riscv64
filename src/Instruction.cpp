@@ -1,4 +1,5 @@
 #include "Instructions/Instruction.h"
+#include <algorithm>
 #include "Instructions/MachineOperand.h"
 #include "Instructions/BasicBlock.h"
 
@@ -267,6 +268,32 @@ bool Instruction::isReturnInstr() const {
     }
     
     return false;
+}
+std::vector<unsigned> Instruction::getUsedRegs() const {
+    std::vector<unsigned> usedRegs;
+
+    // 根据指令类型分析使用的寄存器
+    // 这里简化处理，实际需要根据具体的指令格式来分析
+
+    // 通常第一个操作数是目标寄存器（定义），其余是源寄存器（使用）
+    for (size_t i = 1; i < operands.size(); ++i) {
+        if (operands[i]->isReg()) {
+            usedRegs.push_back(operands[i]->getRegNum());
+        }
+    }
+
+    return usedRegs;
+}
+
+std::vector<unsigned> Instruction::getDefinedRegs() const {
+    std::vector<unsigned> definedRegs;
+
+    // 通常第一个操作数是目标寄存器
+    if (!operands.empty() && operands[0]->isReg()) {
+        definedRegs.push_back(operands[0]->getRegNum());
+    }
+
+    return definedRegs;
 }
 
 

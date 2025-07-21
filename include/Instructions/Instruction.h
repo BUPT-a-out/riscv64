@@ -247,6 +247,9 @@ class Instruction {
     bool isFrameSetup() const;
     bool isFramePointerRelated() const;
 
+    std::vector<unsigned> getUsedRegs() const;
+    std::vector<unsigned> getDefinedRegs() const;
+
    private:
     Opcode opcode;
     std::vector<std::unique_ptr<MachineOperand>> operands;

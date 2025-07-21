@@ -14,6 +14,8 @@ namespace riscv64 {
 void RegAllocChaitin::allocateRegisters() {
     initializeABIConstraints();
 
+    spillChainManager = std::make_unique<SpillChainManager>(availableRegs);
+
     computeLiveness();
 
     buildInterferenceGraph();
@@ -132,7 +134,7 @@ void RegAllocChaitin::computeDefUse(BasicBlock* bb, LivenessInfo& info) {
     // 遍历基本块中的每条指令
     for (const auto& inst : *bb) {
         // 获取指令使用的寄存器
-        auto usedRegs = getUsedRegs(inst.get());
+        auto usedRegs = inst->getUsedRegs();
         for (unsigned reg : usedRegs) {
             // 如果不在def集合中，则添加到use集合
             if (info.def.find(reg) == info.def.end()) {
@@ -141,7 +143,7 @@ void RegAllocChaitin::computeDefUse(BasicBlock* bb, LivenessInfo& info) {
         }
 
         // 获取指令定义的寄存器
-        auto definedRegs = getDefinedRegs(inst.get());
+        auto definedRegs = inst->getDefinedRegs();
         for (unsigned reg : definedRegs) {
             info.def.insert(reg);
         }
@@ -175,8 +177,8 @@ void RegAllocChaitin::buildInterferenceGraph() {
     // 为每个虚拟寄存器创建节点
     for (auto& bb : *function) {
         for (auto& inst : *bb) {
-            auto usedRegs = getUsedRegs(inst.get());
-            auto definedRegs = getDefinedRegs(inst.get());
+            auto usedRegs = inst->getDefinedRegs();
+            auto definedRegs = inst->getUsedRegs();
 
             for (unsigned reg : usedRegs) {
                 if (interferenceGraph.find(reg) == interferenceGraph.end()) {
@@ -229,7 +231,7 @@ void RegAllocChaitin::buildInterferenceGraph() {
             }
 
             // 处理普通指令的定义和使用
-            auto definedRegs = getDefinedRegs(inst);
+            auto definedRegs = inst->getDefinedRegs();
             for (unsigned defReg : definedRegs) {
                 // 与当前活跃的虚拟寄存器建立冲突
                 for (unsigned liveReg : live) {
@@ -240,7 +242,7 @@ void RegAllocChaitin::buildInterferenceGraph() {
                 live.erase(defReg);
             }
 
-            auto usedRegs = getUsedRegs(inst);
+            auto usedRegs = inst->getUsedRegs();
             for (unsigned useReg : usedRegs) {
                 live.insert(useReg);
             }
@@ -426,6 +428,9 @@ bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
 void RegAllocChaitin::handleSpills() {
     auto spillCandidates = selectSpillCandidates();
 
+    // 重置spill链管理器
+    spillChainManager->resetTempRegisters();
+
     for (unsigned reg : spillCandidates) {
         insertSpillCode(reg);
     }
@@ -434,23 +439,40 @@ void RegAllocChaitin::handleSpills() {
     interferenceGraph.clear();
     virtualToPhysical.clear();
     spilledRegs.clear();
-
     coalesceCandidates.clear();
     coalesceMap.clear();
     coalescedRegs.clear();
     livenessInfo.clear();
-
     physicalConstraints.clear();
+    clearDegreeCache();
 
-    clearDegreeCache();  // 清理度数缓存
+    // 重置spill链管理器状态
+    spillChainManager->resetTempRegisters();
 }
 
 std::vector<unsigned> RegAllocChaitin::selectSpillCandidates() {
-    std::vector<unsigned> candidates(spilledRegs.begin(), spilledRegs.end());
+    std::vector<unsigned> candidates;
 
-    // 简单的启发式：选择度数最高的寄存器
+    for (unsigned reg : spilledRegs) {
+        if (spillChainManager->canSpillRegister(reg)) {
+            candidates.push_back(reg);
+        } else {
+            std::cerr << "Skipping register " << reg
+                      << " due to maximum spill chain depth" << std::endl;
+        }
+    }
+
+    // 优先spill链深度较小的寄存器
     std::sort(candidates.begin(), candidates.end(),
               [this](unsigned a, unsigned b) {
+                  int depthA = spillChainManager->getSpillChainDepth(a);
+                  int depthB = spillChainManager->getSpillChainDepth(b);
+
+                  if (depthA != depthB) {
+                      return depthA < depthB;  // 深度小的优先
+                  }
+
+                  // 深度相同时，按度数排序
                   return interferenceGraph[a]->neighbors.size() >
                          interferenceGraph[b]->neighbors.size();
               });
@@ -459,8 +481,14 @@ std::vector<unsigned> RegAllocChaitin::selectSpillCandidates() {
 }
 
 void RegAllocChaitin::insertSpillCode(unsigned reg) {
-    stackManager.allocateSpillSlot(reg);
+    // 检查是否可以spill这个寄存器
+    if (!spillChainManager->canSpillRegister(reg)) {
+        std::cerr << "Warning: Cannot spill register " << reg
+                  << " due to maximum spill chain depth" << std::endl;
+        return;
+    }
 
+    stackManager.allocateSpillSlot(reg);
     int spillOffset = stackManager.getSpillSlotOffset(reg);
 
     for (auto& bb : *function) {
@@ -468,17 +496,18 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
             Instruction* inst = it->get();
 
             // 检查指令是否使用了溢出的寄存器
-            auto usedRegs = getUsedRegs(inst);
+            auto usedRegs = inst->getUsedRegs();
             if (std::find(usedRegs.begin(), usedRegs.end(), reg) !=
                 usedRegs.end()) {
-                // 创建独立的临时寄存器用于load
-                unsigned tempReg = createTempReg();
+                // 使用spill链管理器分配临时寄存器
+                unsigned tempReg =
+                    spillChainManager->allocateTempRegister(reg, inst);
 
                 auto loadInst = std::make_unique<Instruction>(LD);
-                loadInst->addOperand(
-                    std::make_unique<RegisterOperand>(tempReg, true));
+                loadInst->addOperand(std::make_unique<RegisterOperand>(
+                    tempReg, false));  // 物理寄存器
                 loadInst->addOperand(std::make_unique<MemoryOperand>(
-                    std::make_unique<RegisterOperand>(2, false),
+                    std::make_unique<RegisterOperand>(2, false),  // sp
                     std::make_unique<ImmediateOperand>(spillOffset)));
 
                 it = bb->insert(it, std::move(loadInst));
@@ -486,23 +515,27 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
 
                 // 更新原指令中的寄存器引用
                 updateRegisterInInstruction(inst, reg, tempReg);
+
+                // 在指令执行后立即释放临时寄存器（概念上的）
+                // 实际上我们不需要显式释放，因为每个load操作都是独立的
             }
 
             // 检查指令是否定义了溢出的寄存器
-            auto definedRegs = getDefinedRegs(inst);
+            auto definedRegs = inst->getDefinedRegs();
             if (std::find(definedRegs.begin(), definedRegs.end(), reg) !=
                 definedRegs.end()) {
-                // 创建独立的临时寄存器用于store
-                unsigned tempReg = createTempReg();
+                // 使用spill链管理器分配临时寄存器
+                unsigned tempReg =
+                    spillChainManager->allocateTempRegister(reg, inst);
 
                 // 更新原指令中的寄存器引用
                 updateRegisterInInstruction(inst, reg, tempReg);
 
                 auto storeInst = std::make_unique<Instruction>(SD);
-                storeInst->addOperand(
-                    std::make_unique<RegisterOperand>(tempReg, true));
+                storeInst->addOperand(std::make_unique<RegisterOperand>(
+                    tempReg, false));  // 物理寄存器
                 storeInst->addOperand(std::make_unique<MemoryOperand>(
-                    std::make_unique<RegisterOperand>(2, false),
+                    std::make_unique<RegisterOperand>(2, false),  // sp
                     std::make_unique<ImmediateOperand>(spillOffset)));
 
                 ++it;
@@ -777,8 +810,8 @@ int RegAllocChaitin::getRegisterUsageCount(unsigned reg) {
     int count = 0;
     for (auto& bb : *function) {
         for (auto& inst : *bb) {
-            auto usedRegs = getUsedRegs(inst.get());
-            auto definedRegs = getDefinedRegs(inst.get());
+            auto usedRegs = inst->getUsedRegs();
+            auto definedRegs = inst->getDefinedRegs();
             if (std::find(usedRegs.begin(), usedRegs.end(), reg) !=
                     usedRegs.end() ||
                 std::find(definedRegs.begin(), definedRegs.end(), reg) !=
@@ -816,12 +849,12 @@ int RegAllocChaitin::getRegisterPressure(BasicBlock* bb) {
     std::unordered_set<unsigned> live = livenessInfo[bb].liveOut;
 
     for (auto it = bb->begin(); it != bb->end(); ++it) {
-        auto definedRegs = getDefinedRegs(it->get());
+        auto definedRegs = it->get()->getDefinedRegs();
         for (unsigned reg : definedRegs) {
             live.erase(reg);
         }
 
-        auto usedRegs = getUsedRegs(it->get());
+        auto usedRegs = it->get()->getUsedRegs();
         for (unsigned reg : usedRegs) {
             live.insert(reg);
         }
@@ -1170,7 +1203,7 @@ bool RegAllocChaitin::isUsedAsArgument(unsigned virtualReg) const {
     for (auto& bb : *function) {
         for (const auto& inst : *bb) {
             if (inst->isCallInstr()) {
-                auto usedRegs = getUsedRegs(inst.get());
+                auto usedRegs = inst->getUsedRegs();
                 if (std::find(usedRegs.begin(), usedRegs.end(), virtualReg) !=
                     usedRegs.end()) {
                     return true;
@@ -1257,7 +1290,7 @@ void RegAllocChaitin::setParameterConstraints() {
     // 扫描整个函数，识别哪些参数寄存器被使用
     for (auto& bb : *function) {
         for (const auto& inst : *bb) {
-            auto usedRegs = getUsedRegs(inst.get());
+            auto usedRegs = inst->getUsedRegs();
             for (unsigned reg : usedRegs) {
                 if (reg >= 10 && reg <= 17) {  // a0-a7
                     usedParamRegs.insert(reg);
@@ -1313,8 +1346,8 @@ void RegAllocChaitin::setReturnValueConstraints() {
                     Instruction* prevInst = prevIt->get();
 
                     // 查找向a0, a1赋值的指令
-                    auto definedRegs = getDefinedRegs(prevInst);
-                    auto usedRegs = getUsedRegs(prevInst);
+                    auto definedRegs = prevInst->getDefinedRegs();
+                    auto usedRegs = prevInst->getUsedRegs();
 
                     // 如果指令定义了a0或a1
                     for (unsigned reg : definedRegs) {
@@ -1384,12 +1417,12 @@ void RegAllocChaitin::setPreCallConstraints(BasicBlock* bb,
     for (auto it = std::make_reverse_iterator(callIt);
          it != bb->rend() && paramCount < 8; ++it) {
         Instruction* inst = it->get();
-        auto definedRegs = getDefinedRegs(inst);
+        auto definedRegs = inst->getDefinedRegs();
 
         // 查找向参数寄存器a0-a7赋值的指令
         for (unsigned reg : definedRegs) {
             if (reg >= 10 && reg <= 17) {  // a0-a7
-                auto usedRegs = getUsedRegs(inst);
+                auto usedRegs = inst->getUsedRegs();
                 for (unsigned srcReg : usedRegs) {
                     if (!isPhysicalReg(srcReg)) {
                         addPhysicalConstraint(srcReg, reg);
@@ -1420,8 +1453,8 @@ void RegAllocChaitin::setPostCallConstraints(BasicBlock* bb,
 
     // 向前扫描到调用点，收集活跃的虚拟寄存器
     for (auto it = bb->begin(); it != callIt; ++it) {
-        auto usedRegs = getUsedRegs(it->get());
-        auto definedRegs = getDefinedRegs(it->get());
+        auto usedRegs = it->get()->getUsedRegs();
+        auto definedRegs = it->get()->getDefinedRegs();
 
         for (unsigned reg : usedRegs) {
             if (reg == 10 || reg == 11) {  // a0 或 a1
@@ -1447,8 +1480,8 @@ void RegAllocChaitin::setSpecialRegisterConstraints() {
     // 1. 栈指针约束 (sp = x2)
     for (auto& bb : *function) {
         for (auto& inst : *bb) {
-            auto usedRegs = getUsedRegs(inst.get());
-            auto definedRegs = getDefinedRegs(inst.get());
+            auto usedRegs = inst->getUsedRegs();
+            auto definedRegs = inst->getDefinedRegs();
 
             // 禁止虚拟寄存器使用保留寄存器
             for (unsigned reg : usedRegs) {
@@ -1503,7 +1536,7 @@ void RegAllocChaitin::setFramePointerConstraints() {
     for (auto& bb : *function) {
         for (auto& inst : *bb) {
             if (inst->isFrameSetup() || inst->isFramePointerRelated()) {
-                auto definedRegs = getDefinedRegs(inst.get());
+                auto definedRegs = inst->getDefinedRegs();
                 for (unsigned reg : definedRegs) {
                     if (!isPhysicalReg(reg)) {
                         addPhysicalConstraint(reg, 8);  // s0/fp = x8
@@ -1520,8 +1553,8 @@ void RegAllocChaitin::setReturnAddressConstraints() {
         for (auto& inst : *bb) {
             if (inst->isCallInstr() || inst->isReturnInstr()) {
                 // 调用和返回指令会使用ra寄存器
-                auto usedRegs = getUsedRegs(inst.get());
-                auto definedRegs = getDefinedRegs(inst.get());
+                auto usedRegs = inst->getUsedRegs();
+                auto definedRegs = inst->getDefinedRegs();
 
                 // 确保相关虚拟寄存器不会冲突ra
                 for (unsigned reg : usedRegs) {
@@ -1541,36 +1574,6 @@ unsigned RegAllocChaitin::getPhysicalReg(unsigned virtualReg) const {
         return it->second;
     }
     return virtualReg;  // 如果没有映射，返回原寄存器
-}
-
-std::vector<unsigned> RegAllocChaitin::getUsedRegs(
-    const Instruction* inst) const {
-    std::vector<unsigned> usedRegs;
-
-    // 根据指令类型分析使用的寄存器
-    // 这里简化处理，实际需要根据具体的指令格式来分析
-    const auto& operands = inst->getOperands();
-
-    // 通常第一个操作数是目标寄存器（定义），其余是源寄存器（使用）
-    for (size_t i = 1; i < operands.size(); ++i) {
-        if (operands[i]->isReg()) {
-            usedRegs.push_back(operands[i]->getRegNum());
-        }
-    }
-
-    return usedRegs;
-}
-
-std::vector<unsigned> RegAllocChaitin::getDefinedRegs(
-    const Instruction* inst) const {
-    std::vector<unsigned> definedRegs;
-
-    // 通常第一个操作数是目标寄存器
-    if (!inst->getOperands().empty() && inst->getOperands()[0]->isReg()) {
-        definedRegs.push_back(inst->getOperands()[0]->getRegNum());
-    }
-
-    return definedRegs;
 }
 
 /// Print

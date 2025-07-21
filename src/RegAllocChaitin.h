@@ -8,6 +8,7 @@
 #include "Instructions/Function.h"
 #include "Instructions/Instruction.h"
 #include "Instructions/MachineOperand.h"
+#include "SpillChainManager.h"
 
 namespace riscv64 {
 
@@ -71,6 +72,8 @@ class RegAllocChaitin {
     std::unordered_set<unsigned> coalescedRegs;
     std::unordered_map<unsigned, unsigned> coalesceMap;  // 映射到代表元
 
+    std::unique_ptr<SpillChainManager> spillChainManager;
+
     StackFrameManager stackManager;
 
     // 维护度数缓存，避免重复计算
@@ -81,9 +84,6 @@ class RegAllocChaitin {
     void invalidateDegreeCache(unsigned reg);
     int getCachedDegree(unsigned reg);
     void clearDegreeCache() { degreeCache.clear(); }
-
-    unsigned nextTempReg = 1000;  // 临时寄存器起始编号 TODO: make it big enough
-    unsigned createTempReg() { return nextTempReg++; }
 
    public:
     explicit RegAllocChaitin(Function* func)
@@ -147,8 +147,6 @@ class RegAllocChaitin {
     // 辅助函数
     bool isPhysicalReg(unsigned reg) const;
     unsigned getPhysicalReg(unsigned virtualReg) const;
-    std::vector<unsigned> getUsedRegs(const Instruction* inst) const;
-    std::vector<unsigned> getDefinedRegs(const Instruction* inst) const;
 
     // ABI辅助函数
     bool isCallerSaved(unsigned reg) const;
