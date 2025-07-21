@@ -21,6 +21,8 @@ class RISCV64Target {
         riscv64::Module& module);  // 基本块调度，优化基本块顺序，删除无用的跳转
     Module& registerAllocationPass(
         riscv64::Module& module);  // 寄存器分配，把虚拟寄存器分配到物理寄存器上
+    Module& frameIndexPass(
+        riscv64::Module& module);  // 栈帧布局，处理frame
 };
 
 }  // namespace riscv64

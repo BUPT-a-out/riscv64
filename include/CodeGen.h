@@ -6,6 +6,7 @@
 #include "IR/Module.h"
 #include "Instructions/MachineOperand.h"
 #include "Visit.h"
+#include "FrameIndexPass.h"
 
 namespace riscv64 {
 
@@ -45,6 +46,12 @@ class CodeGenerator {
 
     // class Visitor;
     std::unique_ptr<Visitor> visitor_;
+
+    // 运行栈帧布局Pass
+    void runFrameIndexPass(Function* func) {
+        FrameIndexPass framePass(func);
+        framePass.run();
+    }
 };
 
 }  // namespace riscv64

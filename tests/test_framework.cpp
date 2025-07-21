@@ -253,7 +253,7 @@ void CodeGenTestRunner::executeCodeGeneration(
         try {
             std::cout << "\n--- Running Register Allocation Pass ---"
                       << std::endl;
-            auto allocatedModule = target.registerAllocationPass(riscvModule);
+            auto& allocatedModule = target.registerAllocationPass(riscvModule);
 
             // 打印寄存器分配后的代码
             std::cout
