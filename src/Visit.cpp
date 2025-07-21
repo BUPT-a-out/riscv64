@@ -156,7 +156,7 @@ void Visitor::createCFG(Function* func) {
                             "No basic block found for label: " +
                             target->getLabelName());
                     }
-                    
+
                     bb->addSuccessor(successor);
                     successor->addPredecessor(bb.get());
                     break;
@@ -679,42 +679,65 @@ std::unique_ptr<MachineOperand> Visitor::visitAllocaInst(
         return std::make_unique<FrameIndexOperand>(existing_id);
     }
 
-    // 处理 alloca 指令
-    constexpr int BITS_PER_BYTE = 8;
+    // 处理 alloca 指令 - 正确计算类型大小
     auto* allocated_type = alloca_inst->getAllocatedType();
-    auto bit_width = allocated_type->getBitWidth();
 
-    // Handle types that don't have a direct bit width (like pointers)
-    if (bit_width == 0) {
-        // For pointer types or other types without direct bit width, use a
-        // default size
-        if (allocated_type->isPointerType()) {
-            bit_width = 64;  // Assume 64-bit pointers for RISC-V 64
+    // 辅助函数：递归计算类型的字节大小
+    std::function<size_t(const midend::Type*)> calculateTypeSize =
+        [&](const midend::Type* type) -> size_t {
+        if (type->isPointerType()) {
+            return 8;  // 64位指针
+        } else if (type->isIntegerType()) {
+            auto bit_width = type->getBitWidth();
+            if (bit_width == 0) {
+                // 对于某些整数类型，使用默认大小
+                return 4;  // 默认32位整数
+            }
+            return (bit_width + 7) / 8;  // 向上舍入到字节
+        } else if (type->isFloatType()) {
+            return 4;  // float类型
+        } else if (type->isArrayType()) {
+            auto* array_type = static_cast<const midend::ArrayType*>(type);
+            auto element_size = calculateTypeSize(array_type->getElementType());
+            auto num_elements = array_type->getNumElements();
+            return element_size * num_elements;
         } else {
-            // For other types, try to get a reasonable default
-            bit_width = 32;  // Default to 32 bits for unknown types
+            // 对于其他未知类型，使用默认大小
+            return 4;
         }
-    }
+    };
 
-    auto size = bit_width / BITS_PER_BYTE;  // 获取分配的大小（字节）
-    if (size == 0) {
-        throw std::runtime_error("Invalid alloca size: " +
-                                 std::to_string(size));
-    }
+    // 计算基本类型的大小
+    auto type_size = calculateTypeSize(allocated_type);
 
+    // 处理数组分配
     int64_t array_size = 1;  // 默认数组大小为 1
     if (alloca_inst->isArrayAllocation()) {
-        auto* array_size_const =
-            midend::dyn_cast<midend::ConstantInt>(alloca_inst->getArraySize());
-        if (array_size_const == nullptr) {
+        auto* array_size_value = alloca_inst->getArraySize();
+        if (auto* array_size_const =
+                midend::dyn_cast<midend::ConstantInt>(array_size_value)) {
+            array_size = array_size_const->getSignedValue();
+        } else {
             throw std::runtime_error("Array size must be a constant integer");
         }
-        array_size = array_size_const->getSignedValue();
     }
 
+    // 计算总大小
+    auto total_size = type_size * array_size;
+
+    if (total_size == 0) {
+        throw std::runtime_error("Invalid alloca size: " +
+                                 std::to_string(total_size));
+    }
+
+    // 创建栈对象
     int id = sfm->getNewStackObjectIdentifier();
     auto stackObject =
-        std::make_unique<StackObject>(size * array_size, size, id);
+        std::make_unique<StackObject>(static_cast<int>(total_size),  // 总大小
+                                      4,  // 对齐要求(4字节对齐)
+                                      id  // 标识符
+        );
+
     sfm->addStackObject(std::move(stackObject));
     sfm->mapAllocaToStackSlot(inst, id);
 
