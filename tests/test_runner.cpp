@@ -1827,16 +1827,16 @@ void TestRunner::executeCodeGeneration(const std::string& testCaseName,
         std::cout << allocatedModule.toString() << std::endl;
 
         // 执行栈帧布局 pass
-        std::cout << "\n--- Running Frame Index Pass ---" << std::endl;
+        std::cout << "\n--- Running Frame Index Elimination Pass ---" << std::endl;
         try {
-            target.frameIndexPass(allocatedModule);
+            target.frameIndexEliminationPass(allocatedModule);
 
             // 打印栈帧布局后的代码
             std::cout << "\n--- Final RISC-V Assembly (with frame indices) ---"
                       << std::endl;
             std::cout << allocatedModule.toString() << std::endl;
         } catch (const std::exception& e) {
-            std::cout << "Frame index pass failed: " << e.what() << std::endl;
+            std::cout << "Frame index elimination pass failed: " << e.what() << std::endl;
         }
 
         // 可选：生成最终的汇编文本

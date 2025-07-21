@@ -13,16 +13,24 @@ class RISCV64Target {
     ~RISCV64Target() = default;
 
     std::string compileToAssembly(const midend::Module& module);
+
+    // 三阶段编译流程
     Module instructionSelectionPass(
-        const midend::Module& module);  // 指令选择，生成的都是虚拟寄存器
-    Module& reorderInstructionsPass(
-        riscv64::Module& module);  // 指令重排序，优化指令顺序
-    Module& basicBlockSchedulingPass(
-        riscv64::Module& module);  // 基本块调度，优化基本块顺序，删除无用的跳转
+        const midend::Module& module);  // 阶段1：指令选择
+    Module& initialFrameIndexPass(
+        riscv64::Module& module);  // 阶段1.5：初始Frame Index
     Module& registerAllocationPass(
-        riscv64::Module& module);  // 寄存器分配，把虚拟寄存器分配到物理寄存器上
-    Module& frameIndexPass(
-        riscv64::Module& module);  // 栈帧布局，处理frame
+        riscv64::Module& module);  // 阶段2：寄存器分配
+    Module& frameIndexEliminationPass(
+        riscv64::Module& module);  // 阶段3：Frame Index消除
+
+    // 保留原有方法以兼容
+    Module& reorderInstructionsPass(riscv64::Module& module);
+    Module& basicBlockSchedulingPass(riscv64::Module& module);
+
+    // 废弃的方法（使用frameIndexEliminationPass代替）
+    [[deprecated("Use frameIndexEliminationPass instead")]] Module&
+    frameIndexPass(riscv64::Module& module);
 };
 
 }  // namespace riscv64

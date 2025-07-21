@@ -486,8 +486,23 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
         return;
     }
 
-    stackManager.allocateSpillSlot(reg);
-    int spillOffset = stackManager.getSpillSlotOffset(reg);
+    // 第二阶段：为溢出寄存器创建抽象Frame Index
+    int spillSlotId = stackManager.allocateSpillSlot(reg);
+
+    // 创建抽象的栈对象用于溢出
+    auto* sfm = function->getStackFrameManager();
+    int fi_id = sfm->getNewStackObjectIdentifier();
+    auto spill_obj =
+        std::make_unique<StackObject>(StackObjectType::SpilledRegister,
+                                      8,   // 寄存器大小固定为8字节
+                                      8,   // 8字节对齐
+                                      reg  // 记录原始寄存器编号
+        );
+    spill_obj->identifier = fi_id;
+    sfm->addStackObject(std::move(spill_obj));
+
+    std::cout << "Created spill Frame Index FI(" << fi_id << ") for register "
+              << reg << std::endl;
 
     for (auto& bb : *function) {
         for (auto it = bb->begin(); it != bb->end(); ++it) {
@@ -497,46 +512,67 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
             auto usedRegs = inst->getUsedRegs();
             if (std::find(usedRegs.begin(), usedRegs.end(), reg) !=
                 usedRegs.end()) {
-                // 使用spill链管理器分配临时寄存器
+                // 在指令前插入reload代码
+                // 分配临时寄存器用于地址计算
                 unsigned tempReg =
                     spillChainManager->allocateTempRegister(reg, inst);
 
-                auto loadInst = std::make_unique<Instruction>(LD);
-                loadInst->addOperand(std::make_unique<RegisterOperand>(
-                    tempReg, false));  // 物理寄存器
-                loadInst->addOperand(std::make_unique<MemoryOperand>(
-                    std::make_unique<RegisterOperand>(2, false),  // sp
-                    std::make_unique<ImmediateOperand>(spillOffset)));
+                // 生成frameaddr指令获取溢出槽地址
+                auto frameAddrInst =
+                    std::make_unique<Instruction>(Opcode::FRAMEADDR);
+                frameAddrInst->addOperand(
+                    std::make_unique<RegisterOperand>(tempReg, false));
+                frameAddrInst->addOperand(
+                    std::make_unique<FrameIndexOperand>(fi_id));
+                it = bb->insert(it, std::move(frameAddrInst));
+                ++it;
 
+                // 生成load指令从溢出槽加载值
+                auto loadInst = std::make_unique<Instruction>(Opcode::LD);
+                loadInst->addOperand(
+                    std::make_unique<RegisterOperand>(tempReg, false));
+                loadInst->addOperand(std::make_unique<MemoryOperand>(
+                    std::make_unique<RegisterOperand>(tempReg, false),
+                    std::make_unique<ImmediateOperand>(0)));
                 it = bb->insert(it, std::move(loadInst));
                 ++it;
 
                 // 更新原指令中的寄存器引用
                 updateRegisterInInstruction(inst, reg, tempReg);
-
-                // 在指令执行后立即释放临时寄存器（概念上的）
-                // 实际上我们不需要显式释放，因为每个load操作都是独立的
             }
 
             // 检查指令是否定义了溢出的寄存器
             auto definedRegs = inst->getDefinedRegs();
             if (std::find(definedRegs.begin(), definedRegs.end(), reg) !=
                 definedRegs.end()) {
-                // 使用spill链管理器分配临时寄存器
+                // 分配临时寄存器
                 unsigned tempReg =
                     spillChainManager->allocateTempRegister(reg, inst);
 
                 // 更新原指令中的寄存器引用
                 updateRegisterInInstruction(inst, reg, tempReg);
-
-                auto storeInst = std::make_unique<Instruction>(SD);
-                storeInst->addOperand(std::make_unique<RegisterOperand>(
-                    tempReg, false));  // 物理寄存器
-                storeInst->addOperand(std::make_unique<MemoryOperand>(
-                    std::make_unique<RegisterOperand>(2, false),  // sp
-                    std::make_unique<ImmediateOperand>(spillOffset)));
-
                 ++it;
+
+                // 在指令后插入spill代码
+                // 生成frameaddr指令获取溢出槽地址
+                unsigned addrReg =
+                    spillChainManager->allocateTempRegister(reg, nullptr);
+                auto frameAddrInst =
+                    std::make_unique<Instruction>(Opcode::FRAMEADDR);
+                frameAddrInst->addOperand(
+                    std::make_unique<RegisterOperand>(addrReg, false));
+                frameAddrInst->addOperand(
+                    std::make_unique<FrameIndexOperand>(fi_id));
+                it = bb->insert(it, std::move(frameAddrInst));
+                ++it;
+
+                // 生成store指令将值存储到溢出槽
+                auto storeInst = std::make_unique<Instruction>(Opcode::SD);
+                storeInst->addOperand(
+                    std::make_unique<RegisterOperand>(tempReg, false));
+                storeInst->addOperand(std::make_unique<MemoryOperand>(
+                    std::make_unique<RegisterOperand>(addrReg, false),
+                    std::make_unique<ImmediateOperand>(0)));
                 it = bb->insert(it, std::move(storeInst));
             }
         }
@@ -641,21 +677,21 @@ void RegAllocChaitin::performCoalescing() {
 // 识别复制指令中的合并候选
 void RegAllocChaitin::identifyCoalesceCandidates() {
     coalesceCandidates.clear();
-    
+
     for (auto& bb : *function) {
         for (auto& inst : *bb) {
             if (inst->isCopyInstr()) {
                 const auto& operands = inst->getOperands();
-                if (operands.size() >= 2 && operands[0]->isReg() && 
+                if (operands.size() >= 2 && operands[0]->isReg() &&
                     operands[1]->isReg()) {
                     unsigned dst = operands[0]->getRegNum();
                     unsigned src = operands[1]->getRegNum();
-                    
+
                     // 只考虑有意义的合并：至少有一个是虚拟寄存器
                     if (isPhysicalReg(dst) && isPhysicalReg(src)) {
-                        continue; // 跳过两个物理寄存器的复制
+                        continue;  // 跳过两个物理寄存器的复制
                     }
-                    
+
                     // 确保合并方向正确
                     unsigned mergeTarget, mergeSource;
                     if (isPhysicalReg(dst) && !isPhysicalReg(src)) {
@@ -669,10 +705,10 @@ void RegAllocChaitin::identifyCoalesceCandidates() {
                         mergeTarget = dst;
                         mergeSource = src;
                     }
-                    
-                    int priority = calculateCoalescePriority(mergeSource, mergeTarget, 
-                                                           bb.get(), inst.get());
-                    
+
+                    int priority = calculateCoalescePriority(
+                        mergeSource, mergeTarget, bb.get(), inst.get());
+
                     CoalesceInfo info;
                     info.src = mergeSource;
                     info.dst = mergeTarget;
@@ -684,7 +720,6 @@ void RegAllocChaitin::identifyCoalesceCandidates() {
         }
     }
 }
-
 
 int RegAllocChaitin::calculateCoalescePriority(unsigned src, unsigned dst,
                                                BasicBlock* bb,
@@ -1004,7 +1039,7 @@ bool RegAllocChaitin::crossesFunctionCall(unsigned src, unsigned dst) const {
 void RegAllocChaitin::coalesceRegisters(unsigned src, unsigned dst) {
     // 确定正确的合并方向：物理寄存器应该作为合并目标
     unsigned mergeTarget, mergeSource;
-    
+
     if (isPhysicalReg(dst) && !isPhysicalReg(src)) {
         // 虚拟寄存器合并到物理寄存器
         mergeTarget = dst;
@@ -1024,31 +1059,30 @@ void RegAllocChaitin::coalesceRegisters(unsigned src, unsigned dst) {
         }
     } else {
         // 两个物理寄存器不应该合并
-        std::cerr << "Error: Attempting to coalesce two physical registers: " 
+        std::cerr << "Error: Attempting to coalesce two physical registers: "
                   << src << " and " << dst << std::endl;
         return;
     }
-    
+
     // 使用Union-Find结构管理合并
     unsigned srcRoot = findCoalesceRoot(mergeSource);
     unsigned dstRoot = findCoalesceRoot(mergeTarget);
-    
+
     if (srcRoot != dstRoot) {
         unionCoalesce(srcRoot, dstRoot);
         coalesceMap[mergeSource] = mergeTarget;
         coalescedRegs.insert(mergeSource);
-        
+
         // 增量更新度数缓存
         updateDegreeAfterCoalesce(mergeTarget, mergeSource);
-        
+
         // 更新冲突图
         updateInterferenceAfterCoalesce(mergeTarget, mergeSource);
-        
-        std::cout << "Coalesced register " << mergeSource 
-                  << " into " << mergeTarget << std::endl;
+
+        std::cout << "Coalesced register " << mergeSource << " into "
+                  << mergeTarget << std::endl;
     }
 }
-
 
 // Union-Find 查找根节点
 unsigned RegAllocChaitin::findCoalesceRoot(unsigned reg) {
@@ -1190,7 +1224,8 @@ std::vector<unsigned> RegAllocChaitin::getABIPreferredRegs(
 
     // 如果虚拟寄存器有特定的ABI约束，优先考虑相应的物理寄存器
     if (physicalConstraints.find(virtualReg) != physicalConstraints.end()) {
-        for (unsigned physReg : physicalConstraints.at(virtualReg)) {
+        const auto& constraints = physicalConstraints.at(virtualReg);
+        for (unsigned physReg : constraints) {
             if (!isReservedReg(physReg)) {
                 preferredRegs.push_back(physReg);
             }

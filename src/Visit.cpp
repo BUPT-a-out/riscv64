@@ -687,75 +687,44 @@ std::unique_ptr<MachineOperand> Visitor::visitAllocaInst(
         return std::make_unique<FrameIndexOperand>(existing_id);
     }
 
-    // 处理 alloca 指令 - 正确计算类型大小
+    // 第一阶段：只为alloca创建抽象Frame Index，不计算具体偏移
     auto* allocated_type = alloca_inst->getAllocatedType();
 
-    // 辅助函数：递归计算类型的字节大小
+    // 计算类型大小
     std::function<size_t(const midend::Type*)> calculateTypeSize =
         [&](const midend::Type* type) -> size_t {
         if (type->isPointerType()) {
             return 8;  // 64位指针
         } else if (type->isIntegerType()) {
-            auto bit_width = type->getBitWidth();
-            if (bit_width == 0) {
-                // 对于某些整数类型，使用默认大小
-                return 4;  // 默认32位整数
-            }
-            return (bit_width + 7) / 8;  // 向上舍入到字节
-        } else if (type->isFloatType()) {
-            return 4;  // float类型
+            return (type->getBitWidth() + 7) / 8;  // 向上取整到字节
         } else if (type->isArrayType()) {
-            auto* array_type = static_cast<const midend::ArrayType*>(type);
-            auto element_size = calculateTypeSize(array_type->getElementType());
-            auto num_elements = array_type->getNumElements();
-            return element_size * num_elements;
+            const auto* arrayType = midend::dyn_cast<midend::ArrayType>(type);
+            size_t elementSize = calculateTypeSize(arrayType->getElementType());
+            return elementSize * arrayType->getNumElements();
         } else {
-            // 对于其他未知类型，使用默认大小
-            return 4;
+            return 4;  // 默认大小
         }
     };
 
-    // 计算基本类型的大小
-    auto type_size = calculateTypeSize(allocated_type);
+    size_t typeSize = calculateTypeSize(allocated_type);
 
-    // 处理数组分配
-    int64_t array_size = 1;  // 默认数组大小为 1
-    if (alloca_inst->isArrayAllocation()) {
-        auto* array_size_value = alloca_inst->getArraySize();
-        if (auto* array_size_const =
-                midend::dyn_cast<midend::ConstantInt>(array_size_value)) {
-            array_size = array_size_const->getSignedValue();
-        } else {
-            throw std::runtime_error("Array size must be a constant integer");
-        }
-    }
+    // 创建抽象的栈对象（第一阶段不分配具体偏移）
+    int fi_id = sfm->getNewStackObjectIdentifier();
+    auto stack_obj = std::make_unique<StackObject>(
+        StackObjectType::AllocatedStackSlot, static_cast<int>(typeSize),
+        8,  // 8字节对齐
+        0   // 第一阶段不设置regNum
+    );
+    stack_obj->identifier = fi_id;
 
-    // 计算总大小
-    auto total_size = type_size * array_size;
+    // 添加到栈帧管理器，但不计算偏移
+    sfm->addStackObject(std::move(stack_obj));
+    sfm->mapAllocaToStackSlot(inst, fi_id);
 
-    if (total_size == 0) {
-        throw std::runtime_error("Invalid alloca size: " +
-                                 std::to_string(total_size));
-    }
+    std::cout << "Created abstract Frame Index FI(" << fi_id
+              << ") for alloca, size: " << typeSize << " bytes" << std::endl;
 
-    // 创建栈对象
-    int id = sfm->getNewStackObjectIdentifier();
-    auto stackObject =
-        std::make_unique<StackObject>(static_cast<int>(total_size),  // 总大小
-                                      4,  // 对齐要求(4字节对齐)
-                                      id  // 标识符
-        );
-
-    sfm->addStackObject(std::move(stackObject));
-    sfm->mapAllocaToStackSlot(inst, id);
-
-    // 为alloca指令本身也建立映射，这样后续引用这个指令时能找到对应的FI
-    codeGen_->mapValueToReg(
-        inst, id,
-        false);  // 使用id作为"寄存器号"，false表示这不是真正的寄存器
-
-    // 返回分配的FrameIndexOperand
-    return std::make_unique<FrameIndexOperand>(id);
+    return std::make_unique<FrameIndexOperand>(fi_id);
 }
 
 // 处理 store 指令
@@ -963,83 +932,89 @@ std::unique_ptr<MachineOperand> Visitor::visitUnaryOp(
     // This is essentially a no-op, just return the operand
     if (inst->getOpcode() == midend::Opcode::UAdd) {
         auto operand = visit(inst->getOperand(0), parent_bb);
-        
+
         // If it's already a register, return it directly
         if (operand->getType() == OperandType::Register) {
             auto* reg_operand = dynamic_cast<RegisterOperand*>(operand.get());
-            codeGen_->mapValueToReg(inst, reg_operand->getRegNum(), 
-                                   reg_operand->isVirtual());
+            codeGen_->mapValueToReg(inst, reg_operand->getRegNum(),
+                                    reg_operand->isVirtual());
             return std::make_unique<RegisterOperand>(reg_operand->getRegNum(),
-                                                    reg_operand->isVirtual());
+                                                     reg_operand->isVirtual());
         }
-        
+
         // If it's an immediate, we can return it directly or load to register
         if (operand->getType() == OperandType::Immediate) {
             auto* imm_operand = dynamic_cast<ImmediateOperand*>(operand.get());
             // For unary plus, the value remains the same
             return std::make_unique<ImmediateOperand>(imm_operand->getValue());
         }
-        
+
         throw std::runtime_error("Unsupported operand type for UAdd");
     }
 
     // Handle USub (unary minus): -operand
     if (inst->getOpcode() == midend::Opcode::USub) {
         auto operand = visit(inst->getOperand(0), parent_bb);
-        
+
         // If both are immediates, do constant folding
         if (operand->getType() == OperandType::Immediate) {
             auto* imm_operand = dynamic_cast<ImmediateOperand*>(operand.get());
             return std::make_unique<ImmediateOperand>(-imm_operand->getValue());
         }
-        
+
         // Convert operand to register if needed
         auto operand_reg = immToReg(std::move(operand), parent_bb);
-        
+
         // Generate sub instruction: 0 - operand
         auto new_reg = codeGen_->allocateReg();
-        auto instruction = std::make_unique<Instruction>(Opcode::SUB, parent_bb);
+        auto instruction =
+            std::make_unique<Instruction>(Opcode::SUB, parent_bb);
         instruction->addOperand(std::make_unique<RegisterOperand>(
             new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-        instruction->addOperand(std::make_unique<RegisterOperand>("zero"));  // rs1 (zero register)
+        instruction->addOperand(
+            std::make_unique<RegisterOperand>("zero"));   // rs1 (zero register)
         instruction->addOperand(std::move(operand_reg));  // rs2
         parent_bb->addInstruction(std::move(instruction));
-        
-        codeGen_->mapValueToReg(inst, new_reg->getRegNum(), new_reg->isVirtual());
-        return std::make_unique<RegisterOperand>(new_reg->getRegNum(), 
-                                               new_reg->isVirtual());
+
+        codeGen_->mapValueToReg(inst, new_reg->getRegNum(),
+                                new_reg->isVirtual());
+        return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                                 new_reg->isVirtual());
     }
 
-    // Handle Not: !operand 
+    // Handle Not: !operand
     if (inst->getOpcode() == midend::Opcode::Not) {
         auto operand = visit(inst->getOperand(0), parent_bb);
-        
+
         // If it's an immediate, do constant folding
         if (operand->getType() == OperandType::Immediate) {
             auto* imm_operand = dynamic_cast<ImmediateOperand*>(operand.get());
             // Bitwise NOT
-            return std::make_unique<ImmediateOperand>((imm_operand->getValue()) == 0);
+            return std::make_unique<ImmediateOperand>(
+                (imm_operand->getValue()) == 0);
         }
-        
+
         // Convert operand to register if needed
         auto operand_reg = immToReg(std::move(operand), parent_bb);
-        
+
         // Generate sltiu instruction: operand sltiu 1
         auto new_reg = codeGen_->allocateReg();
-        auto instruction = std::make_unique<Instruction>(Opcode::SLTIU, parent_bb);
+        auto instruction =
+            std::make_unique<Instruction>(Opcode::SLTIU, parent_bb);
         instruction->addOperand(std::make_unique<RegisterOperand>(
-            new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-        instruction->addOperand(std::move(operand_reg));  // rs1
+            new_reg->getRegNum(), new_reg->isVirtual()));                // rd
+        instruction->addOperand(std::move(operand_reg));                 // rs1
         instruction->addOperand(std::make_unique<ImmediateOperand>(1));  // imm
         parent_bb->addInstruction(std::move(instruction));
-        
-        codeGen_->mapValueToReg(inst, new_reg->getRegNum(), new_reg->isVirtual());
-        return std::make_unique<RegisterOperand>(new_reg->getRegNum(), 
-                                               new_reg->isVirtual());
+
+        codeGen_->mapValueToReg(inst, new_reg->getRegNum(),
+                                new_reg->isVirtual());
+        return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                                 new_reg->isVirtual());
     }
 
-    throw std::runtime_error("Unsupported unary operation: " + inst->toString());
-
+    throw std::runtime_error("Unsupported unary operation: " +
+                             inst->toString());
 }
 
 // 处理二元运算指令
