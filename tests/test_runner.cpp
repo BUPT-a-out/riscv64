@@ -1313,6 +1313,208 @@ std::unique_ptr<midend::Module> createComplexMemoryArrayTest() {
     return module;
 }
 
+std::unique_ptr<midend::Module> createComprehensiveBinaryOpsTest() {
+    static auto context = std::make_unique<midend::Context>();
+    auto module = std::make_unique<midend::Module>("comprehensive_binary_ops",
+                                                   context.get());
+
+    auto* i32Type = context->getInt32Type();
+
+    // 创建函数类型: i32 test_all_binary_ops(i32 a, i32 b, i32 c, i32 d)
+    auto* funcType = midend::FunctionType::get(
+        i32Type, {i32Type, i32Type, i32Type, i32Type});
+    auto* func =
+        midend::Function::Create(funcType, "test_all_binary_ops", module.get());
+
+    // 获取参数
+    auto* arg1 = func->getArg(0);
+    arg1->setName("a");
+    auto* arg2 = func->getArg(1);
+    arg2->setName("b");
+    auto* arg3 = func->getArg(2);
+    arg3->setName("c");
+    auto* arg4 = func->getArg(3);
+    arg4->setName("d");
+
+    auto* entry = midend::BasicBlock::Create(context.get(), "entry", func);
+    midend::IRBuilder builder(context.get());
+    builder.setInsertPoint(entry);
+
+    // 创建常量用于测试立即数操作
+    auto* const5 = midend::ConstantInt::get(i32Type, 5);
+    auto* const3 = midend::ConstantInt::get(i32Type, 3);
+    auto* const2 = midend::ConstantInt::get(i32Type, 2);
+    auto* const10 = midend::ConstantInt::get(i32Type, 10);
+    auto* const7 = midend::ConstantInt::get(i32Type, 7);
+    auto* const15 = midend::ConstantInt::get(i32Type, 15);
+
+    // === 算术运算测试 ===
+
+    // 1. Add: 测试寄存器+寄存器, 寄存器+立即数, 立即数+立即数
+    auto* add_reg_reg = builder.createAdd(arg1, arg2, "add_reg_reg");
+    auto* add_reg_imm = builder.createAdd(arg1, const5, "add_reg_imm");
+    auto* add_imm_reg = builder.createAdd(const3, arg2, "add_imm_reg");
+    auto* add_imm_imm = builder.createAdd(const5, const3, "add_imm_imm");
+
+    // 2. Sub: 测试各种组合
+    auto* sub_reg_reg = builder.createSub(arg1, arg2, "sub_reg_reg");
+    auto* sub_reg_imm = builder.createSub(arg1, const5, "sub_reg_imm");
+    auto* sub_imm_reg = builder.createSub(const10, arg2, "sub_imm_reg");
+    auto* sub_imm_imm = builder.createSub(const10, const3, "sub_imm_imm");
+
+    // 3. Mul: 测试各种组合
+    auto* mul_reg_reg = builder.createMul(arg1, arg2, "mul_reg_reg");
+    auto* mul_reg_imm = builder.createMul(arg1, const2, "mul_reg_imm");
+    auto* mul_imm_reg = builder.createMul(const3, arg2, "mul_imm_reg");
+    auto* mul_imm_imm = builder.createMul(const3, const2, "mul_imm_imm");
+
+    // 4. Div: 测试各种组合
+    auto* div_reg_reg = builder.createDiv(arg3, arg4, "div_reg_reg");
+    auto* div_reg_imm = builder.createDiv(arg3, const2, "div_reg_imm");
+    auto* div_imm_reg = builder.createDiv(const10, arg4, "div_imm_reg");
+    auto* div_imm_imm = builder.createDiv(const10, const2, "div_imm_imm");
+
+    // 5. Rem: 测试各种组合
+    auto* rem_reg_reg = builder.createRem(arg3, arg4, "rem_reg_reg");
+    auto* rem_reg_imm = builder.createRem(arg3, const3, "rem_reg_imm");
+    auto* rem_imm_reg = builder.createRem(const7, arg4, "rem_imm_reg");
+    auto* rem_imm_imm = builder.createRem(const7, const3, "rem_imm_imm");
+
+    // === 位运算测试 ===
+
+    // 6. And: 测试各种组合
+    auto* and_reg_reg = builder.createAnd(arg1, arg2, "and_reg_reg");
+    auto* and_reg_imm = builder.createAnd(arg1, const15, "and_reg_imm");
+    auto* and_imm_reg = builder.createAnd(const15, arg2, "and_imm_reg");
+    auto* and_imm_imm = builder.createAnd(const15, const7, "and_imm_imm");
+
+    // 7. Or: 测试各种组合
+    auto* or_reg_reg = builder.createOr(arg1, arg2, "or_reg_reg");
+    auto* or_reg_imm = builder.createOr(arg1, const15, "or_reg_imm");
+    auto* or_imm_reg = builder.createOr(const15, arg2, "or_imm_reg");
+    auto* or_imm_imm = builder.createOr(const15, const7, "or_imm_imm");
+
+    // 8. Xor: 测试各种组合
+    auto* xor_reg_reg = builder.createXor(arg1, arg2, "xor_reg_reg");
+    auto* xor_reg_imm = builder.createXor(arg1, const15, "xor_reg_imm");
+    auto* xor_imm_reg = builder.createXor(const15, arg2, "xor_imm_reg");
+    auto* xor_imm_imm = builder.createXor(const15, const7, "xor_imm_imm");
+
+    // 9. Shl: 测试各种组合
+    // auto* shl_reg_reg = builder.createShl(arg1, arg2, "shl_reg_reg");
+    // auto* shl_reg_imm = builder.createShl(arg1, const2, "shl_reg_imm");
+    // auto* shl_imm_reg = builder.createShl(const10, arg2, "shl_imm_reg");
+    // auto* shl_imm_imm = builder.createShl(const10, const2, "shl_imm_imm");
+
+    // // 10. Shr: 测试各种组合
+    // auto* shr_reg_reg = builder.createAShr(arg1, arg2, "shr_reg_reg");
+    // auto* shr_reg_imm = builder.createAShr(arg1, const2, "shr_reg_imm");
+    // auto* shr_imm_reg = builder.createAShr(const10, arg2, "shr_imm_reg");
+    // auto* shr_imm_imm = builder.createAShr(const10, const2, "shr_imm_imm");
+
+    // === 比较运算测试 ===
+
+    // 11. ICmpSGT: 测试有符号大于比较
+    auto* sgt_reg_reg = builder.createICmpSGT(arg1, arg2, "sgt_reg_reg");
+    auto* sgt_reg_imm = builder.createICmpSGT(arg1, const5, "sgt_reg_imm");
+    auto* sgt_imm_reg = builder.createICmpSGT(const10, arg2, "sgt_imm_reg");
+    auto* sgt_imm_imm = builder.createICmpSGT(const10, const5, "sgt_imm_imm");
+
+    // 12. ICmpEQ: 测试相等比较
+    auto* eq_reg_reg = builder.createICmpEQ(arg1, arg2, "eq_reg_reg");
+    auto* eq_reg_imm = builder.createICmpEQ(arg1, const5, "eq_reg_imm");
+    auto* eq_imm_reg = builder.createICmpEQ(const5, arg2, "eq_imm_reg");
+    auto* eq_imm_imm = builder.createICmpEQ(const5, const5, "eq_imm_imm");
+
+    // 13. ICmpNE: 测试不等比较
+    auto* ne_reg_reg = builder.createICmpNE(arg1, arg2, "ne_reg_reg");
+    auto* ne_reg_imm = builder.createICmpNE(arg1, const5, "ne_reg_imm");
+    auto* ne_imm_reg = builder.createICmpNE(const5, arg2, "ne_imm_reg");
+    auto* ne_imm_imm = builder.createICmpNE(const5, const7, "ne_imm_imm");
+
+    // 14. ICmpSLT: 测试有符号小于比较
+    auto* slt_reg_reg = builder.createICmpSLT(arg1, arg2, "slt_reg_reg");
+    auto* slt_reg_imm = builder.createICmpSLT(arg1, const5, "slt_reg_imm");
+    auto* slt_imm_reg = builder.createICmpSLT(const3, arg2, "slt_imm_reg");
+    auto* slt_imm_imm = builder.createICmpSLT(const3, const5, "slt_imm_imm");
+
+    // 15. ICmpSLE: 测试有符号小于等于比较
+    auto* sle_reg_reg = builder.createICmpSLE(arg1, arg2, "sle_reg_reg");
+    auto* sle_reg_imm = builder.createICmpSLE(arg1, const5, "sle_reg_imm");
+    auto* sle_imm_reg = builder.createICmpSLE(const5, arg2, "sle_imm_reg");
+    auto* sle_imm_imm = builder.createICmpSLE(const5, const5, "sle_imm_imm");
+
+    // 16. ICmpSGE: 测试有符号大于等于比较
+    auto* sge_reg_reg = builder.createICmpSGE(arg1, arg2, "sge_reg_reg");
+    auto* sge_reg_imm = builder.createICmpSGE(arg1, const5, "sge_reg_imm");
+    auto* sge_imm_reg = builder.createICmpSGE(const5, arg2, "sge_imm_reg");
+    auto* sge_imm_imm = builder.createICmpSGE(const5, const5, "sge_imm_imm");
+
+    // === 组合计算：使用所有运算结果 ===
+
+    // 将所有算术运算结果相加
+    auto* arith_sum1 =
+        builder.createAdd(add_reg_reg, sub_reg_reg, "arith_sum1");
+    auto* arith_sum2 =
+        builder.createAdd(mul_reg_reg, div_reg_reg, "arith_sum2");
+    auto* arith_sum3 = builder.createAdd(rem_reg_reg, arith_sum1, "arith_sum3");
+    auto* arith_total =
+        builder.createAdd(arith_sum2, arith_sum3, "arith_total");
+
+    // 将所有位运算结果相加
+    auto* bit_sum1 = builder.createAdd(and_reg_reg, or_reg_reg, "bit_sum1");
+    // auto* bit_sum2 = builder.createAdd(xor_reg_reg, shl_reg_reg, "bit_sum2");
+    // auto* bit_sum3 = builder.createAdd(shr_reg_reg, bit_sum1, "bit_sum3");
+    // auto* bit_total = builder.createAdd(bit_sum2, bit_sum3, "bit_total");
+
+    // 将比较运算结果转换为整数并相加
+    auto* cmp_sum1 = builder.createAdd(sgt_reg_reg, eq_reg_reg, "cmp_sum1");
+    auto* cmp_sum2 = builder.createAdd(ne_reg_reg, slt_reg_reg, "cmp_sum2");
+    auto* cmp_sum3 = builder.createAdd(sle_reg_reg, sge_reg_reg, "cmp_sum3");
+    auto* cmp_sum4 = builder.createAdd(cmp_sum1, cmp_sum2, "cmp_sum4");
+    auto* cmp_total = builder.createAdd(cmp_sum3, cmp_sum4, "cmp_total");
+
+    // 混合使用立即数操作的结果
+    auto* imm_sum1 = builder.createAdd(add_imm_imm, sub_imm_imm, "imm_sum1");
+    auto* imm_sum2 = builder.createAdd(mul_imm_imm, div_imm_imm, "imm_sum2");
+    auto* imm_sum3 = builder.createAdd(rem_imm_imm, and_imm_imm, "imm_sum3");
+    auto* imm_sum4 = builder.createAdd(or_imm_imm, xor_imm_imm, "imm_sum4");
+    // auto* imm_sum5 = builder.createAdd(shl_imm_imm, shr_imm_imm, "imm_sum5");
+    auto* imm_sum6 = builder.createAdd(sgt_imm_imm, eq_imm_imm, "imm_sum6");
+    auto* imm_sum7 = builder.createAdd(ne_imm_imm, slt_imm_imm, "imm_sum7");
+    auto* imm_sum8 = builder.createAdd(sle_imm_imm, sge_imm_imm, "imm_sum8");
+
+    auto* imm_total1 = builder.createAdd(imm_sum1, imm_sum2, "imm_total1");
+    auto* imm_total2 = builder.createAdd(imm_sum3, imm_sum4, "imm_total2");
+    // auto* imm_total3 = builder.createAdd(imm_sum5, imm_sum6, "imm_total3");
+    auto* imm_total4 = builder.createAdd(imm_sum7, imm_sum8, "imm_total4");
+    auto* imm_total5 = builder.createAdd(imm_total1, imm_total2, "imm_total5");
+    // auto* imm_total6 = builder.createAdd(imm_total3, imm_total4,
+    // "imm_total6"); auto* imm_total = builder.createAdd(imm_total5,
+    // imm_total6, "imm_total");
+
+    // 最终结果：综合所有类型的运算
+    // auto* partial1 = builder.createAdd(arith_total, bit_total, "partial1");
+    // auto* partial2 = builder.createAdd(cmp_total, imm_total, "partial2");
+    // auto* final_result = builder.createAdd(partial1, partial2,
+    // "final_result");
+
+    // 额外测试：确保代码涵盖所有分支
+    // 测试特殊情况：与0进行运算（测试immToReg中的零寄存器优化）
+    auto* zero = midend::ConstantInt::get(i32Type, 0);
+    auto* add_with_zero = builder.createAdd(imm_sum1, zero, "add_with_zero");
+    auto* mul_with_zero = builder.createMul(arg1, zero, "mul_with_zero");
+    auto* test_zero_optimizations =
+        builder.createAdd(add_with_zero, mul_with_zero, "test_zero_opt");
+
+    // 最终测试结果
+    auto* ultimate_result =
+        builder.createAdd(test_zero_optimizations, imm_sum2, "ultimate_result");
+
+    builder.createRet(ultimate_result);
+    return module;
+}
+
 }  // namespace testcases
 
 // TestRunner 构造函数实现
@@ -1337,6 +1539,8 @@ TestRunner::TestRunner() {
     testCases_["12_simple_array_2d"] = testcases::createSimpleArray2DTest;
     testCases_["13_complex_memory_array"] =
         testcases::createComplexMemoryArrayTest;
+    testCases_["14_comprehensive_binary_ops"] =
+        testcases::createComprehensiveBinaryOpsTest;
 }
 
 std::unique_ptr<midend::Module> TestRunner::loadTestCase(
