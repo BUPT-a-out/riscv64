@@ -196,62 +196,80 @@ void StackFrameManager::insertPrologueEpilogue() {
 
 void StackFrameManager::generatePrologue() {
     BasicBlock* entryBlock = function->getEntryBlock();
-
-    // 1. 调整栈指针
+    std::vector<std::unique_ptr<Instruction>> prologueInsts;
+    
+    // 按正确顺序生成指令
     if (frameInfo.hasStackPointerAdjustment) {
-        auto stackAdjust = createStackAdjustInstruction(-frameInfo.totalSize);
-        insertInstructionAtBeginning(entryBlock, std::move(stackAdjust));
+        prologueInsts.push_back(createStackAdjustInstruction(-frameInfo.totalSize));
     }
-
-    // 2. 保存返回地址
+    
     if (calleeSavedRegs.count(1)) {
-        auto saveRa = createSaveInstruction(1, frameInfo.returnAddressOffset);
-        insertInstructionAtBeginning(entryBlock, std::move(saveRa));
+        prologueInsts.push_back(createSaveInstruction(1, frameInfo.returnAddressOffset));
     }
-
-    // 3. 保存callee-saved寄存器
+    
     for (unsigned reg : calleeSavedRegs) {
-        if (reg != 1) {  // ra已经处理过了
-            auto saveInst = createSaveInstruction(
-                reg, frameInfo.savedRegisterOffset + reg * 8);
-            insertInstructionAtBeginning(entryBlock, std::move(saveInst));
+        if (reg != 1) {
+            prologueInsts.push_back(createSaveInstruction(
+                reg, frameInfo.savedRegisterOffset + reg * 8));
         }
     }
-
-    // 4. 设置帧指针（如果使用）
-    if (calleeSavedRegs.count(8)) {  // s0/fp
-        // mv s0, sp
+    
+    if (calleeSavedRegs.count(8)) {
         auto setFp = std::make_unique<Instruction>(MV);
-        setFp->addOperand(std::make_unique<RegisterOperand>(8, false));  // s0
-        setFp->addOperand(std::make_unique<RegisterOperand>(2, false));  // sp
-        insertInstructionAtBeginning(entryBlock, std::move(setFp));
+        setFp->addOperand(std::make_unique<RegisterOperand>(8, false));
+        setFp->addOperand(std::make_unique<RegisterOperand>(2, false));
+        prologueInsts.push_back(std::move(setFp));
+    }
+    
+    // 反向插入以保持正确顺序
+    for (auto it = prologueInsts.rbegin(); it != prologueInsts.rend(); ++it) {
+        insertInstructionAtBeginning(entryBlock, std::move(*it));
     }
 }
 
 void StackFrameManager::generateEpilogue() {
-    // 这里需要在所有返回指令前插入尾声代码
-    // 为简化，假设只有一个返回点
-
-    // 1. 恢复callee-saved寄存器
-    for (unsigned reg : calleeSavedRegs) {
-        if (reg != 1) {
-            auto restoreInst = createRestoreInstruction(
-                reg, frameInfo.savedRegisterOffset + reg * 8);
-            // 需要在返回指令前插入
+    if (!hasStackFrame()) {
+        return;
+    }
+    
+    // 遍历所有基本块，为每个返回点插入尾声代码
+    for (auto& bb : *function) {
+        if (!bb->getInstructionCount()) continue;
+        
+        auto lastInst = bb->getInstruction(bb->getInstructionCount() - 1);
+        if (lastInst->getOpcode() == RET || lastInst->getOpcode() == JR) {
+            generateEpilogueForBlock(bb.get());
         }
     }
+}
 
-    // 2. 恢复返回地址
-    if (calleeSavedRegs.count(1)) {
-        auto restoreRa =
-            createRestoreInstruction(1, frameInfo.returnAddressOffset);
-        // 需要在返回指令前插入
+void StackFrameManager::generateEpilogueForBlock(BasicBlock* bb) {
+    // 获取返回指令的位置
+    auto returnInstIter = --(bb->end());
+    
+    // 1. 恢复callee-saved寄存器（除了ra，逆序恢复）
+    // 将unordered_set转换为vector以便逆序遍历
+    std::vector<unsigned> regsToRestore(calleeSavedRegs.begin(), calleeSavedRegs.end());
+    std::sort(regsToRestore.rbegin(), regsToRestore.rend()); // 逆序排序
+    
+    for (unsigned reg : regsToRestore) {
+        if (reg != 1) { // ra单独处理
+            auto restoreInst = createRestoreInstruction(
+                reg, frameInfo.savedRegisterOffset + reg * 8);
+            bb->insert(returnInstIter, std::move(restoreInst));
+        }
     }
-
+    
+    // 2. 恢复返回地址
+    if (calleeSavedRegs.count(1)) { // 检查ra是否需要恢复
+        auto restoreRa = createRestoreInstruction(1, frameInfo.returnAddressOffset);
+        bb->insert(returnInstIter, std::move(restoreRa));
+    }
+    
     // 3. 恢复栈指针
     if (frameInfo.hasStackPointerAdjustment) {
         auto stackRestore = createStackAdjustInstruction(frameInfo.totalSize);
-        // 需要在返回指令前插入
+        bb->insert(returnInstIter, std::move(stackRestore));
     }
 }
 

@@ -149,6 +149,7 @@ private:
     // 序言和尾声生成
     void generatePrologue();
     void generateEpilogue();
+    void generateEpilogueForBlock(BasicBlock* bb);
     
     // 辅助函数
     bool isCallerSaved(unsigned regNum) const;
