@@ -1515,6 +1515,220 @@ std::unique_ptr<midend::Module> createComprehensiveBinaryOpsTest() {
     return module;
 }
 
+std::unique_ptr<midend::Module> createComprehensiveUnaryOpsTest() {
+    static auto context = std::make_unique<midend::Context>();
+    auto module = std::make_unique<midend::Module>("comprehensive_unary_ops",
+                                                   context.get());
+
+    auto* i32Type = context->getInt32Type();
+    auto* boolType = context->getInt1Type();
+
+    // 创建函数类型: i32 test_all_unary_ops(i32 a, i32 b, i32 c)
+    auto* funcType =
+        midend::FunctionType::get(i32Type, {i32Type, i32Type, i32Type});
+    auto* func =
+        midend::Function::Create(funcType, "test_all_unary_ops", module.get());
+
+    // 获取参数
+    auto* arg1 = func->getArg(0);
+    arg1->setName("a");
+    auto* arg2 = func->getArg(1);
+    arg2->setName("b");
+    auto* arg3 = func->getArg(2);
+    arg3->setName("c");
+
+    auto* entry = midend::BasicBlock::Create(context.get(), "entry", func);
+    midend::IRBuilder builder(context.get());
+    builder.setInsertPoint(entry);
+
+    // 创建常量用于测试立即数操作
+    auto* const0 = midend::ConstantInt::get(i32Type, 0);
+    auto* const1 = midend::ConstantInt::get(i32Type, 1);
+    auto* const5 = midend::ConstantInt::get(i32Type, 5);
+    auto* const10 = midend::ConstantInt::get(i32Type, 10);
+    auto* const42 = midend::ConstantInt::get(i32Type, 42);
+    auto* constNeg7 = midend::ConstantInt::get(i32Type, -7);
+    auto* const255 = midend::ConstantInt::get(i32Type, 255);
+    auto* constMax =
+        midend::ConstantInt::get(i32Type, 2147483647);  // INT32_MAX
+    auto* constMin =
+        midend::ConstantInt::get(i32Type, -2147483648);  // INT32_MIN
+
+    // 创建布尔常量用于测试 Not 操作
+    auto* boolTrue = midend::ConstantInt::getTrue(context.get());
+    auto* boolFalse = midend::ConstantInt::getFalse(context.get());
+
+    // === 测试 UAdd (一元加号) ===
+
+    // 1. UAdd 寄存器操作数
+    auto* uadd_reg1 = builder.createUAdd(arg1, "uadd_reg1");
+    auto* uadd_reg2 = builder.createUAdd(arg2, "uadd_reg2");
+    auto* uadd_reg3 = builder.createUAdd(arg3, "uadd_reg3");
+
+    // 2. UAdd 立即数操作数（常量折叠）
+    auto* uadd_imm_pos = builder.createUAdd(const42, "uadd_imm_pos");
+    auto* uadd_imm_neg = builder.createUAdd(constNeg7, "uadd_imm_neg");
+    auto* uadd_imm_zero = builder.createUAdd(const0, "uadd_imm_zero");
+    auto* uadd_imm_max = builder.createUAdd(constMax, "uadd_imm_max");
+    auto* uadd_imm_min = builder.createUAdd(constMin, "uadd_imm_min");
+
+    // 3. UAdd 复杂表达式的结果
+    auto* temp_add = builder.createAdd(arg1, const5, "temp_add");
+    auto* uadd_complex = builder.createUAdd(temp_add, "uadd_complex");
+
+    // === 测试 USub (一元减号) ===
+
+    // 4. USub 寄存器操作数
+    auto* usub_reg1 = builder.createUSub(arg1, "usub_reg1");
+    auto* usub_reg2 = builder.createUSub(arg2, "usub_reg2");
+    auto* usub_reg3 = builder.createUSub(arg3, "usub_reg3");
+
+    // 5. USub 立即数操作数（常量折叠）
+    auto* usub_imm_pos = builder.createUSub(const42, "usub_imm_pos");  // -42
+    auto* usub_imm_neg =
+        builder.createUSub(constNeg7, "usub_imm_neg");  // -(-7) = 7
+    auto* usub_imm_zero =
+        builder.createUSub(const0, "usub_imm_zero");                  // -0 = 0
+    auto* usub_imm_one = builder.createUSub(const1, "usub_imm_one");  // -1
+    auto* usub_imm_max =
+        builder.createUSub(constMax, "usub_imm_max");  // -INT32_MAX
+
+    // 6. USub 复杂表达式的结果
+    auto* temp_mul = builder.createMul(arg2, const10, "temp_mul");
+    auto* usub_complex = builder.createUSub(temp_mul, "usub_complex");
+
+    // 7. USub 的嵌套使用（双重否定）
+    auto* usub_nested =
+        builder.createUSub(usub_reg1, "usub_nested");  // -(-arg1) = arg1
+
+    // === 测试 Not (按位取反) ===
+
+    // 8. Not 寄存器操作数
+    auto* not_reg1 = builder.createNot(arg1, "not_reg1");
+    auto* not_reg2 = builder.createNot(arg2, "not_reg2");
+    auto* not_reg3 = builder.createNot(arg3, "not_reg3");
+
+    // 9. Not 立即数操作数（常量折叠）
+    auto* not_imm_zero = builder.createNot(const0, "not_imm_zero");   // ~0 = -1
+    auto* not_imm_one = builder.createNot(const1, "not_imm_one");     // ~1 = -2
+    auto* not_imm_pos = builder.createNot(const42, "not_imm_pos");    // ~42
+    auto* not_imm_neg = builder.createNot(constNeg7, "not_imm_neg");  // ~(-7)
+    auto* not_imm_255 = builder.createNot(const255, "not_imm_255");   // ~255
+    auto* not_imm_max =
+        builder.createNot(constMax, "not_imm_max");  // ~INT32_MAX
+    auto* not_imm_min =
+        builder.createNot(constMin, "not_imm_min");  // ~INT32_MIN
+
+    // 10. Not 复杂表达式的结果
+    auto* temp_and = builder.createAnd(arg1, const255, "temp_and");
+    auto* not_complex = builder.createNot(temp_and, "not_complex");
+
+    // 11. Not 的嵌套使用（双重取反）
+    auto* not_nested =
+        builder.createNot(not_reg1, "not_nested");  // ~~arg1 = arg1
+
+    // === 测试边界情况和特殊值 ===
+
+    // 12. 测试零值的特殊处理（immToReg中的零寄存器优化）
+    auto* zero_uadd = builder.createUAdd(const0, "zero_uadd");
+    auto* zero_usub = builder.createUSub(const0, "zero_usub");
+    auto* zero_not = builder.createNot(const0, "zero_not");
+
+    // 13. 测试一元运算符的组合使用
+    auto* combo1 = builder.createUSub(uadd_reg1, "combo1");  // -(+arg1) = -arg1
+    auto* combo2 = builder.createUAdd(usub_reg2, "combo2");  // +(-arg2) = -arg2
+    auto* combo3 = builder.createNot(usub_reg3, "combo3");   // ~(-arg3)
+    auto* combo4 = builder.createUSub(not_reg1, "combo4");   // -(~arg1)
+
+    // 14. 一元运算符与二元运算符的混合使用
+    auto* mixed1 =
+        builder.createAdd(usub_reg1, uadd_reg2, "mixed1");  // (-arg1) + (+arg2)
+    auto* mixed2 =
+        builder.createMul(not_reg1, const10, "mixed2");  // (~arg1) * 10
+    auto* mixed3 =
+        builder.createAnd(not_imm_255, arg3, "mixed3");  // (~255) & arg3
+    auto* mixed4 =
+        builder.createSub(zero_usub, usub_imm_pos, "mixed4");  // (-0) - (-42)
+
+    // 15. 复杂的嵌套一元运算
+    auto* complex1 = builder.createNot(
+        builder.createUSub(builder.createUAdd(arg1, "inner_uadd"),
+                           "inner_usub"),
+        "complex1");  // ~(-(+arg1))
+
+    auto* temp_expr = builder.createAdd(arg2, arg3, "temp_expr");
+    auto* complex2 =
+        builder.createUSub(builder.createNot(temp_expr, "inner_not"),
+                           "complex2");  // -(~(arg2 + arg3))
+
+    // === 累积所有结果进行最终计算 ===
+
+    // 累积 UAdd 结果
+    auto* uadd_sum1 = builder.createAdd(uadd_reg1, uadd_reg2, "uadd_sum1");
+    auto* uadd_sum2 = builder.createAdd(uadd_reg3, uadd_imm_pos, "uadd_sum2");
+    auto* uadd_sum3 =
+        builder.createAdd(uadd_imm_neg, uadd_imm_zero, "uadd_sum3");
+    auto* uadd_sum4 = builder.createAdd(uadd_complex, zero_uadd, "uadd_sum4");
+    auto* uadd_total1 = builder.createAdd(uadd_sum1, uadd_sum2, "uadd_total1");
+    auto* uadd_total2 = builder.createAdd(uadd_sum3, uadd_sum4, "uadd_total2");
+    auto* uadd_total =
+        builder.createAdd(uadd_total1, uadd_total2, "uadd_total");
+
+    // 累积 USub 结果
+    auto* usub_sum1 = builder.createAdd(usub_reg1, usub_reg2, "usub_sum1");
+    auto* usub_sum2 = builder.createAdd(usub_reg3, usub_imm_pos, "usub_sum2");
+    auto* usub_sum3 =
+        builder.createAdd(usub_imm_neg, usub_imm_zero, "usub_sum3");
+    auto* usub_sum4 = builder.createAdd(usub_complex, usub_nested, "usub_sum4");
+    auto* usub_sum5 = builder.createAdd(zero_usub, usub_imm_one, "usub_sum5");
+    auto* usub_total1 = builder.createAdd(usub_sum1, usub_sum2, "usub_total1");
+    auto* usub_total2 = builder.createAdd(usub_sum3, usub_sum4, "usub_total2");
+    auto* usub_total3 =
+        builder.createAdd(usub_total1, usub_total2, "usub_total3");
+    auto* usub_total = builder.createAdd(usub_total3, usub_sum5, "usub_total");
+
+    // 累积 Not 结果
+    auto* not_sum1 = builder.createAdd(not_reg1, not_reg2, "not_sum1");
+    auto* not_sum2 = builder.createAdd(not_reg3, not_imm_zero, "not_sum2");
+    auto* not_sum3 = builder.createAdd(not_imm_one, not_imm_pos, "not_sum3");
+    auto* not_sum4 = builder.createAdd(not_complex, not_nested, "not_sum4");
+    auto* not_sum5 = builder.createAdd(zero_not, not_imm_255, "not_sum5");
+    auto* not_total1 = builder.createAdd(not_sum1, not_sum2, "not_total1");
+    auto* not_total2 = builder.createAdd(not_sum3, not_sum4, "not_total2");
+    auto* not_total3 = builder.createAdd(not_total1, not_total2, "not_total3");
+    auto* not_total = builder.createAdd(not_total3, not_sum5, "not_total");
+
+    // 累积组合和混合结果
+    auto* combo_sum1 = builder.createAdd(combo1, combo2, "combo_sum1");
+    auto* combo_sum2 = builder.createAdd(combo3, combo4, "combo_sum2");
+    auto* combo_total =
+        builder.createAdd(combo_sum1, combo_sum2, "combo_total");
+
+    auto* mixed_sum1 = builder.createAdd(mixed1, mixed2, "mixed_sum1");
+    auto* mixed_sum2 = builder.createAdd(mixed3, mixed4, "mixed_sum2");
+    auto* mixed_total =
+        builder.createAdd(mixed_sum1, mixed_sum2, "mixed_total");
+
+    auto* complex_sum = builder.createAdd(complex1, complex2, "complex_sum");
+
+    // 最终综合计算
+    auto* partial1 = builder.createAdd(uadd_total, usub_total, "partial1");
+    auto* partial2 = builder.createAdd(not_total, combo_total, "partial2");
+    auto* partial3 = builder.createAdd(mixed_total, complex_sum, "partial3");
+    auto* partial4 = builder.createAdd(partial1, partial2, "partial4");
+    auto* final_result = builder.createAdd(partial3, partial4, "final_result");
+
+    // 最后测试：确保覆盖所有优化路径
+    // 测试与立即数零的运算（触发零寄存器优化）
+    auto* zero_test1 = builder.createAdd(final_result, const0, "zero_test1");
+    auto* zero_test2 = builder.createMul(zero_uadd, const0, "zero_test2");
+    auto* ultimate_result =
+        builder.createAdd(zero_test1, zero_test2, "ultimate_result");
+
+    builder.createRet(ultimate_result);
+    return module;
+}
+
 }  // namespace testcases
 
 // TestRunner 构造函数实现
@@ -1541,6 +1755,9 @@ TestRunner::TestRunner() {
         testcases::createComplexMemoryArrayTest;
     testCases_["14_comprehensive_binary_ops"] =
         testcases::createComprehensiveBinaryOpsTest;
+    // 在 TestRunner 构造函数中添加：
+    testCases_["15_comprehensive_unary_ops"] =
+        testcases::createComprehensiveUnaryOpsTest;
 }
 
 std::unique_ptr<midend::Module> TestRunner::loadTestCase(
