@@ -356,7 +356,6 @@ std::vector<unsigned> RegAllocChaitin::getSimplificationOrder() {
     return order;
 }
 
-// TODO: 没有保护callee saved寄存器s0-s11
 bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
     for (unsigned regNum : order) {
         if (spilledRegs.find(regNum) != spilledRegs.end()) {
@@ -481,7 +480,6 @@ std::vector<unsigned> RegAllocChaitin::selectSpillCandidates() {
 }
 
 void RegAllocChaitin::insertSpillCode(unsigned reg) {
-    // 检查是否可以spill这个寄存器
     if (!spillChainManager->canSpillRegister(reg)) {
         std::cerr << "Warning: Cannot spill register " << reg
                   << " due to maximum spill chain depth" << std::endl;
@@ -643,32 +641,50 @@ void RegAllocChaitin::performCoalescing() {
 // 识别复制指令中的合并候选
 void RegAllocChaitin::identifyCoalesceCandidates() {
     coalesceCandidates.clear();
-
+    
     for (auto& bb : *function) {
         for (auto& inst : *bb) {
             if (inst->isCopyInstr()) {
                 const auto& operands = inst->getOperands();
-                if (operands.size() >= 2 && operands[0]->isReg() &&
+                if (operands.size() >= 2 && operands[0]->isReg() && 
                     operands[1]->isReg()) {
                     unsigned dst = operands[0]->getRegNum();
                     unsigned src = operands[1]->getRegNum();
-
-                    // 计算合并优先级（基于指令频次、循环嵌套等）
-                    int priority = calculateCoalescePriority(src, dst, bb.get(),
-                                                             inst.get());
-
+                    
+                    // 只考虑有意义的合并：至少有一个是虚拟寄存器
+                    if (isPhysicalReg(dst) && isPhysicalReg(src)) {
+                        continue; // 跳过两个物理寄存器的复制
+                    }
+                    
+                    // 确保合并方向正确
+                    unsigned mergeTarget, mergeSource;
+                    if (isPhysicalReg(dst) && !isPhysicalReg(src)) {
+                        mergeTarget = dst;
+                        mergeSource = src;
+                    } else if (isPhysicalReg(src) && !isPhysicalReg(dst)) {
+                        mergeTarget = src;
+                        mergeSource = dst;
+                    } else {
+                        // 两个虚拟寄存器，使用原来的src/dst
+                        mergeTarget = dst;
+                        mergeSource = src;
+                    }
+                    
+                    int priority = calculateCoalescePriority(mergeSource, mergeTarget, 
+                                                           bb.get(), inst.get());
+                    
                     CoalesceInfo info;
-                    info.src = src;
-                    info.dst = dst;
+                    info.src = mergeSource;
+                    info.dst = mergeTarget;
                     info.canCoalesce = true;
                     info.priority = priority;
-
                     coalesceCandidates.push_back(info);
                 }
             }
         }
     }
 }
+
 
 int RegAllocChaitin::calculateCoalescePriority(unsigned src, unsigned dst,
                                                BasicBlock* bb,
@@ -986,26 +1002,53 @@ bool RegAllocChaitin::crossesFunctionCall(unsigned src, unsigned dst) const {
 
 // 执行寄存器合并
 void RegAllocChaitin::coalesceRegisters(unsigned src, unsigned dst) {
+    // 确定正确的合并方向：物理寄存器应该作为合并目标
+    unsigned mergeTarget, mergeSource;
+    
+    if (isPhysicalReg(dst) && !isPhysicalReg(src)) {
+        // 虚拟寄存器合并到物理寄存器
+        mergeTarget = dst;
+        mergeSource = src;
+    } else if (isPhysicalReg(src) && !isPhysicalReg(dst)) {
+        // 虚拟寄存器合并到物理寄存器
+        mergeTarget = src;
+        mergeSource = dst;
+    } else if (!isPhysicalReg(src) && !isPhysicalReg(dst)) {
+        // 两个虚拟寄存器合并，选择编号较小的作为目标（或使用其他启发式）
+        if (src < dst) {
+            mergeTarget = src;
+            mergeSource = dst;
+        } else {
+            mergeTarget = dst;
+            mergeSource = src;
+        }
+    } else {
+        // 两个物理寄存器不应该合并
+        std::cerr << "Error: Attempting to coalesce two physical registers: " 
+                  << src << " and " << dst << std::endl;
+        return;
+    }
+    
     // 使用Union-Find结构管理合并
-    unsigned srcRoot = findCoalesceRoot(src);
-    unsigned dstRoot = findCoalesceRoot(dst);
-
+    unsigned srcRoot = findCoalesceRoot(mergeSource);
+    unsigned dstRoot = findCoalesceRoot(mergeTarget);
+    
     if (srcRoot != dstRoot) {
-        // 合并到dst
         unionCoalesce(srcRoot, dstRoot);
-        coalesceMap[src] = dst;
-        coalescedRegs.insert(src);
-
+        coalesceMap[mergeSource] = mergeTarget;
+        coalescedRegs.insert(mergeSource);
+        
         // 增量更新度数缓存
-        updateDegreeAfterCoalesce(dst, src);
-
+        updateDegreeAfterCoalesce(mergeTarget, mergeSource);
+        
         // 更新冲突图
-        updateInterferenceAfterCoalesce(dst, src);
-
-        std::cout << "Coalesced register " << src << " into " << dst
-                  << std::endl;
+        updateInterferenceAfterCoalesce(mergeTarget, mergeSource);
+        
+        std::cout << "Coalesced register " << mergeSource 
+                  << " into " << mergeTarget << std::endl;
     }
 }
+
 
 // Union-Find 查找根节点
 unsigned RegAllocChaitin::findCoalesceRoot(unsigned reg) {
