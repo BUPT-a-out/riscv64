@@ -352,6 +352,12 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
     // 如果第一个索引不是0，我们需要计算指针本身的偏移
     auto* current_type = pointed_type;
 
+    // 读取 strides
+    auto strides = gep_inst->getStrides();
+    if (strides.size() != gep_inst->getNumIndices()) {
+        throw std::runtime_error("Strides size mismatch with indices count");
+    }
+
     for (unsigned i = 0; i < gep_inst->getNumIndices(); ++i) {
         auto* index_value = gep_inst->getIndex(i);
         auto index_operand = visit(index_value, parent_bb);
@@ -368,8 +374,9 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
 
             // 如果第一个索引不是0，计算指针偏移
             size_t type_size = calculateTypeSize(current_type);
+            auto stride = strides[i];
 
-            // 计算偏移：index * type_size
+            // 计算偏移：index * stride
             auto index_reg = immToReg(std::move(index_operand), parent_bb);
             auto size_reg = codeGen_->allocateReg();
             auto li_size_inst =
@@ -377,7 +384,7 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
             li_size_inst->addOperand(std::make_unique<RegisterOperand>(
                 size_reg->getRegNum(), size_reg->isVirtual()));
             li_size_inst->addOperand(
-                std::make_unique<ImmediateOperand>(type_size));
+                std::make_unique<ImmediateOperand>(stride));
             parent_bb->addInstruction(std::move(li_size_inst));
 
             auto mul_reg = codeGen_->allocateReg();
@@ -411,7 +418,8 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
 
             // 关键修复：计算当前维度的步长
             // 步长 = 内层所有维度的元素总大小
-            size_t stride = calculateTypeSize(array_type->getElementType());
+            // size_t stride = calculateTypeSize(array_type->getElementType());
+            auto stride = strides[i];
 
             // 计算偏移：index * stride
             auto index_reg = immToReg(std::move(index_operand), parent_bb);
