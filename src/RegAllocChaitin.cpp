@@ -7,8 +7,8 @@
 #include <set>
 #include <stack>
 
-#include "StackFrameManager.h"
 #include "SpillCodeOptimizer.h"
+#include "StackFrameManager.h"
 namespace riscv64 {
 
 /// Entry
@@ -436,7 +436,6 @@ void RegAllocChaitin::handleSpills() {
         insertSpillCode(reg);
     }
 
-
     // 清空状态重新开始
     interferenceGraph.clear();
     virtualToPhysical.clear();
@@ -596,23 +595,31 @@ void RegAllocChaitin::handleLoadStoreSpill(Instruction* inst,
     const auto& operands = inst->getOperands();
     bool needsReload = false;
     bool needsSpill = false;
+    bool isBaseRegSpilled = false;
+    bool isDataRegSpilled = false;
 
     // 检查是否需要处理这个寄存器
-    for (const auto& operand : operands) {
+    for (size_t i = 0; i < operands.size(); ++i) {
+        const auto& operand = operands[i];
+
         if (operand->isReg() && operand->getRegNum() == spilledReg) {
-            needsReload = true;
+            if (i == 0) {
+                // 第一个操作数通常是目标寄存器（对于load）或源寄存器（对于store）
+                if (inst->getOpcode() == Opcode::LW) {
+                    needsSpill = true;  // load指令定义目标寄存器
+                    isDataRegSpilled = true;
+                } else if (inst->getOpcode() == Opcode::SW) {
+                    needsReload = true;  // store指令使用源寄存器
+                    isDataRegSpilled = true;
+                }
+            }
         } else if (operand->isMem()) {
             MemoryOperand* memOp = static_cast<MemoryOperand*>(operand.get());
             if (memOp->getBaseReg() &&
                 memOp->getBaseReg()->getRegNum() == spilledReg) {
-                needsReload = true;
+                needsReload = true;  // 基址寄存器总是需要重载
+                isBaseRegSpilled = true;
             }
-        }
-
-        // 检查定义的寄存器
-        if (&operand == &operands[0] && operand->isReg() &&
-            operand->getRegNum() == spilledReg) {
-            needsSpill = true;
         }
     }
 
@@ -620,12 +627,52 @@ void RegAllocChaitin::handleLoadStoreSpill(Instruction* inst,
         return;
     }
 
-    if (needsReload) {
+    // 处理基址寄存器被溢出的情况
+    if (isBaseRegSpilled && needsReload) {
         insertLoadStoreReload(inst, spilledReg, frameIndex, it, bb);
     }
 
-    if (needsSpill) {
-        insertLoadStoreSpill(inst, spilledReg, frameIndex, it, bb);
+    // 处理数据寄存器被溢出的情况
+    if (isDataRegSpilled) {
+        if (needsSpill) {
+            // 对于load指令，目标寄存器被溢出，需要在指令后插入spill代码
+            insertLoadStoreSpill(inst, spilledReg, frameIndex, it, bb);
+        } else if (needsReload) {
+            // 对于store指令，源寄存器被溢出，需要在指令前插入reload代码
+            // 为数据重载分配临时寄存器
+            unsigned dataTempReg =
+                spillChainManager->allocateTempRegister(spilledReg, inst);
+
+            // 生成frameaddr指令获取溢出槽地址
+            auto frameAddrInst =
+                std::make_unique<Instruction>(Opcode::FRAMEADDR);
+            frameAddrInst->addOperand(
+                std::make_unique<RegisterOperand>(dataTempReg, false));
+            frameAddrInst->addOperand(
+                std::make_unique<FrameIndexOperand>(frameIndex));
+            it = bb->insert(it, std::move(frameAddrInst));
+            ++it;
+
+            // 从溢出槽加载数据值到临时寄存器
+            auto loadDataInst = std::make_unique<Instruction>(Opcode::LW);
+            loadDataInst->addOperand(
+                std::make_unique<RegisterOperand>(dataTempReg, false));
+            loadDataInst->addOperand(std::make_unique<MemoryOperand>(
+                std::make_unique<RegisterOperand>(dataTempReg, false),
+                std::make_unique<ImmediateOperand>(0)));
+            it = bb->insert(it, std::move(loadDataInst));
+            ++it;
+
+            // 更新原指令使用重载后的数据寄存器
+            const auto& instOperands = inst->getOperands();
+            for (const auto& operand : instOperands) {
+                if (operand->isReg() && operand->getRegNum() == spilledReg) {
+                    RegisterOperand* regOp =
+                        static_cast<RegisterOperand*>(operand.get());
+                    regOp->setRegNum(dataTempReg);
+                }
+            }
+        }
     }
 }
 
@@ -637,7 +684,7 @@ void RegAllocChaitin::insertLoadStoreReload(Instruction* inst,
     unsigned addrTempReg =
         spillChainManager->allocateTempRegister(spilledReg, inst);
 
-    // 生成frameaddr指令获取溢出槽地址
+    // 第一步：生成frameaddr指令获取溢出槽地址
     auto frameAddrInst = std::make_unique<Instruction>(Opcode::FRAMEADDR);
     frameAddrInst->addOperand(
         std::make_unique<RegisterOperand>(addrTempReg, false));
@@ -645,7 +692,17 @@ void RegAllocChaitin::insertLoadStoreReload(Instruction* inst,
     it = bb->insert(it, std::move(frameAddrInst));
     ++it;
 
-    // 更新原指令：分别处理不同的操作数
+    // 第二步：从溢出槽加载实际的地址值到临时寄存器
+    auto loadAddrInst = std::make_unique<Instruction>(Opcode::LW);
+    loadAddrInst->addOperand(
+        std::make_unique<RegisterOperand>(addrTempReg, false));
+    loadAddrInst->addOperand(std::make_unique<MemoryOperand>(
+        std::make_unique<RegisterOperand>(addrTempReg, false),
+        std::make_unique<ImmediateOperand>(0)));
+    it = bb->insert(it, std::move(loadAddrInst));
+    ++it;
+
+    // 第三步：更新原指令，使用重载后的地址寄存器
     updateLoadStoreOperands(inst, spilledReg, addrTempReg);
 }
 
@@ -665,7 +722,7 @@ void RegAllocChaitin::insertLoadStoreSpill(Instruction* inst,
     updateLoadStoreOperands(inst, spilledReg, addrTempReg, dataTempReg);
     ++it;
 
-    // 生成frameaddr指令
+    // 第一步：生成frameaddr指令获取溢出槽地址
     auto frameAddrInst = std::make_unique<Instruction>(Opcode::FRAMEADDR);
     frameAddrInst->addOperand(
         std::make_unique<RegisterOperand>(addrTempReg, false));
@@ -673,7 +730,7 @@ void RegAllocChaitin::insertLoadStoreSpill(Instruction* inst,
     it = bb->insert(it, std::move(frameAddrInst));
     ++it;
 
-    // 生成store指令将值存储到溢出槽
+    // 第二步：生成store指令将数据寄存器的值存储到溢出槽
     auto storeInst = std::make_unique<Instruction>(Opcode::SW);
     storeInst->addOperand(
         std::make_unique<RegisterOperand>(dataTempReg, false));
@@ -683,7 +740,7 @@ void RegAllocChaitin::insertLoadStoreSpill(Instruction* inst,
     it = bb->insert(it, std::move(storeInst));
 }
 
-// 只更新地址的重载
+// 只更新地址的重载版本 - 用于处理基址寄存器被溢出的情况
 void RegAllocChaitin::updateLoadStoreOperands(Instruction* inst,
                                               unsigned oldReg,
                                               unsigned addrTempReg) {
@@ -695,13 +752,14 @@ void RegAllocChaitin::updateLoadStoreOperands(Instruction* inst,
             MemoryOperand* memOp = static_cast<MemoryOperand*>(operand.get());
             if (memOp->getBaseReg() &&
                 memOp->getBaseReg()->getRegNum() == oldReg) {
-                // 内存操作数的基址寄存器使用地址临时寄存器
+                // 内存操作数的基址寄存器使用重载后的地址临时寄存器
                 memOp->getBaseReg()->setRegNum(addrTempReg);
             }
         }
     }
 }
 
+// 完整更新版本 - 用于处理定义寄存器被溢出的情况
 void RegAllocChaitin::updateLoadStoreOperands(Instruction* inst,
                                               unsigned oldReg,
                                               unsigned addrTempReg,
@@ -715,7 +773,7 @@ void RegAllocChaitin::updateLoadStoreOperands(Instruction* inst,
             RegisterOperand* regOp =
                 static_cast<RegisterOperand*>(operand.get());
             if (regOp->getRegNum() == oldReg) {
-                // 第一个操作数通常是目标寄存器（load）或源寄存器（store）
+                // 寄存器操作数（通常是目标寄存器）使用数据临时寄存器
                 regOp->setRegNum(dataTempReg);
             }
         } else if (operand->isMem()) {
