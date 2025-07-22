@@ -122,6 +122,8 @@ class RegAllocChaitin {
                               BasicBlock* bb);
     void updateLoadStoreOperands(Instruction* inst, unsigned oldReg,
                                  unsigned addrTempReg, unsigned dataTempReg);
+    void updateLoadStoreOperands(Instruction* inst, unsigned oldReg,
+                                 unsigned addrTempReg);
 
     // 重写指令中的寄存器
     void rewriteInstructions();

@@ -509,7 +509,8 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
             Instruction* inst = it->get();
 
             // 处理load/store指令的特殊情况
-            if (inst->getOpcode() == Opcode::LW || inst->getOpcode() == Opcode::SW) {
+            if (inst->getOpcode() == Opcode::LW ||
+                inst->getOpcode() == Opcode::SW) {
                 handleLoadStoreSpill(inst, reg, fi_id, it, bb.get());
                 continue;
             }
@@ -585,122 +586,112 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
     }
 }
 
-void RegAllocChaitin::handleLoadStoreSpill(Instruction* inst, unsigned spilledReg, 
-                                         int frameIndex, 
-                                         BasicBlock::iterator& it, 
-                                         BasicBlock* bb) {
+void RegAllocChaitin::handleLoadStoreSpill(Instruction* inst,
+                                           unsigned spilledReg, int frameIndex,
+                                           BasicBlock::iterator& it,
+                                           BasicBlock* bb) {
     const auto& operands = inst->getOperands();
     bool needsReload = false;
     bool needsSpill = false;
-    
+
     // 检查是否需要处理这个寄存器
     for (const auto& operand : operands) {
         if (operand->isReg() && operand->getRegNum() == spilledReg) {
             needsReload = true;
         } else if (operand->isMem()) {
             MemoryOperand* memOp = static_cast<MemoryOperand*>(operand.get());
-            if (memOp->getBaseReg() && memOp->getBaseReg()->getRegNum() == spilledReg) {
+            if (memOp->getBaseReg() &&
+                memOp->getBaseReg()->getRegNum() == spilledReg) {
                 needsReload = true;
             }
         }
-        
+
         // 检查定义的寄存器
-        if (&operand == &operands[0] && operand->isReg() && operand->getRegNum() == spilledReg) {
+        if (&operand == &operands[0] && operand->isReg() &&
+            operand->getRegNum() == spilledReg) {
             needsSpill = true;
         }
     }
-    
+
     if (!needsReload && !needsSpill) {
         return;
     }
-    
+
     if (needsReload) {
         insertLoadStoreReload(inst, spilledReg, frameIndex, it, bb);
     }
-    
+
     if (needsSpill) {
         insertLoadStoreSpill(inst, spilledReg, frameIndex, it, bb);
     }
 }
 
-void RegAllocChaitin::insertLoadStoreReload(Instruction* inst, unsigned spilledReg,
-                                          int frameIndex,
-                                          BasicBlock::iterator& it,
-                                          BasicBlock* bb) {
+void RegAllocChaitin::insertLoadStoreReload(Instruction* inst,
+                                            unsigned spilledReg, int frameIndex,
+                                            BasicBlock::iterator& it,
+                                            BasicBlock* bb) {
     // 为地址计算分配一个临时寄存器
-    unsigned addrTempReg = spillChainManager->allocateTempRegister(spilledReg, inst);
-    
-    // 为数据操作分配另一个临时寄存器（如果需要）
-    unsigned dataTempReg = spillChainManager->allocateTempRegister(spilledReg, inst);
-    
+    unsigned addrTempReg =
+        spillChainManager->allocateTempRegister(spilledReg, inst);
+
     // 生成frameaddr指令获取溢出槽地址
     auto frameAddrInst = std::make_unique<Instruction>(Opcode::FRAMEADDR);
-    frameAddrInst->addOperand(std::make_unique<RegisterOperand>(addrTempReg, false));
+    frameAddrInst->addOperand(
+        std::make_unique<RegisterOperand>(addrTempReg, false));
     frameAddrInst->addOperand(std::make_unique<FrameIndexOperand>(frameIndex));
     it = bb->insert(it, std::move(frameAddrInst));
     ++it;
-    
-    // 生成load指令从溢出槽加载值到数据临时寄存器
-    auto loadInst = std::make_unique<Instruction>(Opcode::LW);
-    loadInst->addOperand(std::make_unique<RegisterOperand>(dataTempReg, false));
-    loadInst->addOperand(std::make_unique<MemoryOperand>(
-        std::make_unique<RegisterOperand>(addrTempReg, false),
-        std::make_unique<ImmediateOperand>(0)));
-    it = bb->insert(it, std::move(loadInst));
-    ++it;
-    
+
     // 更新原指令：分别处理不同的操作数
-    updateLoadStoreOperands(inst, spilledReg, addrTempReg, dataTempReg);
+    updateLoadStoreOperands(inst, spilledReg, addrTempReg);
 }
 
-void RegAllocChaitin::insertLoadStoreSpill(Instruction* inst, unsigned spilledReg,
-                                         int frameIndex,
-                                         BasicBlock::iterator& it,
-                                         BasicBlock* bb) {
+void RegAllocChaitin::insertLoadStoreSpill(Instruction* inst,
+                                           unsigned spilledReg, int frameIndex,
+                                           BasicBlock::iterator& it,
+                                           BasicBlock* bb) {
     // 分配临时寄存器用于地址计算
-    unsigned addrTempReg = spillChainManager->allocateTempRegister(spilledReg, inst);
-    
+    unsigned addrTempReg =
+        spillChainManager->allocateTempRegister(spilledReg, inst);
+
     // 分配临时寄存器用于数据
-    unsigned dataTempReg = spillChainManager->allocateTempRegister(spilledReg, inst);
-    
+    unsigned dataTempReg =
+        spillChainManager->allocateTempRegister(spilledReg, inst);
+
     // 更新原指令使用临时寄存器
     updateLoadStoreOperands(inst, spilledReg, addrTempReg, dataTempReg);
     ++it;
-    
+
     // 生成frameaddr指令
     auto frameAddrInst = std::make_unique<Instruction>(Opcode::FRAMEADDR);
-    frameAddrInst->addOperand(std::make_unique<RegisterOperand>(addrTempReg, false));
+    frameAddrInst->addOperand(
+        std::make_unique<RegisterOperand>(addrTempReg, false));
     frameAddrInst->addOperand(std::make_unique<FrameIndexOperand>(frameIndex));
     it = bb->insert(it, std::move(frameAddrInst));
     ++it;
-    
+
     // 生成store指令将值存储到溢出槽
     auto storeInst = std::make_unique<Instruction>(Opcode::SW);
-    storeInst->addOperand(std::make_unique<RegisterOperand>(dataTempReg, false));
+    storeInst->addOperand(
+        std::make_unique<RegisterOperand>(dataTempReg, false));
     storeInst->addOperand(std::make_unique<MemoryOperand>(
         std::make_unique<RegisterOperand>(addrTempReg, false),
         std::make_unique<ImmediateOperand>(0)));
     it = bb->insert(it, std::move(storeInst));
 }
 
-void RegAllocChaitin::updateLoadStoreOperands(Instruction* inst, 
-                                            unsigned oldReg,
-                                            unsigned addrTempReg, 
-                                            unsigned dataTempReg) {
+// 只更新地址的重载
+void RegAllocChaitin::updateLoadStoreOperands(Instruction* inst,
+                                              unsigned oldReg,
+                                              unsigned addrTempReg) {
     const auto& operands = inst->getOperands();
-    
+
     for (size_t i = 0; i < operands.size(); ++i) {
         const auto& operand = operands[i];
-        
-        if (operand->isReg()) {
-            RegisterOperand* regOp = static_cast<RegisterOperand*>(operand.get());
-            if (regOp->getRegNum() == oldReg) {
-                // 第一个操作数通常是目标寄存器（load）或源寄存器（store）
-                regOp->setRegNum(dataTempReg);
-            }
-        } else if (operand->isMem()) {
+        if (operand->isMem()) {
             MemoryOperand* memOp = static_cast<MemoryOperand*>(operand.get());
-            if (memOp->getBaseReg() && memOp->getBaseReg()->getRegNum() == oldReg) {
+            if (memOp->getBaseReg() &&
+                memOp->getBaseReg()->getRegNum() == oldReg) {
                 // 内存操作数的基址寄存器使用地址临时寄存器
                 memOp->getBaseReg()->setRegNum(addrTempReg);
             }
@@ -708,6 +699,32 @@ void RegAllocChaitin::updateLoadStoreOperands(Instruction* inst,
     }
 }
 
+void RegAllocChaitin::updateLoadStoreOperands(Instruction* inst,
+                                              unsigned oldReg,
+                                              unsigned addrTempReg,
+                                              unsigned dataTempReg) {
+    const auto& operands = inst->getOperands();
+
+    for (size_t i = 0; i < operands.size(); ++i) {
+        const auto& operand = operands[i];
+
+        if (operand->isReg()) {
+            RegisterOperand* regOp =
+                static_cast<RegisterOperand*>(operand.get());
+            if (regOp->getRegNum() == oldReg) {
+                // 第一个操作数通常是目标寄存器（load）或源寄存器（store）
+                regOp->setRegNum(dataTempReg);
+            }
+        } else if (operand->isMem()) {
+            MemoryOperand* memOp = static_cast<MemoryOperand*>(operand.get());
+            if (memOp->getBaseReg() &&
+                memOp->getBaseReg()->getRegNum() == oldReg) {
+                // 内存操作数的基址寄存器使用地址临时寄存器
+                memOp->getBaseReg()->setRegNum(addrTempReg);
+            }
+        }
+    }
+}
 
 // 更新指令中的寄存器引用
 void RegAllocChaitin::updateRegisterInInstruction(Instruction* inst,
