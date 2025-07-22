@@ -114,6 +114,13 @@ unsigned SpillChainManager::selectAvailablePhysicalReg(Instruction* inst) {
                     usedInInst.insert(regNum);
                 }
             }
+            if (operand->isMem()) {
+                auto memOp = static_cast<MemoryOperand*>(operand.get());
+                unsigned regNum = memOp->getBaseReg()->getRegNum();
+                if (regNum < 32) {  // 物理寄存器
+                    usedInInst.insert(regNum);
+                }
+            }
         }
     }
 

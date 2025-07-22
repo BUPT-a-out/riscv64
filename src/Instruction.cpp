@@ -269,30 +269,205 @@ bool Instruction::isReturnInstr() const {
     
     return false;
 }
+
 std::vector<unsigned> Instruction::getUsedRegs() const {
     std::vector<unsigned> usedRegs;
-
-    // 根据指令类型分析使用的寄存器
-    // 这里简化处理，实际需要根据具体的指令格式来分析
-
-    // 通常第一个操作数是目标寄存器（定义），其余是源寄存器（使用）
-    for (size_t i = 1; i < operands.size(); ++i) {
-        if (operands[i]->isReg()) {
-            usedRegs.push_back(operands[i]->getRegNum());
+    
+    if (operands.empty()) return usedRegs;
+    
+    // 根据指令操作码确定哪些操作数是源操作数（被使用的）
+    switch (opcode) {
+        // 算术指令：ADD rd, rs1, rs2 - 使用rs1和rs2
+        case ADD: case SUB: case MUL: case DIV: 
+        case AND: case OR: case XOR: case SLL: case SRL: case SRA:
+        case SLT: case SLTU: {
+            if (operands.size() >= 3) {
+                // operands[0] 是目标寄存器（定义），operands[1]和operands[2]是源寄存器
+                if (operands[1]->isReg()) {
+                    usedRegs.push_back(operands[1]->getRegNum());
+                }
+                if (operands[2]->isReg()) {
+                    usedRegs.push_back(operands[2]->getRegNum());
+                }
+            }
+            break;
+        }
+        
+        // 立即数算术指令：ADDI rd, rs1, imm - 使用rs1
+        case ADDI: case SLTI: case SLTIU: case XORI: case ORI: case ANDI:
+        case SLLI: case SRLI: case SRAI: {
+            if (operands.size() >= 2 && operands[1]->isReg()) {
+                usedRegs.push_back(operands[1]->getRegNum());
+            }
+            break;
+        }
+        
+        // 加载指令：LD rd, offset(rs1) - 使用rs1作为基址寄存器
+        case LD: case LW: case LH: case LB: case LWU: case LHU: case LBU: {
+            if (operands.size() >= 2 && operands[1]->isMem()) {
+                MemoryOperand* memOp = static_cast<MemoryOperand*>(operands[1].get());
+                if (memOp->getBaseReg() && memOp->getBaseReg()->isReg()) {
+                    usedRegs.push_back(memOp->getBaseReg()->getRegNum());
+                }
+                // 如果偏移量是寄存器，也需要添加
+                if (memOp->getOffset() && memOp->getOffset()->isReg()) {
+                    usedRegs.push_back(memOp->getOffset()->getRegNum());
+                }
+            }
+            break;
+        }
+        
+        // 存储指令：SD rs2, offset(rs1) - 使用rs1作为基址寄存器，rs2作为数据源
+        case SD: case SW: case SH: case SB: {
+            if (operands.size() >= 2) {
+                // 第一个操作数是要存储的寄存器（源）
+                if (operands[0]->isReg()) {
+                    usedRegs.push_back(operands[0]->getRegNum());
+                }
+                // 第二个操作数是内存地址，使用基址寄存器
+                if (operands[1]->isMem()) {
+                    MemoryOperand* memOp = static_cast<MemoryOperand*>(operands[1].get());
+                    if (memOp->getBaseReg() && memOp->getBaseReg()->isReg()) {
+                        usedRegs.push_back(memOp->getBaseReg()->getRegNum());
+                    }
+                    if (memOp->getOffset() && memOp->getOffset()->isReg()) {
+                        usedRegs.push_back(memOp->getOffset()->getRegNum());
+                    }
+                }
+            }
+            break;
+        }
+        
+        // 分支指令：BEQ rs1, rs2, label - 使用rs1和rs2进行比较
+        case BEQ: case BNE: case BLT: case BGE: case BLTU: case BGEU: {
+            if (operands.size() >= 2) {
+                if (operands[0]->isReg()) {
+                    usedRegs.push_back(operands[0]->getRegNum());
+                }
+                if (operands[1]->isReg()) {
+                    usedRegs.push_back(operands[1]->getRegNum());
+                }
+            }
+            break;
+        }
+        
+        // 跳转指令：JAL rd, label 或 JALR rd, rs1, offset
+        case JAL: {
+            // JAL只定义rd，不使用其他寄存器
+            break;
+        }
+        case JALR: {
+            if (operands.size() >= 2 && operands[1]->isReg()) {
+                usedRegs.push_back(operands[1]->getRegNum()); // 基址寄存器
+            }
+            break;
+        }
+        
+        // 上位立即数指令：LUI rd, imm - 不使用其他寄存器
+        case LUI: case AUIPC: {
+            // 这些指令不使用源寄存器，只生成到目标寄存器
+            break;
+        }
+        
+        // 复制指令：MV rd, rs1（通常实现为ADDI rd, rs1, 0）
+        case MV: {
+            if (operands.size() >= 2 && operands[1]->isReg()) {
+                usedRegs.push_back(operands[1]->getRegNum());
+            }
+            break;
+        }
+        
+        // 函数调用指令 - 需要特殊处理
+        default: {
+            if (isCallInstr()) {
+                // 函数调用使用参数寄存器a0-a7
+                // 这些在活跃性分析中已经处理，这里主要处理显式操作数
+                
+                // 如果调用指令有显式的寄存器操作数（比如间接调用）
+                for (size_t i = 0; i < operands.size(); ++i) {
+                    if (operands[i]->isReg()) {
+                        unsigned regNum = operands[i]->getRegNum();
+                        // 避免重复添加
+                        if (std::find(usedRegs.begin(), usedRegs.end(), regNum) == usedRegs.end()) {
+                            usedRegs.push_back(regNum);
+                        }
+                    }
+                }
+            } else {
+                // 对于其他指令，采用通用策略：除第一个操作数外都是源操作数
+                for (size_t i = 1; i < operands.size(); ++i) {
+                    if (operands[i]->isReg()) {
+                        usedRegs.push_back(operands[i]->getRegNum());
+                    } else if (operands[i]->isMem()) {
+                        // 内存操作数中的寄存器也是被使用的
+                        MemoryOperand* memOp = static_cast<MemoryOperand*>(operands[i].get());
+                        if (memOp->getBaseReg() && memOp->getBaseReg()->isReg()) {
+                            usedRegs.push_back(memOp->getBaseReg()->getRegNum());
+                        }
+                        if (memOp->getOffset() && memOp->getOffset()->isReg()) {
+                            usedRegs.push_back(memOp->getOffset()->getRegNum());
+                        }
+                    }
+                }
+            }
+            break;
         }
     }
-
+    
+    // 去除重复的寄存器
+    std::sort(usedRegs.begin(), usedRegs.end());
+    usedRegs.erase(std::unique(usedRegs.begin(), usedRegs.end()), usedRegs.end());
+    
     return usedRegs;
 }
 
 std::vector<unsigned> Instruction::getDefinedRegs() const {
     std::vector<unsigned> definedRegs;
-
-    // 通常第一个操作数是目标寄存器
-    if (!operands.empty() && operands[0]->isReg()) {
-        definedRegs.push_back(operands[0]->getRegNum());
+    
+    if (operands.empty()) return definedRegs;
+    
+    switch (opcode) {
+        // 大多数指令：第一个操作数是目标寄存器
+        case ADD: case SUB: case MUL: case DIV: 
+        case AND: case OR: case XOR: case SLL: case SRL: case SRA:
+        case SLT: case SLTU: case ADDI: case SLTI: case SLTIU: 
+        case XORI: case ORI: case ANDI: case SLLI: case SRLI: case SRAI:
+        case LD: case LW: case LH: case LB: case LWU: case LHU: case LBU:
+        case LUI: case AUIPC: case MV: {
+            if (operands[0]->isReg()) {
+                definedRegs.push_back(operands[0]->getRegNum());
+            }
+            break;
+        }
+        
+        // 存储指令不定义寄存器
+        case SD: case SW: case SH: case SB: {
+            // 存储指令不定义寄存器
+            break;
+        }
+        
+        // 分支指令不定义寄存器
+        case BEQ: case BNE: case BLT: case BGE: case BLTU: case BGEU: {
+            break;
+        }
+        
+        // 跳转指令定义返回地址寄存器
+        case JAL: case JALR: {
+            if (operands[0]->isReg()) {
+                definedRegs.push_back(operands[0]->getRegNum());
+            }
+            break;
+        }
+        
+        default: {
+            // 默认情况：如果第一个操作数是寄存器，则认为是目标寄存器
+            if (!operands.empty() && operands[0]->isReg()) {
+                definedRegs.push_back(operands[0]->getRegNum());
+            }
+            break;
+        }
     }
-
+    
     return definedRegs;
 }
 
