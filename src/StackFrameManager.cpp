@@ -370,7 +370,7 @@ std::unique_ptr<Instruction> StackFrameManager::createStackAdjustInstruction(
 
 std::unique_ptr<Instruction> StackFrameManager::createSaveInstruction(
     unsigned regNum, int offset) {
-    auto inst = std::make_unique<Instruction>(SD);
+    auto inst = std::make_unique<Instruction>(SW);
     inst->addOperand(std::make_unique<RegisterOperand>(regNum, false));
     inst->addOperand(std::make_unique<MemoryOperand>(
         std::make_unique<RegisterOperand>(2, false),  // sp
@@ -380,7 +380,7 @@ std::unique_ptr<Instruction> StackFrameManager::createSaveInstruction(
 
 std::unique_ptr<Instruction> StackFrameManager::createRestoreInstruction(
     unsigned regNum, int offset) {
-    auto inst = std::make_unique<Instruction>(LD);
+    auto inst = std::make_unique<Instruction>(LW);
     inst->addOperand(std::make_unique<RegisterOperand>(regNum, false));
     inst->addOperand(std::make_unique<MemoryOperand>(
         std::make_unique<RegisterOperand>(2, false),  // sp

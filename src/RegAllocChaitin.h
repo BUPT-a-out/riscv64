@@ -110,6 +110,18 @@ class RegAllocChaitin {
     void handleSpills();
     std::vector<unsigned> selectSpillCandidates();
     void insertSpillCode(unsigned reg);
+    void handleLoadStoreSpill(Instruction* inst, unsigned spilledReg,
+                              int frameIndex, BasicBlock::iterator& it,
+                              BasicBlock* bb);
+
+    void insertLoadStoreReload(Instruction* inst, unsigned spilledReg,
+                               int frameIndex, BasicBlock::iterator& it,
+                               BasicBlock* bb);
+    void insertLoadStoreSpill(Instruction* inst, unsigned spilledReg,
+                              int frameIndex, BasicBlock::iterator& it,
+                              BasicBlock* bb);
+    void updateLoadStoreOperands(Instruction* inst, unsigned oldReg,
+                                 unsigned addrTempReg, unsigned dataTempReg);
 
     // 重写指令中的寄存器
     void rewriteInstructions();
