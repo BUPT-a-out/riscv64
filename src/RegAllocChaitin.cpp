@@ -8,6 +8,7 @@
 #include <stack>
 
 #include "StackFrameManager.h"
+#include "SpillCodeOptimizer.h"
 namespace riscv64 {
 
 /// Entry
@@ -36,6 +37,7 @@ void RegAllocChaitin::allocateRegisters() {
 
     rewriteInstructions();
     removeRebundantCopies();
+    SpillCodeOptimizer::optimizeSpillCode(function);
 
     stackManager.computeStackFrame();
 
@@ -433,6 +435,7 @@ void RegAllocChaitin::handleSpills() {
     for (unsigned reg : spillCandidates) {
         insertSpillCode(reg);
     }
+
 
     // 清空状态重新开始
     interferenceGraph.clear();
