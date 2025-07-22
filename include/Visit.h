@@ -5,6 +5,7 @@
 
 #include "IR/Module.h"
 #include "Instructions/All.h"
+#include "Segment.h"
 
 namespace riscv64 {
 
@@ -63,7 +64,11 @@ class Visitor {
     void createCFG(Function* func);
 
     void visit(const midend::Constant* constant);
-    void visit(const midend::GlobalVariable* var);
+    void visit(const midend::GlobalVariable* var, Module* parent_module);
+
+    ConstantInitializer convertLLVMInitializerToConstantInitializer(
+        const midend::Value* init, const midend::Type* type);
+    CompilerType convertLLVMTypeToCompilerType(const midend::Type* llvm_type);
 
    private:
     CodeGenerator* codeGen_;

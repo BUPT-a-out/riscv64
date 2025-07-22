@@ -23,7 +23,7 @@ Module Visitor::visit(const midend::Module* module) {
     Module riscv_module;
 
     for (const auto& global : module->globals()) {
-        visit(global);
+        visit(global, &riscv_module);
     }
     for (auto* const func : *module) {
         visit(func, &riscv_module);
@@ -285,6 +285,7 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
     return std::make_unique<RegisterOperand>(reg_num, is_virtual);
 }
 
+// 修复 visitGEPInst 方法，支持全局变量作为基地址
 std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
     const midend::Instruction* inst, BasicBlock* parent_bb) {
     if (inst->getOpcode() != midend::Opcode::GetElementPtr) {
@@ -299,27 +300,35 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
     // 获取基地址
     const auto* base_ptr = gep_inst->getPointerOperand();
     auto base_addr = visit(base_ptr, parent_bb);
-    if (base_addr->getType() != OperandType::FrameIndex) {
+
+    std::unique_ptr<RegisterOperand> base_addr_reg;
+
+    if (base_addr->getType() == OperandType::FrameIndex) {
+        // 处理基于栈帧的地址
+        auto get_base_addr_inst =
+            std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
+        base_addr_reg = codeGen_->allocateReg();
+        get_base_addr_inst->addOperand(std::make_unique<RegisterOperand>(
+            base_addr_reg->getRegNum(), base_addr_reg->isVirtual()));  // rd
+        get_base_addr_inst->addOperand(std::move(base_addr));          // FI
+        parent_bb->addInstruction(std::move(get_base_addr_inst));
+    } else if (base_addr->getType() == OperandType::Register) {
+        // 基地址已经在寄存器中（如全局变量地址）
+        auto* reg_operand = dynamic_cast<RegisterOperand*>(base_addr.get());
+        base_addr_reg = std::make_unique<RegisterOperand>(
+            reg_operand->getRegNum(), reg_operand->isVirtual());
+    } else {
         throw std::runtime_error(
-            "Base address must be a frame index operand, got: " +
+            "Base address must be a frame index or register operand, got: " +
             base_addr->toString());
     }
 
-    // 生成 frameaddr 指令来获取基地址
-    auto get_base_addr_inst =
-        std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
-    auto base_addr_reg = codeGen_->allocateReg();
-    get_base_addr_inst->addOperand(std::make_unique<RegisterOperand>(
-        base_addr_reg->getRegNum(), base_addr_reg->isVirtual()));  // rd
-    get_base_addr_inst->addOperand(std::move(base_addr));          // FI
-    parent_bb->addInstruction(std::move(get_base_addr_inst));
-
     // 计算偏移量
-    if (gep_inst->getNumIndices() > 3) {
-        throw std::runtime_error(
-            "GEP instruction must have <= 3 indices: " + inst->toString() +
-            ", got " + std::to_string(gep_inst->getNumIndices()));
-    }
+    // if (gep_inst->getNumIndices() > 3) {
+    //     throw std::runtime_error(
+    //         "GEP instruction must have <= 3 indices: " + inst->toString() +
+    //         ", got " + std::to_string(gep_inst->getNumIndices()));
+    // }
 
     // 获取指针指向的类型
     auto* pointed_type = gep_inst->getSourceElementType();
@@ -418,7 +427,6 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
 
             // 关键修复：计算当前维度的步长
             // 步长 = 内层所有维度的元素总大小
-            // size_t stride = calculateTypeSize(array_type->getElementType());
             auto stride = strides[i];
 
             // 计算偏移：index * stride
@@ -757,7 +765,7 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
     // 获取指针操作数
     auto* pointer_operand = store_inst->getPointerOperand();
 
-    // 处理指针操作数 - 可能是 alloca 指令或者 GEP 指令
+    // 处理指针操作数 - 可能是 alloca 指令、GEP 指令或全局变量
     if (auto* alloca_inst =
             midend::dyn_cast<midend::AllocaInst>(pointer_operand)) {
         // 直接是 alloca 指令
@@ -817,6 +825,28 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
             std::make_unique<ImmediateOperand>(0)));  // memory address
         parent_bb->addInstruction(std::move(sw_inst));
 
+    } else if (auto* global_var =
+                   midend::dyn_cast<midend::GlobalVariable>(pointer_operand)) {
+        // 是全局变量
+        // 生成全局变量地址加载指令
+        auto global_addr_reg = codeGen_->allocateReg();
+        auto global_addr_inst =
+            std::make_unique<Instruction>(Opcode::LA, parent_bb);
+        global_addr_inst->addOperand(std::make_unique<RegisterOperand>(
+            global_addr_reg->getRegNum(), global_addr_reg->isVirtual()));  // rd
+        global_addr_inst->addOperand(std::make_unique<LabelOperand>(
+            global_var->getName()));  // global symbol
+        parent_bb->addInstruction(std::move(global_addr_inst));
+
+        // 生成存储指令
+        auto sw_inst = std::make_unique<Instruction>(Opcode::SW, parent_bb);
+        sw_inst->addOperand(std::move(value_operand));  // source register
+        sw_inst->addOperand(std::make_unique<MemoryOperand>(
+            std::make_unique<RegisterOperand>(global_addr_reg->getRegNum(),
+                                              global_addr_reg->isVirtual()),
+            std::make_unique<ImmediateOperand>(0)));  // memory address
+        parent_bb->addInstruction(std::move(sw_inst));
+
     } else {
         // 其他类型的指针操作数
         throw std::runtime_error(
@@ -842,7 +872,7 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
     // 获取指针操作数
     auto* pointer_operand = load_inst->getPointerOperand();
 
-    // 处理指针操作数 - 可能是 alloca 指令或者 GEP 指令
+    // 处理指针操作数 - 可能是 alloca 指令、GEP 指令或全局变量
     if (auto* alloca_inst =
             midend::dyn_cast<midend::AllocaInst>(pointer_operand)) {
         // 直接是 alloca 指令
@@ -906,6 +936,38 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
         load_inst_ptr->addOperand(std::make_unique<MemoryOperand>(
             std::make_unique<RegisterOperand>(address_reg->getRegNum(),
                                               address_reg->isVirtual()),
+            std::make_unique<ImmediateOperand>(0)));  // memory address
+        parent_bb->addInstruction(std::move(load_inst_ptr));
+
+        // 建立load指令结果值到寄存器的映射
+        codeGen_->mapValueToReg(inst, new_reg->getRegNum(),
+                                new_reg->isVirtual());
+
+        return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                                 new_reg->isVirtual());
+
+    } else if (auto* global_var =
+                   midend::dyn_cast<midend::GlobalVariable>(pointer_operand)) {
+        // 是全局变量
+        // 生成全局变量地址加载指令
+        auto global_addr_reg = codeGen_->allocateReg();
+        auto global_addr_inst =
+            std::make_unique<Instruction>(Opcode::LA, parent_bb);
+        global_addr_inst->addOperand(std::make_unique<RegisterOperand>(
+            global_addr_reg->getRegNum(), global_addr_reg->isVirtual()));  // rd
+        global_addr_inst->addOperand(std::make_unique<LabelOperand>(
+            global_var->getName()));  // global symbol
+        parent_bb->addInstruction(std::move(global_addr_inst));
+
+        // 从全局变量地址加载值
+        auto new_reg = codeGen_->allocateReg();
+        auto load_inst_ptr =
+            std::make_unique<Instruction>(Opcode::LW, parent_bb);
+        load_inst_ptr->addOperand(std::make_unique<RegisterOperand>(
+            new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+        load_inst_ptr->addOperand(std::make_unique<MemoryOperand>(
+            std::make_unique<RegisterOperand>(global_addr_reg->getRegNum(),
+                                              global_addr_reg->isVirtual()),
             std::make_unique<ImmediateOperand>(0)));  // memory address
         parent_bb->addInstruction(std::move(load_inst_ptr));
 
@@ -1889,6 +1951,26 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
                                                  foundReg.value()->isVirtual());
     }
 
+    // 检查是否是全局变量
+    if (auto* global_var = midend::dyn_cast<midend::GlobalVariable>(value)) {
+        // 对于全局变量，生成LA指令来获取其地址
+        auto global_addr_reg = codeGen_->allocateReg();
+        auto global_addr_inst =
+            std::make_unique<Instruction>(Opcode::LA, parent_bb);
+        global_addr_inst->addOperand(std::make_unique<RegisterOperand>(
+            global_addr_reg->getRegNum(), global_addr_reg->isVirtual()));  // rd
+        global_addr_inst->addOperand(std::make_unique<LabelOperand>(
+            global_var->getName()));  // global symbol
+        parent_bb->addInstruction(std::move(global_addr_inst));
+
+        // 建立全局变量到寄存器的映射
+        codeGen_->mapValueToReg(value, global_addr_reg->getRegNum(),
+                                global_addr_reg->isVirtual());
+
+        return std::make_unique<RegisterOperand>(global_addr_reg->getRegNum(),
+                                                 global_addr_reg->isVirtual());
+    }
+
     // 检查是否是常量
     if (midend::isa<midend::ConstantInt>(value)) {
         // 判断范围，是否在 [-2048, 2047] 之间
@@ -1960,7 +2042,8 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
                 midend::dyn_cast<midend::AllocaInst>(value)) {
             return visitAllocaInst(alloca_inst, parent_bb);
         }
-        // 其他指针类型的处理（如全局变量等）
+        // 全局变量的指针类型处理已在上面处理了
+        // 其他指针类型的处理
         throw std::runtime_error("Pointer type not handled: " +
                                  value->toString());
     }
@@ -1973,9 +2056,185 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
 // 访问常量
 void Visitor::visit(const midend::Constant* /*constant*/) {}
 
+bool checkIfZeroInitializer(const ConstantInitializer& init) {
+    return std::visit(
+        [](const auto& value) -> bool {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, int32_t>) {
+                return value == 0;
+            } else if constexpr (std::is_same_v<T, float>) {
+                return value == 0.0f;
+            } else if constexpr (std::is_same_v<T, std::vector<int32_t>>) {
+                return std::all_of(value.begin(), value.end(),
+                                   [](int32_t v) { return v == 0; });
+            } else if constexpr (std::is_same_v<T, std::vector<float>>) {
+                return std::all_of(value.begin(), value.end(),
+                                   [](float v) { return v == 0.0f; });
+            } else if constexpr (std::is_same_v<T, ZeroInitializer>) {
+                return true;
+            }
+            return false;
+        },
+        init);
+}
+
 // 访问 global variable
-void Visitor::visit(const midend::GlobalVariable* /*var*/) {
-    // 其他操作...
+void Visitor::visit(const midend::GlobalVariable* global_var,
+                    Module* parent_module) {
+    std::string name = global_var->getName();
+    bool is_constant = global_var->isConstant();
+
+    std::cout << "Processing global variable: " << name
+              << ", is_constant: " << is_constant
+              << ", has_initializer: " << global_var->hasInitializer()
+              << std::endl;
+
+    // 转换类型信息
+    auto* llvm_type = global_var->getValueType();
+    CompilerType compiler_type = convertLLVMTypeToCompilerType(llvm_type);
+
+    // 处理初始化器
+    std::optional<ConstantInitializer> initializer;
+
+    if (global_var->hasInitializer()) {
+        auto* init =
+            const_cast<midend::GlobalVariable*>(global_var)->getInitializer();
+        initializer =
+            convertLLVMInitializerToConstantInitializer(init, llvm_type);
+        std::cout << "Initializer processed for " << name << std::endl;
+
+        // 检查是否为零初始化
+        bool is_zero_init = checkIfZeroInitializer(initializer.value());
+        std::cout << "Is zero initializer: " << is_zero_init << std::endl;
+
+        if (is_zero_init) {
+            // 零初始化应该放到 BSS 段
+            initializer = ZeroInitializer{};
+        }
+    } else {
+        std::cout << "No initializer found for " << name << std::endl;
+        // 没有初始化器也放到 BSS 段
+        initializer = ZeroInitializer{};
+    }
+
+    // 创建 GlobalVariable 对象
+    GlobalVariable global_variable(name, compiler_type, is_constant,
+                                   initializer);
+
+    // 添加到模块中
+    if (parent_module != nullptr) {
+        parent_module->addGlobal(std::move(global_variable));
+        std::cout << "Global variable " << name << " added to module"
+                  << std::endl;
+    }
+}
+
+// 辅助函数：转换LLVM类型到CompilerType
+// 修复类型转换函数，支持多维数组
+CompilerType Visitor::convertLLVMTypeToCompilerType(
+    const midend::Type* llvm_type) {
+    if (llvm_type->isIntegerType()) {
+        return CompilerType(BaseType::INT32);
+    } else if (llvm_type->isFloatType()) {
+        return CompilerType(BaseType::FLOAT32);
+    } else if (llvm_type->isArrayType()) {
+        auto* array_type = static_cast<const midend::ArrayType*>(llvm_type);
+        auto* element_type = array_type->getElementType();
+
+        // 处理多维数组
+        std::vector<size_t> dimensions;
+        const midend::Type* current_type = llvm_type;
+
+        // 收集所有维度
+        while (current_type->isArrayType()) {
+            auto* arr_type =
+                static_cast<const midend::ArrayType*>(current_type);
+            dimensions.push_back(arr_type->getNumElements());
+            current_type = arr_type->getElementType();
+        }
+
+        // 确定基础类型
+        BaseType base_type;
+        if (current_type->isIntegerType()) {
+            base_type = BaseType::INT32;
+        } else if (current_type->isFloatType()) {
+            base_type = BaseType::FLOAT32;
+        } else {
+            throw std::runtime_error("Unsupported array element type");
+        }
+
+        // 创建多维数组类型
+        if (dimensions.size() == 1) {
+            return CompilerType(base_type, dimensions[0]);
+        } else {
+            // 对于多维数组，我们可以将其视为一维数组，总大小为所有维度的乘积
+            size_t total_size = 1;
+            for (size_t dim : dimensions) {
+                total_size *= dim;
+            }
+            return CompilerType(base_type, total_size);
+        }
+    }
+
+    throw std::runtime_error("Unsupported global variable type: " +
+                             llvm_type->toString());
+}
+
+// 辅助函数：转换LLVM初始化器到ConstantInitializer
+ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
+    const midend::Value* init, const midend::Type* type) {
+    // 处理零初始化 - removed ConstantAggregateZero check as it doesn't exist in
+    // midend namespace
+
+    // 处理单个整数常量
+    if (const auto* const_int = midend::dyn_cast<midend::ConstantInt>(init)) {
+        return static_cast<int32_t>(const_int->getSignedValue());
+    }
+
+    // 处理单个浮点常量
+    if (const auto* const_float = midend::dyn_cast<midend::ConstantFP>(init)) {
+        return const_float->getValue();
+    }
+
+    // 处理数组常量
+    if (const auto* const_array =
+            midend::dyn_cast<midend::ConstantArray>(init)) {
+        const auto* array_type = dynamic_cast<const midend::ArrayType*>(type);
+        auto* element_type = array_type->getElementType();
+
+        if (element_type->isIntegerType()) {
+            std::vector<int32_t> values;
+            for (unsigned i = 0; i < const_array->getNumOperands(); ++i) {
+                auto* element = const_array->getOperand(i);
+                if (const auto* const_int =
+                        midend::dyn_cast<midend::ConstantInt>(element)) {
+                    values.push_back(
+                        static_cast<int32_t>(const_int->getSignedValue()));
+                } else {
+                    // 对于非常量元素，默认为0
+                    values.push_back(0);
+                }
+            }
+            return values;
+        }
+        if (element_type->isFloatType()) {
+            std::vector<float> values;
+            for (unsigned i = 0; i < const_array->getNumOperands(); ++i) {
+                auto* element = const_array->getOperand(i);
+                if (const auto* const_float =
+                        midend::dyn_cast<midend::ConstantFP>(element)) {
+                    values.push_back(const_float->getValue());
+                } else {
+                    // 对于非常量元素，默认为0.0
+                    values.push_back(0.0F);
+                }
+            }
+            return values;
+        }
+    }
+
+    // 对于其他情况，返回零初始化
+    return ZeroInitializer{};
 }
 
 }  // namespace riscv64

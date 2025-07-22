@@ -51,6 +51,7 @@ enum Opcode {
     LB,
     LH,
     LW,
+    LA,
     LD,
     LBU,
     LHU,
