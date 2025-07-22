@@ -1729,6 +1729,380 @@ std::unique_ptr<midend::Module> createComprehensiveUnaryOpsTest() {
     return module;
 }
 
+std::unique_ptr<midend::Module> createSimpleGlobalConstantTest() {
+    static auto context = std::make_unique<midend::Context>();
+    auto module = std::make_unique<midend::Module>("simple_global_constant",
+                                                   context.get());
+    auto* i32Type = context->getInt32Type();
+
+    // 创建全局常量: const int g = 14;
+    auto* g = midend::GlobalVariable::Create(
+        i32Type,
+        true,  // isConstant
+        midend::GlobalVariable::ExternalLinkage,
+        midend::ConstantInt::get(i32Type, 14), "g", module.get());
+
+    // 创建全局常量: const int N = 10000;
+    auto* N = midend::GlobalVariable::Create(
+        i32Type,
+        true,  // isConstant
+        midend::GlobalVariable::ExternalLinkage,
+        midend::ConstantInt::get(i32Type, 10000), "N", module.get());
+
+    // 创建测试函数: int test() { return g + N; }
+    auto* funcType = midend::FunctionType::get(i32Type, {});
+    auto* func = midend::Function::Create(funcType, "test", module.get());
+    auto* entry = midend::BasicBlock::Create(context.get(), "entry", func);
+    midend::IRBuilder builder(context.get());
+    builder.setInsertPoint(entry);
+
+    // 加载全局变量值
+    auto* gVal = builder.createLoad(g, "g_val");
+    auto* NVal = builder.createLoad(N, "N_val");
+    auto* result = builder.createAdd(gVal, NVal, "result");
+    builder.createRet(result);
+
+    return module;
+}
+
+std::unique_ptr<midend::Module> createGlobalArrayTest() {
+    static auto context = std::make_unique<midend::Context>();
+    auto module =
+        std::make_unique<midend::Module>("global_array", context.get());
+    auto* i32Type = context->getInt32Type();
+
+    // 创建全局数组: int small_data[5] = {0, 1, 2, 3, 4};
+    auto* smallArrayTy = midend::ArrayType::get(i32Type, 5);
+    std::vector<midend::Constant*> smallArrayInit = {
+        midend::ConstantInt::get(i32Type, 0),
+        midend::ConstantInt::get(i32Type, 1),
+        midend::ConstantInt::get(i32Type, 2),
+        midend::ConstantInt::get(i32Type, 3),
+        midend::ConstantInt::get(i32Type, 4)};
+    auto* smallArrayInitializer =
+        midend::ConstantArray::get(smallArrayTy, smallArrayInit);
+    auto* smallData = midend::GlobalVariable::Create(
+        smallArrayTy,
+        false,  // not constant
+        midend::GlobalVariable::ExternalLinkage, smallArrayInitializer,
+        "small_data", module.get());
+
+    // 创建零初始化数组: int zero_data[10] = {0};
+    auto* zeroArrayTy = midend::ArrayType::get(i32Type, 10);
+    std::vector<midend::Constant*> zeroArrayInit(
+        10, midend::ConstantInt::get(i32Type, 0));
+    auto* zeroArrayInitializer =
+        midend::ConstantArray::get(zeroArrayTy, zeroArrayInit);
+    auto* zeroData = midend::GlobalVariable::Create(
+        zeroArrayTy, false, midend::GlobalVariable::ExternalLinkage,
+        zeroArrayInitializer, "zero_data", module.get());
+
+    // 创建测试函数: int array_sum()
+    auto* funcType = midend::FunctionType::get(i32Type, {});
+    auto* func = midend::Function::Create(funcType, "array_sum", module.get());
+    auto* entry = midend::BasicBlock::Create(context.get(), "entry", func);
+    midend::IRBuilder builder(context.get());
+    builder.setInsertPoint(entry);
+
+    auto* zero = midend::ConstantInt::get(i32Type, 0);
+    auto* one = midend::ConstantInt::get(i32Type, 1);
+
+    // 访问 small_data[1]
+    auto* smallDataPtr = builder.createGEP(smallArrayTy, smallData, {zero, one},
+                                           "small_data_1_addr");
+    auto* smallDataVal = builder.createLoad(smallDataPtr, "small_data_1");
+
+    // 修改 small_data[2] = 42
+    auto* two = midend::ConstantInt::get(i32Type, 2);
+    auto* storePtr = builder.createGEP(smallArrayTy, smallData, {zero, two},
+                                       "small_data_2_addr");
+    auto* newVal = midend::ConstantInt::get(i32Type, 42);
+    builder.createStore(newVal, storePtr);
+
+    // 访问 zero_data[5]
+    auto* five = midend::ConstantInt::get(i32Type, 5);
+    auto* zeroDataPtr = builder.createGEP(zeroArrayTy, zeroData, {zero, five},
+                                          "zero_data_5_addr");
+    auto* zeroDataVal = builder.createLoad(zeroDataPtr, "zero_data_5");
+
+    // 返回两个数组元素的和
+    auto* result = builder.createAdd(smallDataVal, zeroDataVal, "result");
+    builder.createRet(result);
+
+    return module;
+}
+
+std::unique_ptr<midend::Module> createGlobalMatrix2DTest() {
+    static auto context = std::make_unique<midend::Context>();
+    auto module =
+        std::make_unique<midend::Module>("global_matrix_2d", context.get());
+    auto* i32Type = context->getInt32Type();
+
+    // 创建全局2D数组: int matrix_data[2][3] = {{1,2,3}, {4,5,6}};
+    auto* rowType = midend::ArrayType::get(i32Type, 3);
+    auto* matrixTy = midend::ArrayType::get(rowType, 2);
+
+    std::vector<midend::Constant*> row1 = {
+        midend::ConstantInt::get(i32Type, 1),
+        midend::ConstantInt::get(i32Type, 2),
+        midend::ConstantInt::get(i32Type, 3)};
+    std::vector<midend::Constant*> row2 = {
+        midend::ConstantInt::get(i32Type, 4),
+        midend::ConstantInt::get(i32Type, 5),
+        midend::ConstantInt::get(i32Type, 6)};
+    auto* row1Array = midend::ConstantArray::get(rowType, row1);
+    auto* row2Array = midend::ConstantArray::get(rowType, row2);
+    std::vector<midend::Constant*> matrixInit = {row1Array, row2Array};
+    auto* matrixInitializer = midend::ConstantArray::get(matrixTy, matrixInit);
+
+    auto* matrixData = midend::GlobalVariable::Create(
+        matrixTy, false, midend::GlobalVariable::ExternalLinkage,
+        matrixInitializer, "matrix_data", module.get());
+
+    // 创建测试函数: int matrix_access()
+    auto* funcType = midend::FunctionType::get(i32Type, {});
+    auto* func =
+        midend::Function::Create(funcType, "matrix_access", module.get());
+    auto* entry = midend::BasicBlock::Create(context.get(), "entry", func);
+    midend::IRBuilder builder(context.get());
+    builder.setInsertPoint(entry);
+
+    auto* zero = midend::ConstantInt::get(i32Type, 0);
+    auto* one = midend::ConstantInt::get(i32Type, 1);
+    auto* two = midend::ConstantInt::get(i32Type, 2);
+
+    // 访问 matrix_data[0][1] = 2
+    auto* ptr01 = builder.createGEP(matrixTy, matrixData, {zero, zero, one},
+                                    "matrix_0_1_addr");
+    auto* val01 = builder.createLoad(ptr01, "matrix_0_1");
+
+    // 访问 matrix_data[1][2] = 6
+    auto* ptr12 = builder.createGEP(matrixTy, matrixData, {zero, one, two},
+                                    "matrix_1_2_addr");
+    auto* val12 = builder.createLoad(ptr12, "matrix_1_2");
+
+    // 修改 matrix_data[0][0] = 100
+    auto* ptr00 = builder.createGEP(matrixTy, matrixData, {zero, zero, zero},
+                                    "matrix_0_0_addr");
+    auto* newVal = midend::ConstantInt::get(i32Type, 100);
+    builder.createStore(newVal, ptr00);
+    auto* val00 = builder.createLoad(ptr00, "matrix_0_0_new");
+
+    // 返回三个元素的和
+    auto* temp = builder.createAdd(val01, val12, "temp");
+    auto* result = builder.createAdd(temp, val00, "result");
+    builder.createRet(result);
+
+    return module;
+}
+
+std::unique_ptr<midend::Module> createGlobal3DArrayTest() {
+    static auto context = std::make_unique<midend::Context>();
+    auto module =
+        std::make_unique<midend::Module>("global_3d_array", context.get());
+    auto* i32Type = context->getInt32Type();
+
+    // 创建全局3D数组: int arr3d[2][3][4]
+    auto* arr1DTy = midend::ArrayType::get(i32Type, 4);
+    auto* arr2DTy = midend::ArrayType::get(arr1DTy, 3);
+    auto* arr3DTy = midend::ArrayType::get(arr2DTy, 2);
+
+    // 简单初始化（所有元素都是其线性索引值）
+    std::vector<midend::Constant*> level1;
+    for (int k = 0; k < 4; k++) {
+        level1.push_back(midend::ConstantInt::get(i32Type, k));
+    }
+    auto* arr1DConst = midend::ConstantArray::get(arr1DTy, level1);
+
+    std::vector<midend::Constant*> level2;
+    for (int j = 0; j < 3; j++) {
+        level2.push_back(arr1DConst);
+    }
+    auto* arr2DConst = midend::ConstantArray::get(arr2DTy, level2);
+
+    std::vector<midend::Constant*> level3;
+    for (int i = 0; i < 2; i++) {
+        level3.push_back(arr2DConst);
+    }
+    auto* arr3DConst = midend::ConstantArray::get(arr3DTy, level3);
+
+    auto* arr3D = midend::GlobalVariable::Create(
+        arr3DTy, false, midend::GlobalVariable::ExternalLinkage, arr3DConst,
+        "arr3d", module.get());
+
+    // 创建测试函数: int test_3d_access()
+    auto* funcType = midend::FunctionType::get(i32Type, {});
+    auto* func =
+        midend::Function::Create(funcType, "test_3d_access", module.get());
+    auto* entry = midend::BasicBlock::Create(context.get(), "entry", func);
+    midend::IRBuilder builder(context.get());
+    builder.setInsertPoint(entry);
+
+    auto* zero = midend::ConstantInt::get(i32Type, 0);
+    auto* one = midend::ConstantInt::get(i32Type, 1);
+    auto* two = midend::ConstantInt::get(i32Type, 2);
+
+    // 访问 arr3d[0][1][2]
+    auto* gep1 =
+        builder.createGEP(arr3DTy, arr3D, {zero, zero, one, two}, "gep_0_1_2");
+    auto* val1 = builder.createLoad(gep1, "val_0_1_2");
+
+    // 访问 arr3d[1][0][1]
+    auto* gep2 =
+        builder.createGEP(arr3DTy, arr3D, {zero, one, zero, one}, "gep_1_0_1");
+    auto* val2 = builder.createLoad(gep2, "val_1_0_1");
+
+    // 修改 arr3d[1][2][3] = 999
+    auto* three = midend::ConstantInt::get(i32Type, 3);
+    auto* gep3 =
+        builder.createGEP(arr3DTy, arr3D, {zero, one, two, three}, "gep_1_2_3");
+    auto* newVal = midend::ConstantInt::get(i32Type, 999);
+    builder.createStore(newVal, gep3);
+    auto* val3 = builder.createLoad(gep3, "val_1_2_3_new");
+
+    // 返回三个值的和
+    auto* temp = builder.createAdd(val1, val2, "temp");
+    auto* result = builder.createAdd(temp, val3, "result");
+    builder.createRet(result);
+
+    return module;
+}
+
+
+std::unique_ptr<midend::Module> createGlobalInitOrderTest() {
+    static auto context = std::make_unique<midend::Context>();
+    auto module =
+        std::make_unique<midend::Module>("global_init_order", context.get());
+    auto* i32Type = context->getInt32Type();
+
+    // 创建相互依赖的全局变量
+    // int base_value = 10;
+    auto* baseValue = midend::GlobalVariable::Create(
+        i32Type, false, midend::GlobalVariable::ExternalLinkage,
+        midend::ConstantInt::get(i32Type, 10), "base_value", module.get());
+
+    // const int multiplier = 5;
+    auto* multiplier = midend::GlobalVariable::Create(
+        i32Type, true, midend::GlobalVariable::ExternalLinkage,
+        midend::ConstantInt::get(i32Type, 5), "multiplier", module.get());
+
+    // int computed_values[5] = {10, 20, 30, 40, 50};
+    auto* arrayTy = midend::ArrayType::get(i32Type, 5);
+    std::vector<midend::Constant*> arrayInit = {
+        midend::ConstantInt::get(i32Type, 10),
+        midend::ConstantInt::get(i32Type, 20),
+        midend::ConstantInt::get(i32Type, 30),
+        midend::ConstantInt::get(i32Type, 40),
+        midend::ConstantInt::get(i32Type, 50)};
+    auto* arrayInitializer = midend::ConstantArray::get(arrayTy, arrayInit);
+    auto* computedValues = midend::GlobalVariable::Create(
+        arrayTy, false, midend::GlobalVariable::ExternalLinkage,
+        arrayInitializer, "computed_values", module.get());
+
+    // 创建计算函数: int compute_result()
+    auto* funcType = midend::FunctionType::get(i32Type, {});
+    auto* func =
+        midend::Function::Create(funcType, "compute_result", module.get());
+    auto* entry = midend::BasicBlock::Create(context.get(), "entry", func);
+    midend::IRBuilder builder(context.get());
+    builder.setInsertPoint(entry);
+
+    auto* zero = midend::ConstantInt::get(i32Type, 0);
+    midend::Value* sum = zero;
+
+    // 使用所有全局变量进行计算
+    auto* baseVal = builder.createLoad(baseValue, "base_val");
+    auto* multVal = builder.createLoad(multiplier, "mult_val");
+
+    // 修改base_value
+    auto* newBase = builder.createMul(baseVal, multVal, "new_base");
+    builder.createStore(newBase, baseValue);
+
+    // 累加数组元素
+    for (int i = 0; i < 5; i++) {
+        auto* idx = midend::ConstantInt::get(i32Type, i);
+        auto* elemPtr = builder.createGEP(arrayTy, computedValues, {zero, idx},
+                                          "elem_" + std::to_string(i) + "_ptr");
+        auto* elemVal =
+            builder.createLoad(elemPtr, "elem_" + std::to_string(i));
+
+        // 修改数组元素: computed_values[i] *= multiplier
+        auto* newElem = builder.createMul(elemVal, multVal,
+                                          "new_elem_" + std::to_string(i));
+        builder.createStore(newElem, elemPtr);
+
+        sum = builder.createAdd(sum, newElem, "sum_" + std::to_string(i));
+    }
+
+    // 添加修改后的base_value
+    auto* finalBase = builder.createLoad(baseValue, "final_base");
+    auto* result = builder.createAdd(sum, finalBase, "result");
+    builder.createRet(result);
+
+    return module;
+}
+
+std::unique_ptr<midend::Module> createGlobalPointerArithmeticTest() {
+    static auto context = std::make_unique<midend::Context>();
+    auto module = std::make_unique<midend::Module>("global_pointer_arithmetic",
+                                                   context.get());
+    auto* i32Type = context->getInt32Type();
+
+    // 创建全局数组用于指针运算
+    // int data_array[20] = {0, 1, 2, ..., 19};
+    auto* arrayTy = midend::ArrayType::get(i32Type, 20);
+    std::vector<midend::Constant*> arrayInit;
+    for (int i = 0; i < 20; i++) {
+        arrayInit.push_back(midend::ConstantInt::get(i32Type, i));
+    }
+    auto* arrayInitializer = midend::ConstantArray::get(arrayTy, arrayInit);
+    auto* dataArray = midend::GlobalVariable::Create(
+        arrayTy, false, midend::GlobalVariable::ExternalLinkage,
+        arrayInitializer, "data_array", module.get());
+
+    // 创建测试函数: int pointer_arithmetic_test()
+    auto* funcType = midend::FunctionType::get(i32Type, {});
+    auto* func = midend::Function::Create(funcType, "pointer_arithmetic_test",
+                                          module.get());
+    auto* entry = midend::BasicBlock::Create(context.get(), "entry", func);
+    midend::IRBuilder builder(context.get());
+    builder.setInsertPoint(entry);
+
+    auto* zero = midend::ConstantInt::get(i32Type, 0);
+    auto* five = midend::ConstantInt::get(i32Type, 5);
+    auto* ten = midend::ConstantInt::get(i32Type, 10);
+
+    // 获取数组起始地址: &data_array[0]
+    auto* basePtr =
+        builder.createGEP(arrayTy, dataArray, {zero, zero}, "base_ptr");
+
+    // 指针运算: ptr + 5
+    auto* ptr5 = builder.createGEP(i32Type, basePtr, {five}, "ptr_plus_5");
+    auto* val5 = builder.createLoad(ptr5, "val_at_5");
+
+    // 指针运算: ptr + 10
+    auto* ptr10 = builder.createGEP(i32Type, basePtr, {ten}, "ptr_plus_10");
+    auto* val10 = builder.createLoad(ptr10, "val_at_10");
+
+    // 直接索引访问对比: data_array[15]
+    auto* fifteen = midend::ConstantInt::get(i32Type, 15);
+    auto* directPtr =
+        builder.createGEP(arrayTy, dataArray, {zero, fifteen}, "direct_ptr_15");
+    auto* val15 = builder.createLoad(directPtr, "val_at_15");
+
+    // 通过指针修改值: *(ptr + 5) = 999
+    auto* newVal = midend::ConstantInt::get(i32Type, 999);
+    builder.createStore(newVal, ptr5);
+    auto* modifiedVal5 = builder.createLoad(ptr5, "modified_val_5");
+
+    // 返回所有值的和
+    auto* temp1 = builder.createAdd(modifiedVal5, val10, "temp1");
+    auto* result = builder.createAdd(temp1, val15, "result");
+    builder.createRet(result);
+
+    return module;
+}
+
 }  // namespace testcases
 
 // TestRunner 构造函数实现
@@ -1758,6 +2132,14 @@ TestRunner::TestRunner() {
     // 在 TestRunner 构造函数中添加：
     testCases_["15_comprehensive_unary_ops"] =
         testcases::createComprehensiveUnaryOpsTest;
+    testCases_["16_simple_global_constant"] =
+        testcases::createSimpleGlobalConstantTest;
+    testCases_["17_global_array"] = testcases::createGlobalArrayTest;
+    testCases_["18_global_matrix_2d"] = testcases::createGlobalMatrix2DTest;
+    testCases_["19_global_3d_array"] = testcases::createGlobal3DArrayTest;
+    testCases_["20_global_init_order"] = testcases::createGlobalInitOrderTest;
+    testCases_["21_global_pointer_arithmetic"] =
+        testcases::createGlobalPointerArithmeticTest;
 }
 
 std::unique_ptr<midend::Module> TestRunner::loadTestCase(
@@ -1827,7 +2209,8 @@ void TestRunner::executeCodeGeneration(const std::string& testCaseName,
         std::cout << allocatedModule.toString() << std::endl;
 
         // 执行栈帧布局 pass
-        std::cout << "\n--- Running Frame Index Elimination Pass ---" << std::endl;
+        std::cout << "\n--- Running Frame Index Elimination Pass ---"
+                  << std::endl;
         try {
             target.frameIndexEliminationPass(allocatedModule);
 
@@ -1836,7 +2219,8 @@ void TestRunner::executeCodeGeneration(const std::string& testCaseName,
                       << std::endl;
             std::cout << allocatedModule.toString() << std::endl;
         } catch (const std::exception& e) {
-            std::cout << "Frame index elimination pass failed: " << e.what() << std::endl;
+            std::cout << "Frame index elimination pass failed: " << e.what()
+                      << std::endl;
         }
 
         // 可选：生成最终的汇编文本
