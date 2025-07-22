@@ -44,6 +44,8 @@ class MachineOperand {
 
     bool isMem() const { return type == OperandType::Memory; }
 
+    bool isFrameIndex() const { return type == OperandType::FrameIndex; }
+
 
    protected:
     explicit MachineOperand(OperandType t) : type(t) {}
