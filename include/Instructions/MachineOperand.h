@@ -22,6 +22,11 @@ enum class OperandType {
     FrameIndex,  // 栈帧索引 (用于访问栈上的变量)
 };
 
+enum class RegisterType {
+    Integer,  // 整数寄存器 x0-x31
+    Float     // 浮点寄存器 f0-f31
+};
+
 // 操作数基类
 class MachineOperand {
    public:
@@ -46,7 +51,6 @@ class MachineOperand {
 
     bool isFrameIndex() const { return type == OperandType::FrameIndex; }
 
-
    protected:
     explicit MachineOperand(OperandType t) : type(t) {}
     OperandType type;
@@ -60,17 +64,28 @@ class RegisterOperand : public MachineOperand {
     explicit RegisterOperand(unsigned reg_num, bool is_virtual = true)
         : MachineOperand(OperandType::Register),
           regNum(reg_num),
-          is_virtual(is_virtual) {}
+          is_virtual(is_virtual),
+          regType(RegisterType::Integer) {}
 
     // 支持字符串构造函数
     explicit RegisterOperand(const std::string& reg_name)
         : MachineOperand(OperandType::Register),
           regNum(ABI::getRegNumFromABIName(reg_name)),  // 解析寄存器名称
-          is_virtual(false) {}
+          is_virtual(false),
+          regType(RegisterType::Integer) {}
+
+    explicit RegisterOperand(unsigned reg_num, bool is_virtual,
+                             RegisterType type)
+        : MachineOperand(OperandType::Register),
+          regNum(reg_num),
+          is_virtual(is_virtual),
+          regType(type) {}
 
     unsigned getRegNum() const { return regNum; }
     void setRegNum(unsigned reg) { regNum = reg; }
     bool isVirtual() const { return is_virtual; }
+    RegisterType getRegisterType() const { return regType; }
+    bool isFloatRegister() const { return regType == RegisterType::Float; }
 
     // unsigned abiToRegNum() const;
 
@@ -86,6 +101,7 @@ class RegisterOperand : public MachineOperand {
    private:
     unsigned regNum;
     bool is_virtual;
+    RegisterType regType;
 };
 
 // 派生类：立即数操作数

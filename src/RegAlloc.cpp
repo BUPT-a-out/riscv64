@@ -30,4 +30,9 @@ RegisterOperand* CodeGenerator::getOrAllocateReg(const midend::Value* val) {
     return regPtr;
 }
 
+std::unique_ptr<RegisterOperand> CodeGenerator::allocateFloatReg() {
+    return std::make_unique<RegisterOperand>(nextFloatRegNum_++, true,
+                                             RegisterType::Float);
+}
+
 }  // namespace riscv64

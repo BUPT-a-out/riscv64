@@ -19,6 +19,7 @@ class CodeGenerator {
     std::unordered_map<const midend::BasicBlock*, std::unique_ptr<LabelOperand>>
         bbToLabel_;
     int nextRegNum_ = 100;
+    int nextFloatRegNum_ = 100;
     int nextLabelNum_ = 0;
 
    public:
@@ -43,6 +44,9 @@ class CodeGenerator {
     std::unique_ptr<RegisterOperand> allocateReg();
     RegisterOperand* getOrAllocateReg(const midend::Value* val);
     LabelOperand* getBBLabel(const midend::BasicBlock* bb);
+    
+    std::unique_ptr<RegisterOperand> allocateFloatReg();
+    RegisterOperand* getOrAllocateFloatReg(const midend::Value* val);
 
     // class Visitor;
     std::unique_ptr<Visitor> visitor_;
