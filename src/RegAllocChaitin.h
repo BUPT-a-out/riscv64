@@ -45,12 +45,11 @@ class RegAllocChaitin {
    private:
     static const int NUM_COLORS = 32;  // RISC-V有32个通用寄存器
 
+    // TODO: do stuff
+    int assigningFloat = false;
+
     // 可用于分配的寄存器 (排除保留寄存器)
-    std::vector<unsigned> availableRegs = {
-        5,  6,  7,  28, 29, 30, 31,             // t0-t2, t3-t6
-        10, 11, 12, 13, 14, 15, 16, 17,         // a0-a7
-        18, 19, 20, 21, 22, 23, 24, 25, 26, 27  // s2-s11
-    };
+    std::vector<unsigned> availableRegs;
 
     Function* function;
     std::unordered_map<BasicBlock*, LivenessInfo> livenessInfo;
@@ -86,8 +85,8 @@ class RegAllocChaitin {
     void clearDegreeCache() { degreeCache.clear(); }
 
    public:
-    explicit RegAllocChaitin(Function* func)
-        : function(func), stackManager(StackFrameManager(function)) {}
+    explicit RegAllocChaitin(Function* func, bool assigningFloat=false)
+        : assigningFloat(assigningFloat), function(func), stackManager(StackFrameManager(function)) {}
 
     // 主要的寄存器分配接口
     void allocateRegisters();
@@ -162,13 +161,6 @@ class RegAllocChaitin {
     bool isPhysicalReg(unsigned reg) const;
     unsigned getPhysicalReg(unsigned virtualReg) const;
 
-    // ABI辅助函数
-    bool isCallerSaved(unsigned reg) const;
-    bool isCalleeSaved(unsigned reg) const;
-    bool isArgumentReg(unsigned reg) const;
-    bool isReturnReg(unsigned reg) const;
-    bool isReservedReg(unsigned reg) const;
-
     // ABI约束
     void initializeABIConstraints();
     void setFunctionSpecificConstraints();
@@ -177,10 +169,6 @@ class RegAllocChaitin {
     void setCallSiteConstraints();
     void setPreCallConstraints(BasicBlock* bb, Instruction* callInst);
     void setPostCallConstraints(BasicBlock* bb, Instruction* callInst);
-    void setSpecialRegisterConstraints();
-    bool usesFramePointer() const;
-    void setFramePointerConstraints();
-    void setReturnAddressConstraints();
 
     void addStrongPhysicalConstraint(unsigned virtualReg,
                                      unsigned physicalReg) {
