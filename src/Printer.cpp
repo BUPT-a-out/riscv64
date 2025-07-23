@@ -1,7 +1,7 @@
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
-#include <iostream>
 
 #include "Instructions/All.h"
 
@@ -25,6 +25,16 @@ std::string MachineOperand::toString() const {
 }
 
 std::string RegisterOperand::toString(bool use_abi) const {
+    if (isFloatRegister()) {
+        if (isVirtual()) {
+            return "%freg_" + std::to_string(regNum);
+        }
+        if (use_abi) {
+            throw std::runtime_error(
+                "Cannot use ABI for physical float registers");
+        }
+        return "f" + std::to_string(regNum);
+    }
     if (isVirtual()) {
         return "%vreg_" + std::to_string(regNum);
     }
@@ -158,7 +168,7 @@ std::string Module::toString() const {
     result += rodata_segment_.toString();
     result += data_segment_.toString();
     result += bss_segment_.toString();
-    
+
     result += "  .text\n";
     // for (const auto& global : global_vars) {
     //     result += "  " + global->toString() + "\n";
@@ -174,11 +184,14 @@ std::string Module::toString() const {
 // Helper to get section name
 const char* getSectionName(SegmentKind kind) {
     switch (kind) {
-        case SegmentKind::DATA:   return ".data";
-        case SegmentKind::RODATA: return ".rodata";
-        case SegmentKind::BSS:    return ".bss";
+        case SegmentKind::DATA:
+            return ".data";
+        case SegmentKind::RODATA:
+            return ".rodata";
+        case SegmentKind::BSS:
+            return ".bss";
     }
-    return ""; // Should not happen
+    return "";  // Should not happen
 }
 
 // Implementation of DataSegment::generateAsm
@@ -187,15 +200,17 @@ std::string DataSegment::toString() const {
         return "";
     }
 
-    std::string result = "\n\t.section " + std::string(getSectionName(kind_)) + "\n";
+    std::string result =
+        "\n\t.section " + std::string(getSectionName(kind_)) + "\n";
 
     for (const auto& var : items_) {
         result += "  .globl " + var.name + "\n";
-        result += "  .align 2\n"; // 4-byte alignment
+        result += "  .align 2\n";  // 4-byte alignment
         result += var.name + ":\n";
 
         if (kind_ == SegmentKind::BSS) {
-            result += "  .space " + std::to_string(var.type.getSizeInBytes()) + "\n";
+            result +=
+                "  .space " + std::to_string(var.type.getSizeInBytes()) + "\n";
         } else {
             // Visitor to handle different initializer types
             auto initializer_visitor = [&](const auto& value) {
@@ -203,8 +218,9 @@ std::string DataSegment::toString() const {
                 if constexpr (std::is_same_v<T, int32_t>) {
                     result += "  .word " + std::to_string(value) + "\n";
                 } else if constexpr (std::is_same_v<T, float>) {
-                    // Note: Emitting floats might require converting to hex representation
-                    // for gas, but for simplicity we'll just print the value.
+                    // Note: Emitting floats might require converting to hex
+                    // representation for gas, but for simplicity we'll just
+                    // print the value.
                     result += "  .float " + std::to_string(value) + "\n";
                 } else if constexpr (std::is_same_v<T, std::vector<int32_t>>) {
                     for (int32_t val : value) {
@@ -215,15 +231,16 @@ std::string DataSegment::toString() const {
                         result += "  .float " + std::to_string(val) + "\n";
                     }
                 }
-                // ZeroInitializer is handled by BSS logic, so it shouldn't be visited here.
+                // ZeroInitializer is handled by BSS logic, so it shouldn't be
+                // visited here.
             };
 
             if (var.initializer.has_value()) {
-                 std::visit(initializer_visitor, var.initializer.value());
+                std::visit(initializer_visitor, var.initializer.value());
             }
         }
     }
-    
+
     return result;
 }
 
