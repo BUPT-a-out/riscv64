@@ -1453,6 +1453,12 @@ std::vector<unsigned> RegAllocChaitin::getABIPreferredRegs(
 
     if (isUsedAcrossCalls(virtualReg)) {
         // 优先使用被调用者保存寄存器
+        // s1
+        if (std::find(preferredRegs.begin(), preferredRegs.end(), 9) ==
+            preferredRegs.end()) {
+            preferredRegs.push_back(9);
+        }
+
         for (unsigned reg = 18; reg <= 27; ++reg) {  // s2-s11
             if (std::find(preferredRegs.begin(), preferredRegs.end(), reg) ==
                 preferredRegs.end()) {
