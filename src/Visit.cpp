@@ -2056,79 +2056,6 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
 // 访问常量
 void Visitor::visit(const midend::Constant* /*constant*/) {}
 
-bool checkIfZeroInitializer(const ConstantInitializer& init) {
-    return std::visit(
-        [](const auto& value) -> bool {
-            using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T, int32_t>) {
-                return value == 0;
-            } else if constexpr (std::is_same_v<T, float>) {
-                return value == 0.0f;
-            } else if constexpr (std::is_same_v<T, std::vector<int32_t>>) {
-                return std::all_of(value.begin(), value.end(),
-                                   [](int32_t v) { return v == 0; });
-            } else if constexpr (std::is_same_v<T, std::vector<float>>) {
-                return std::all_of(value.begin(), value.end(),
-                                   [](float v) { return v == 0.0f; });
-            } else if constexpr (std::is_same_v<T, ZeroInitializer>) {
-                return true;
-            }
-            return false;
-        },
-        init);
-}
-
-// 访问 global variable
-void Visitor::visit(const midend::GlobalVariable* global_var,
-                    Module* parent_module) {
-    std::string name = global_var->getName();
-    bool is_constant = global_var->isConstant();
-
-    std::cout << "Processing global variable: " << name
-              << ", is_constant: " << is_constant
-              << ", has_initializer: " << global_var->hasInitializer()
-              << std::endl;
-
-    // 转换类型信息
-    auto* llvm_type = global_var->getValueType();
-    CompilerType compiler_type = convertLLVMTypeToCompilerType(llvm_type);
-
-    // 处理初始化器
-    std::optional<ConstantInitializer> initializer;
-
-    if (global_var->hasInitializer()) {
-        auto* init =
-            const_cast<midend::GlobalVariable*>(global_var)->getInitializer();
-        initializer =
-            convertLLVMInitializerToConstantInitializer(init, llvm_type);
-        std::cout << "Initializer processed for " << name << std::endl;
-
-        // 检查是否为零初始化
-        bool is_zero_init = checkIfZeroInitializer(initializer.value());
-        std::cout << "Is zero initializer: " << is_zero_init << std::endl;
-
-        if (is_zero_init) {
-            // 零初始化应该放到 BSS 段
-            initializer = ZeroInitializer{};
-        }
-    } else {
-        std::cout << "No initializer found for " << name << std::endl;
-        // 没有初始化器也放到 BSS 段
-        initializer = ZeroInitializer{};
-    }
-
-    // 创建 GlobalVariable 对象
-    GlobalVariable global_variable(name, compiler_type, is_constant,
-                                   initializer);
-
-    // 添加到模块中
-    if (parent_module != nullptr) {
-        parent_module->addGlobal(std::move(global_variable));
-        std::cout << "Global variable " << name << " added to module"
-                  << std::endl;
-    }
-}
-
 // 辅助函数：转换LLVM类型到CompilerType
 // 修复类型转换函数，支持多维数组
 CompilerType Visitor::convertLLVMTypeToCompilerType(
@@ -2183,58 +2110,439 @@ CompilerType Visitor::convertLLVMTypeToCompilerType(
 // 辅助函数：转换LLVM初始化器到ConstantInitializer
 ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
     const midend::Value* init, const midend::Type* type) {
-    // 处理零初始化 - removed ConstantAggregateZero check as it doesn't exist in
-    // midend namespace
+    std::cout << "Converting initializer: " << init->toString()
+              << " for type: " << type->toString() << std::endl;
 
     // 处理单个整数常量
-    if (const auto* const_int = midend::dyn_cast<midend::ConstantInt>(init)) {
-        return static_cast<int32_t>(const_int->getSignedValue());
+    if (init->getType()->isIntegerType()) {
+        const auto* const_int = midend::dyn_cast<midend::ConstantInt>(init);
+        if (!const_int) {
+            throw std::runtime_error("Expected ConstantInt for integer type");
+        }
+        int32_t value = static_cast<int32_t>(const_int->getSignedValue());
+        std::cout << "Found ConstantInt: " << value << std::endl;
+        return value;
     }
 
     // 处理单个浮点常量
-    if (const auto* const_float = midend::dyn_cast<midend::ConstantFP>(init)) {
-        return const_float->getValue();
+    if (init->getType()->isFloatType()) {
+        const auto* const_float = midend::dyn_cast<midend::ConstantFP>(init);
+        if (!const_float) {
+            throw std::runtime_error("Expected ConstantFP for float type");
+        }
+        float value = const_float->getValue();
+        std::cout << "Found ConstantFP: " << value << std::endl;
+        return value;
     }
 
     // 处理数组常量
-    if (const auto* const_array =
-            midend::dyn_cast<midend::ConstantArray>(init)) {
-        const auto* array_type = dynamic_cast<const midend::ArrayType*>(type);
-        auto* element_type = array_type->getElementType();
+    if (init->getType()->isArrayType()) {
+        const auto* const_array = midend::dyn_cast<midend::ConstantArray>(init);
+        if (!const_array) {
+            throw std::runtime_error("Expected ConstantArray for array type");
+        }
 
-        if (element_type->isIntegerType()) {
+        std::cout << "Processing ConstantArray with "
+                  << const_array->getNumElements() << " elements" << std::endl;
+
+        const auto* array_type =
+            static_cast<const midend::ArrayType*>(init->getType());
+        auto* element_type = array_type->getElementType();
+        std::cout << "Array element type: " << element_type->toString()
+                  << std::endl;
+
+        // 递归处理嵌套数组或基本类型元素
+        if (element_type->isArrayType()) {
+            // 多维数组：需要展平处理
+            std::vector<int32_t> flattened_values;
+
+            for (unsigned i = 0; i < const_array->getNumElements(); ++i) {
+                auto* element = const_array->getElement(i);
+                std::cout << "Processing nested array element " << i << ": "
+                          << element->toString() << std::endl;
+
+                auto nested_init = convertLLVMInitializerToConstantInitializer(
+                    element, element_type);
+
+                // 将嵌套数组的值添加到展平数组中
+                std::visit(
+                    [&flattened_values](const auto& value) {
+                        using T = std::decay_t<decltype(value)>;
+                        if constexpr (std::is_same_v<T, std::vector<int32_t>>) {
+                            flattened_values.insert(flattened_values.end(),
+                                                    value.begin(), value.end());
+                        } else if constexpr (std::is_same_v<T, int32_t>) {
+                            flattened_values.push_back(value);
+                        }
+                        // 对于其他类型，暂时忽略
+                    },
+                    nested_init);
+            }
+
+            std::cout << "Flattened array size: " << flattened_values.size()
+                      << std::endl;
+            return flattened_values;
+
+        } else if (element_type->isIntegerType()) {
+            // 一维整数数组
             std::vector<int32_t> values;
-            for (unsigned i = 0; i < const_array->getNumOperands(); ++i) {
-                auto* element = const_array->getOperand(i);
+            values.reserve(const_array->getNumElements());
+
+            for (unsigned i = 0; i < const_array->getNumElements(); ++i) {
+                auto* element = const_array->getElement(i);
+                std::cout << "Processing int array element " << i << ": "
+                          << element->toString() << std::endl;
+
                 if (const auto* const_int =
                         midend::dyn_cast<midend::ConstantInt>(element)) {
-                    values.push_back(
-                        static_cast<int32_t>(const_int->getSignedValue()));
+                    int32_t value =
+                        static_cast<int32_t>(const_int->getSignedValue());
+                    values.push_back(value);
+                    std::cout << "  -> value: " << value << std::endl;
                 } else {
                     // 对于非常量元素，默认为0
+                    std::cout << "  -> default value: 0" << std::endl;
                     values.push_back(0);
                 }
             }
+
+            std::cout << "Created int array with " << values.size()
+                      << " elements" << std::endl;
             return values;
-        }
-        if (element_type->isFloatType()) {
+
+        } else if (element_type->isFloatType()) {
+            // 一维浮点数组
             std::vector<float> values;
-            for (unsigned i = 0; i < const_array->getNumOperands(); ++i) {
-                auto* element = const_array->getOperand(i);
+            values.reserve(const_array->getNumElements());
+
+            for (unsigned i = 0; i < const_array->getNumElements(); ++i) {
+                auto* element = const_array->getElement(i);
+                std::cout << "Processing float array element " << i << ": "
+                          << element->toString() << std::endl;
+
                 if (const auto* const_float =
                         midend::dyn_cast<midend::ConstantFP>(element)) {
-                    values.push_back(const_float->getValue());
+                    float value = const_float->getValue();
+                    values.push_back(value);
+                    std::cout << "  -> value: " << value << std::endl;
                 } else {
                     // 对于非常量元素，默认为0.0
+                    std::cout << "  -> default value: 0.0" << std::endl;
                     values.push_back(0.0F);
                 }
             }
+
+            std::cout << "Created float array with " << values.size()
+                      << " elements" << std::endl;
             return values;
+        }
+    }
+
+    // 检查是否为零初始化数组（通过类型判断）
+    if (type->isArrayType()) {
+        const auto* array_type = static_cast<const midend::ArrayType*>(type);
+        auto* element_type = array_type->getElementType();
+
+        // 计算总元素数量（支持多维数组）
+        size_t total_elements = 1;
+        const midend::Type* current_type = type;
+        while (current_type->isArrayType()) {
+            auto* arr_type =
+                static_cast<const midend::ArrayType*>(current_type);
+            total_elements *= arr_type->getNumElements();
+            current_type = arr_type->getElementType();
+        }
+
+        std::cout << "Creating zero-initialized array with " << total_elements
+                  << " elements" << std::endl;
+
+        if (current_type->isIntegerType()) {
+            std::vector<int32_t> zero_values(total_elements, 0);
+            return zero_values;
+        } else if (current_type->isFloatType()) {
+            std::vector<float> zero_values(total_elements, 0.0f);
+            return zero_values;
         }
     }
 
     // 对于其他情况，返回零初始化
+    std::cout << "Returning ZeroInitializer for unhandled case" << std::endl;
     return ZeroInitializer{};
 }
+
+bool checkIfZeroInitializer(const ConstantInitializer& init) {
+    return std::visit(
+        [](const auto& value) -> bool {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, int32_t>) {
+                return value == 0;
+            } else if constexpr (std::is_same_v<T, float>) {
+                return value == 0.0f;
+            } else if constexpr (std::is_same_v<T, std::vector<int32_t>>) {
+                return std::all_of(value.begin(), value.end(),
+                                   [](int32_t v) { return v == 0; });
+            } else if constexpr (std::is_same_v<T, std::vector<float>>) {
+                return std::all_of(value.begin(), value.end(),
+                                   [](float v) { return v == 0.0f; });
+            } else if constexpr (std::is_same_v<T, ZeroInitializer>) {
+                return true;
+            }
+            return false;
+        },
+        init);
+}
+
+// 访问 global variable
+void Visitor::visit(const midend::GlobalVariable* global_var,
+                    Module* parent_module) {
+    std::string name = global_var->getName();
+    bool is_constant = global_var->isConstant();
+
+    std::cout << "Processing global variable: " << name
+              << ", is_constant: " << is_constant
+              << ", has_initializer: " << global_var->hasInitializer()
+              << std::endl;
+
+    // 转换类型信息
+    auto* llvm_type = global_var->getValueType();
+    CompilerType compiler_type = convertLLVMTypeToCompilerType(llvm_type);
+
+    std::cout << "Converted type - base: "
+              << (compiler_type.base == BaseType::INT32 ? "INT32" : "FLOAT32")
+              << ", array_size: " << compiler_type.array_size << std::endl;
+
+    // 处理初始化器
+    std::optional<ConstantInitializer> initializer;
+
+    if (global_var->hasInitializer()) {
+        auto* init =
+            const_cast<midend::GlobalVariable*>(global_var)->getInitializer();
+        std::cout << "Found initializer: " << init->toString() << std::endl;
+
+        try {
+            initializer =
+                convertLLVMInitializerToConstantInitializer(init, llvm_type);
+            std::cout << "Initializer processed successfully for " << name
+                      << std::endl;
+
+            // 检查是否为零初始化
+            bool is_zero_init = checkIfZeroInitializer(initializer.value());
+            std::cout << "Is zero initializer: " << is_zero_init << std::endl;
+
+            if (is_zero_init) {
+                // 零初始化应该放到 BSS 段
+                std::cout << "Converting to ZeroInitializer for BSS section"
+                          << std::endl;
+                initializer = ZeroInitializer{};
+            } else {
+                // 打印非零初始化的详细信息
+                std::visit(
+                    [&name](const auto& value) {
+                        using T = std::decay_t<decltype(value)>;
+                        if constexpr (std::is_same_v<T, std::vector<int32_t>>) {
+                            std::cout << "Non-zero int array initializer for "
+                                      << name << " with " << value.size()
+                                      << " elements: ";
+                            for (size_t i = 0;
+                                 i < std::min(value.size(), size_t(10)); ++i) {
+                                std::cout << value[i] << " ";
+                            }
+                            if (value.size() > 10) std::cout << "...";
+                            std::cout << std::endl;
+                        } else if constexpr (std::is_same_v<
+                                                 T, std::vector<float>>) {
+                            std::cout << "Non-zero float array initializer for "
+                                      << name << " with " << value.size()
+                                      << " elements" << std::endl;
+                        }
+                    },
+                    initializer.value());
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Error processing initializer for " << name << ": "
+                      << e.what() << std::endl;
+            // 发生错误时，使用零初始化
+            initializer = ZeroInitializer{};
+        }
+    } else {
+        std::cout << "No initializer found for " << name
+                  << ", using ZeroInitializer" << std::endl;
+        // 没有初始化器也放到 BSS 段
+        initializer = ZeroInitializer{};
+    }
+
+    // 创建 GlobalVariable 对象
+    GlobalVariable global_variable(name, compiler_type, is_constant,
+                                   initializer);
+
+    // 添加到模块中
+    if (parent_module != nullptr) {
+        parent_module->addGlobal(std::move(global_variable));
+        std::cout << "Global variable " << name << " added to module"
+                  << std::endl;
+    }
+}
+
+// 辅助函数：转换LLVM初始化器到ConstantInitializer
+// ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
+//     const midend::Value* init, const midend::Type* type) {
+//     std::cout << "Converting initializer: " << init->toString()
+//               << " for type: " << type->toString() << std::endl;
+
+//     // 处理单个整数常量
+//     if (const auto* const_int = midend::dyn_cast<midend::ConstantInt>(init))
+//     {
+//         int32_t value = static_cast<int32_t>(const_int->getSignedValue());
+//         std::cout << "Found ConstantInt: " << value << std::endl;
+//         return value;
+//     }
+
+//     // 处理单个浮点常量
+//     if (const auto* const_float = midend::dyn_cast<midend::ConstantFP>(init))
+//     {
+//         float value = const_float->getValue();
+//         std::cout << "Found ConstantFP: " << value << std::endl;
+//         return value;
+//     }
+
+//     // 处理数组常量
+//     if (const auto* const_array =
+//             midend::dyn_cast<midend::ConstantArray>(init)) {
+//         std::cout << "Processing ConstantArray with "
+//                   << const_array->getNumOperands() << " elements" <<
+//                   std::endl;
+
+//         const auto* array_type = dynamic_cast<const
+//         midend::ArrayType*>(type); if (!array_type) {
+//             throw std::runtime_error(
+//                 "Expected array type for ConstantArray initializer");
+//         }
+
+//         auto* element_type = array_type->getElementType();
+//         std::cout << "Array element type: " << element_type->toString()
+//                   << std::endl;
+
+//         // 递归处理嵌套数组或基本类型元素
+//         if (element_type->isArrayType()) {
+//             // 多维数组：需要展平处理
+//             std::vector<int32_t> flattened_values;
+
+//             for (unsigned i = 0; i < const_array->getNumOperands(); ++i) {
+//                 auto* element = const_array->getOperand(i);
+//                 std::cout << "Processing nested array element " << i << ": "
+//                           << element->toString() << std::endl;
+
+//                 auto nested_init =
+//                 convertLLVMInitializerToConstantInitializer(
+//                     element, element_type);
+
+//                 // 将嵌套数组的值添加到展平数组中
+//                 std::visit(
+//                     [&flattened_values](const auto& value) {
+//                         using T = std::decay_t<decltype(value)>;
+//                         if constexpr (std::is_same_v<T,
+//                         std::vector<int32_t>>) {
+//                             flattened_values.insert(flattened_values.end(),
+//                                                     value.begin(),
+//                                                     value.end());
+//                         } else if constexpr (std::is_same_v<T, int32_t>) {
+//                             flattened_values.push_back(value);
+//                         }
+//                         // 对于其他类型，暂时忽略
+//                     },
+//                     nested_init);
+//             }
+
+//             std::cout << "Flattened array size: " << flattened_values.size()
+//                       << std::endl;
+//             return flattened_values;
+
+//         } else if (element_type->isIntegerType()) {
+//             // 一维整数数组
+//             std::vector<int32_t> values;
+//             values.reserve(const_array->getNumOperands());
+
+//             for (unsigned i = 0; i < const_array->getNumOperands(); ++i) {
+//                 auto* element = const_array->getOperand(i);
+//                 std::cout << "Processing int array element " << i << ": "
+//                           << element->toString() << std::endl;
+
+//                 if (const auto* const_int =
+//                         midend::dyn_cast<midend::ConstantInt>(element)) {
+//                     int32_t value =
+//                         static_cast<int32_t>(const_int->getSignedValue());
+//                     values.push_back(value);
+//                     std::cout << "  -> value: " << value << std::endl;
+//                 } else {
+//                     // 对于非常量元素，默认为0
+//                     std::cout << "  -> default value: 0" << std::endl;
+//                     values.push_back(0);
+//                 }
+//             }
+
+//             std::cout << "Created int array with " << values.size()
+//                       << " elements" << std::endl;
+//             return values;
+
+//         } else if (element_type->isFloatType()) {
+//             // 一维浮点数组
+//             std::vector<float> values;
+//             values.reserve(const_array->getNumOperands());
+
+//             for (unsigned i = 0; i < const_array->getNumOperands(); ++i) {
+//                 auto* element = const_array->getOperand(i);
+//                 std::cout << "Processing float array element " << i << ": "
+//                           << element->toString() << std::endl;
+
+//                 if (const auto* const_float =
+//                         midend::dyn_cast<midend::ConstantFP>(element)) {
+//                     float value = const_float->getValue();
+//                     values.push_back(value);
+//                     std::cout << "  -> value: " << value << std::endl;
+//                 } else {
+//                     // 对于非常量元素，默认为0.0
+//                     std::cout << "  -> default value: 0.0" << std::endl;
+//                     values.push_back(0.0F);
+//                 }
+//             }
+
+//             std::cout << "Created float array with " << values.size()
+//                       << " elements" << std::endl;
+//             return values;
+//         }
+//     }
+
+//     // 检查是否为零初始化数组（通过类型判断）
+//     if (type->isArrayType()) {
+//         const auto* array_type = static_cast<const midend::ArrayType*>(type);
+//         auto* element_type = array_type->getElementType();
+
+//         // 计算总元素数量（支持多维数组）
+//         size_t total_elements = 1;
+//         const midend::Type* current_type = type;
+//         while (current_type->isArrayType()) {
+//             auto* arr_type =
+//                 static_cast<const midend::ArrayType*>(current_type);
+//             total_elements *= arr_type->getNumElements();
+//             current_type = arr_type->getElementType();
+//         }
+
+//         std::cout << "Creating zero-initialized array with " <<
+//         total_elements
+//                   << " elements" << std::endl;
+
+//         if (current_type->isIntegerType()) {
+//             std::vector<int32_t> zero_values(total_elements, 0);
+//             return zero_values;
+//         } else if (current_type->isFloatType()) {
+//             std::vector<float> zero_values(total_elements, 0.0f);
+//             return zero_values;
+//         }
+//     }
+
+//     // 对于其他情况，返回零初始化
+//     std::cout << "Returning ZeroInitializer for unhandled case" << std::endl;
+//     return ZeroInitializer{};
+// }
 
 }  // namespace riscv64
