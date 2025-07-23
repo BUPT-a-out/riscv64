@@ -5,25 +5,20 @@
 
 namespace riscv64 {
 
-
 bool Instruction::isCopyInstr() const {
     switch (opcode) {
         case MV:
             // MV rd, rs - 将 rs 的值复制到 rd
             return operands.size() == 2;
-            
         case COPY:
             // COPY rd, rs - 寄存器分配约束指令
             return operands.size() == 2;
-            
         case FMOV_S:
             // FMOV.S frd, frs - 单精度浮点数移动
             return operands.size() == 2;
-            
         case FMOV_D:
             // FMOV.D frd, frs - 双精度浮点数移动
             return operands.size() == 2;
-            
         case ADDI:
             // ADDI rd, rs, 0 等价于 MV rd, rs
             if (operands.size() == 3) {
@@ -31,7 +26,6 @@ bool Instruction::isCopyInstr() const {
                 return operands[2]->isImm() && operands[2]->getValue() == 0;
             }
             return false;
-            
         case OR:
             // OR rd, rs, x0 等价于 MV rd, rs (假设 x0 是零寄存器)
             if (operands.size() == 3) {
@@ -39,7 +33,6 @@ bool Instruction::isCopyInstr() const {
                 return operands[2]->isReg() && operands[2]->getRegNum() == 0;
             }
             return false;
-            
         case ORI:
             // ORI rd, rs, 0 等价于 MV rd, rs
             if (operands.size() == 3) {
@@ -47,7 +40,6 @@ bool Instruction::isCopyInstr() const {
                 return operands[2]->isImm() && operands[2]->getValue() == 0;
             }
             return false;
-            
         default:
             return false;
     }
@@ -70,7 +62,7 @@ bool Instruction::isCallInstr() const {
             if (dest_operand->getType() == OperandType::Register) {
                 RegisterOperand* reg_op = static_cast<RegisterOperand*>(dest_operand);
                 // 检查是否是ra寄存器(x1)
-                return reg_op->getRegNum() == 1;  // ra寄存器编号为1
+                return reg_op->isIntegerRegister() && reg_op->getRegNum() == 1;  // ra寄存器编号为1
             }
         }
         return true;  // 如果无法确定，保守地认为是调用
@@ -83,7 +75,7 @@ bool Instruction::isCallInstr() const {
             if (dest_operand->getType() == OperandType::Register) {
                 RegisterOperand* reg_op = static_cast<RegisterOperand*>(dest_operand);
                 // 检查是否是ra寄存器(x1)
-                return reg_op->getRegNum() == 1;  // ra寄存器编号为1
+                return reg_op->isIntegerRegister() && reg_op->getRegNum() == 1;  // ra寄存器编号为1
             }
         }
         return false;  // JALR如果不是写入ra，通常是间接跳转而非调用
@@ -99,9 +91,9 @@ bool Instruction::isCallInstr() const {
 
 bool Instruction::isBranch() const {
     // 条件分支指令
-    if (opcode == BEQ || opcode == BNE || opcode == BLT || opcode == BGE || 
-        opcode == BLTU || opcode == BGEU || opcode == BEQZ || opcode == BNEZ || 
-        opcode == BLEZ || opcode == BGEZ || opcode == BLTZ || opcode == BGTZ || 
+    if (opcode == BEQ || opcode == BNE || opcode == BLT || opcode == BGE ||
+        opcode == BLTU || opcode == BGEU || opcode == BEQZ || opcode == BNEZ ||
+        opcode == BLEZ || opcode == BGEZ || opcode == BLTZ || opcode == BGTZ ||
         opcode == BGT || opcode == BLE || opcode == BGTU || opcode == BLEU) {
         return true;
     }
@@ -127,15 +119,14 @@ bool Instruction::isBackEdge() const {
     BasicBlock* target_bb = nullptr;
     
     // 获取目标基本块
-    if (opcode == BEQ || opcode == BNE || opcode == BLT || opcode == BGE || 
-        opcode == BLTU || opcode == BGEU || opcode == BEQZ || opcode == BNEZ || 
-        opcode == BLEZ || opcode == BGEZ || opcode == BLTZ || opcode == BGTZ || 
+    if (opcode == BEQ || opcode == BNE || opcode == BLT || opcode == BGE ||
+        opcode == BLTU || opcode == BGEU || opcode == BEQZ || opcode == BNEZ ||
+        opcode == BLEZ || opcode == BGEZ || opcode == BLTZ || opcode == BGTZ ||
         opcode == BGT || opcode == BLE || opcode == BGTU || opcode == BLEU) {
         if (operands.size() >= 3) {
             auto* target_operand = operands.back().get();
             if (target_operand->getType() == OperandType::Label) {
                 LabelOperand* label_op = static_cast<LabelOperand*>(target_operand);
-                // 需要根据LabelOperand的实际设计调整这里的类型转换
                 target_bb = reinterpret_cast<BasicBlock*>(label_op->getBlock());
             }
         }
@@ -152,30 +143,25 @@ bool Instruction::isBackEdge() const {
     
     // 简单的回边检测：检查目标是否在当前基本块的前驱中
     if (target_bb && parent) {
-        // 这种方法假设如果跳转目标是当前块的前驱，则可能是回边
-        // 更准确的判断需要完整的CFG分析
         return target_bb == parent;  // 自循环一定是回边
     }
     
     return false;
 }
 
-
-// 辅助函数：检查指令是否涉及栈指针
 bool Instruction::involvesStackPointer() const {
-    // 需要在Instruction类中实现
     const auto& operands = getOperands();
     for (const auto& operand : operands) {
         if (operand->isReg()) {
             RegisterOperand* regOp = static_cast<RegisterOperand*>(operand.get());
-            if (regOp->getRegNum() == 2) { // sp = x2
+            if (regOp->isIntegerRegister() && regOp->getRegNum() == 2) { // sp = x2
                 return true;
             }
         } else if (operand->isMem()) {
             MemoryOperand* memOp = static_cast<MemoryOperand*>(operand.get());
             if (memOp->getBaseReg() && memOp->getBaseReg()->isReg()) {
                 RegisterOperand* baseReg = static_cast<RegisterOperand*>(memOp->getBaseReg());
-                if (baseReg->getRegNum() == 2) { // 基于栈指针的内存访问
+                if (baseReg->isIntegerRegister() &&baseReg->getRegNum() == 2) { // 基于栈指针的内存访问
                     return true;
                 }
             }
@@ -184,26 +170,22 @@ bool Instruction::involvesStackPointer() const {
     return false;
 }
 
-// 辅助函数：检查指令是否是参数移动指令
 bool Instruction::isParameterMove() const {
-    // 检查是否是将参数寄存器值移动到虚拟寄存器的指令
     if (!isCopyInstr()) return false;
     
     const auto& operands = getOperands();
     if (operands.size() >= 2 && operands[0]->isReg() && operands[1]->isReg()) {
         unsigned srcReg = operands[1]->getRegNum();
-        return srcReg >= 10 && srcReg <= 17; // a0-a7
+        return srcReg >= 10 && srcReg <= 17; // a0-a7 f0-f7
     }
     return false;
 }
 
-// 辅助函数：检查指令是否是帧设置指令  
 bool Instruction::isFrameSetup() const {
-    // 检查是否是设置栈帧的指令，如 addi sp, sp, -framesize
     if (getOpcode() == ADDI) {
         const auto& operands = getOperands();
-        if (operands.size() >= 3 && 
-            operands[0]->isReg() && operands[1]->isReg() && operands[2]->isImm()) {
+        if (operands.size() >= 3 &&
+            operands[0]->isReg() && operands[1]->isReg() && operands[0]->isIntegerRegister() && operands[1]->isIntegerRegister() && operands[2]->isImm()) {
             unsigned dstReg = operands[0]->getRegNum();
             unsigned srcReg = operands[1]->getRegNum();
             if (dstReg == 2 && srcReg == 2) { // sp = sp + offset
@@ -214,13 +196,12 @@ bool Instruction::isFrameSetup() const {
     return false;
 }
 
-// 辅助函数：检查指令是否与帧指针相关
 bool Instruction::isFramePointerRelated() const {
     const auto& operands = getOperands();
     for (const auto& operand : operands) {
         if (operand->isReg()) {
             RegisterOperand* regOp = static_cast<RegisterOperand*>(operand.get());
-            if (regOp->getRegNum() == 8) { // s0/fp = x8
+            if (regOp->isIntegerRegister() && regOp->getRegNum() == 8) { // s0/fp = x8
                 return true;
             }
         }
@@ -240,13 +221,11 @@ bool Instruction::isReturnInstr() const {
             auto* dest_operand = operands[0].get();
             auto* src_operand = operands[1].get();
             
-            // 检查目标寄存器是否是x0，源寄存器是否是ra(x1)
             if (dest_operand->isReg() && src_operand->isReg()) {
                 RegisterOperand* dest_reg = static_cast<RegisterOperand*>(dest_operand);
                 RegisterOperand* src_reg = static_cast<RegisterOperand*>(src_operand);
                 
-                // jalr x0, ra, offset 形式（通常offset为0）
-                if (dest_reg->getRegNum() == 0 && src_reg->getRegNum() == 1) {
+                if (dest_reg->isIntegerRegister() && dest_reg->getRegNum() == 0 && src_reg->isIntegerRegister() && src_reg->getRegNum() == 1) {
                     return true;
                 }
             }
@@ -259,8 +238,7 @@ bool Instruction::isReturnInstr() const {
             auto* operand = operands[0].get();
             if (operand->isReg()) {
                 RegisterOperand* reg_op = static_cast<RegisterOperand*>(operand);
-                // 检查是否是ra寄存器(x1)
-                if (reg_op->getRegNum() == 1) {
+                if (reg_op->isIntegerRegister() && reg_op->getRegNum() == 1) {
                     return true;
                 }
             }
@@ -270,23 +248,21 @@ bool Instruction::isReturnInstr() const {
     return false;
 }
 
-std::vector<unsigned> Instruction::getUsedRegs() const {
+// 获取使用的整数寄存器
+std::vector<unsigned> Instruction::getUsedIntegerRegs() const {
     std::vector<unsigned> usedRegs;
-    
     if (operands.empty()) return usedRegs;
     
-    // 根据指令操作码确定哪些操作数是源操作数（被使用的）
     switch (opcode) {
         // 算术指令：ADD rd, rs1, rs2 - 使用rs1和rs2
-        case ADD: case SUB: case MUL: case DIV: 
+        case ADD: case SUB: case MUL: case DIV:
         case AND: case OR: case XOR: case SLL: case SRL: case SRA:
         case SLT: case SLTU: {
             if (operands.size() >= 3) {
-                // operands[0] 是目标寄存器（定义），operands[1]和operands[2]是源寄存器
-                if (operands[1]->isReg()) {
+                if (operands[1]->isReg() && operands[1]->isIntegerRegister()) {
                     usedRegs.push_back(operands[1]->getRegNum());
                 }
-                if (operands[2]->isReg()) {
+                if (operands[2]->isReg() && operands[1]->isIntegerRegister()) {
                     usedRegs.push_back(operands[2]->getRegNum());
                 }
             }
@@ -296,7 +272,7 @@ std::vector<unsigned> Instruction::getUsedRegs() const {
         // 立即数算术指令：ADDI rd, rs1, imm - 使用rs1
         case ADDI: case SLTI: case SLTIU: case XORI: case ORI: case ANDI:
         case SLLI: case SRLI: case SRAI: {
-            if (operands.size() >= 2 && operands[1]->isReg()) {
+            if (operands.size() >= 2 && operands[1]->isReg() && operands[1]->isIntegerRegister()) {
                 usedRegs.push_back(operands[1]->getRegNum());
             }
             break;
@@ -306,11 +282,12 @@ std::vector<unsigned> Instruction::getUsedRegs() const {
         case LD: case LW: case LH: case LB: case LWU: case LHU: case LBU: {
             if (operands.size() >= 2 && operands[1]->isMem()) {
                 MemoryOperand* memOp = static_cast<MemoryOperand*>(operands[1].get());
-                if (memOp->getBaseReg() && memOp->getBaseReg()->isReg()) {
+                if (memOp->getBaseReg() && memOp->getBaseReg()->isReg() && 
+                    memOp->getBaseReg()->isIntegerRegister()) {
                     usedRegs.push_back(memOp->getBaseReg()->getRegNum());
                 }
-                // 如果偏移量是寄存器，也需要添加
-                if (memOp->getOffset() && memOp->getOffset()->isReg()) {
+                if (memOp->getOffset() && memOp->getOffset()->isReg() && 
+                    memOp->getOffset()->isIntegerRegister()) {
                     usedRegs.push_back(memOp->getOffset()->getRegNum());
                 }
             }
@@ -320,17 +297,17 @@ std::vector<unsigned> Instruction::getUsedRegs() const {
         // 存储指令：SD rs2, offset(rs1) - 使用rs1作为基址寄存器，rs2作为数据源
         case SD: case SW: case SH: case SB: {
             if (operands.size() >= 2) {
-                // 第一个操作数是要存储的寄存器（源）
-                if (operands[0]->isReg()) {
+                if (operands[0]->isReg() && operands[0]->isIntegerRegister()) {
                     usedRegs.push_back(operands[0]->getRegNum());
                 }
-                // 第二个操作数是内存地址，使用基址寄存器
                 if (operands[1]->isMem()) {
                     MemoryOperand* memOp = static_cast<MemoryOperand*>(operands[1].get());
-                    if (memOp->getBaseReg() && memOp->getBaseReg()->isReg()) {
+                    if (memOp->getBaseReg() && memOp->getBaseReg()->isReg() && 
+                        memOp->getBaseReg()->isIntegerRegister()) {
                         usedRegs.push_back(memOp->getBaseReg()->getRegNum());
                     }
-                    if (memOp->getOffset() && memOp->getOffset()->isReg()) {
+                    if (memOp->getOffset() && memOp->getOffset()->isReg() && 
+                        memOp->getOffset()->isIntegerRegister()) {
                         usedRegs.push_back(memOp->getOffset()->getRegNum());
                     }
                 }
@@ -341,70 +318,54 @@ std::vector<unsigned> Instruction::getUsedRegs() const {
         // 分支指令：BEQ rs1, rs2, label - 使用rs1和rs2进行比较
         case BEQ: case BNE: case BLT: case BGE: case BLTU: case BGEU: {
             if (operands.size() >= 2) {
-                if (operands[0]->isReg()) {
+                if (operands[0]->isReg() && operands[0]->isIntegerRegister()) {
                     usedRegs.push_back(operands[0]->getRegNum());
                 }
-                if (operands[1]->isReg()) {
+                if (operands[1]->isReg() && operands[1]->isIntegerRegister()) {
                     usedRegs.push_back(operands[1]->getRegNum());
                 }
             }
             break;
         }
         
-        // 跳转指令：JAL rd, label 或 JALR rd, rs1, offset
-        case JAL: {
-            // JAL只定义rd，不使用其他寄存器
-            break;
-        }
         case JALR: {
-            if (operands.size() >= 2 && operands[1]->isReg()) {
-                usedRegs.push_back(operands[1]->getRegNum()); // 基址寄存器
-            }
-            break;
-        }
-        
-        // 上位立即数指令：LUI rd, imm - 不使用其他寄存器
-        case LUI: case AUIPC: {
-            // 这些指令不使用源寄存器，只生成到目标寄存器
-            break;
-        }
-        
-        // 复制指令：MV rd, rs1（通常实现为ADDI rd, rs1, 0）
-        case MV: {
-            if (operands.size() >= 2 && operands[1]->isReg()) {
+            if (operands.size() >= 2 && operands[1]->isReg() && operands[1]->isIntegerRegister()) {
                 usedRegs.push_back(operands[1]->getRegNum());
             }
             break;
         }
         
-        // 函数调用指令 - 需要特殊处理
+        case MV: {
+            if (operands.size() >= 2 && operands[1]->isReg() && operands[1]->isIntegerRegister()) {
+                usedRegs.push_back(operands[1]->getRegNum());
+            }
+            break;
+        }
+        
         default: {
             if (isCallInstr()) {
-                // 函数调用使用参数寄存器a0-a7
-                // 这些在活跃性分析中已经处理，这里主要处理显式操作数
-                
-                // 如果调用指令有显式的寄存器操作数（比如间接调用）
+                // 函数调用的特殊处理
                 for (size_t i = 0; i < operands.size(); ++i) {
-                    if (operands[i]->isReg()) {
+                    if (operands[i]->isReg() && operands[i]->isIntegerRegister()) {
                         unsigned regNum = operands[i]->getRegNum();
-                        // 避免重复添加
                         if (std::find(usedRegs.begin(), usedRegs.end(), regNum) == usedRegs.end()) {
                             usedRegs.push_back(regNum);
                         }
                     }
                 }
             } else {
-                // 对于其他指令，采用通用策略：除第一个操作数外都是源操作数
+                // 通用策略：除第一个操作数外都是源操作数
                 for (size_t i = 1; i < operands.size(); ++i) {
-                    if (operands[i]->isReg()) {
+                    if (operands[i]->isReg() && operands[i]->isIntegerRegister()) {
                         usedRegs.push_back(operands[i]->getRegNum());
                     } else if (operands[i]->isMem()) {
-                        // 内存操作数中的寄存器也是被使用的
                         MemoryOperand* memOp = static_cast<MemoryOperand*>(operands[i].get());
-                        if (memOp->getBaseReg() && memOp->getBaseReg()->isReg()) {
+                        if (memOp->getBaseReg() && memOp->getBaseReg()->isReg() && 
+                            memOp->getBaseReg()->isIntegerRegister()) {
                             usedRegs.push_back(memOp->getBaseReg()->getRegNum());
                         }
-                        if (memOp->getOffset() && memOp->getOffset()->isReg()) {
+                        if (memOp->getOffset() && memOp->getOffset()->isReg() && 
+                            memOp->getOffset()->isIntegerRegister()) {
                             usedRegs.push_back(memOp->getOffset()->getRegNum());
                         }
                     }
@@ -421,28 +382,102 @@ std::vector<unsigned> Instruction::getUsedRegs() const {
     return usedRegs;
 }
 
-std::vector<unsigned> Instruction::getDefinedRegs() const {
-    std::vector<unsigned> definedRegs;
+// 获取使用的浮点寄存器
+std::vector<unsigned> Instruction::getUsedFloatRegs() const {
+    std::vector<unsigned> usedRegs;
+    if (operands.empty()) return usedRegs;
     
+    switch (opcode) {
+        // 浮点算术指令
+        case FADD_S: case FSUB_S: case FMUL_S: case FDIV_S:
+        case FADD_D: case FSUB_D: case FMUL_D: case FDIV_D: {
+            if (operands.size() >= 3) {
+                if (operands[1]->isReg() && operands[1]->isFloatRegister()) {
+                    usedRegs.push_back(operands[1]->getRegNum());
+                }
+                if (operands[2]->isReg() && operands[2]->isFloatRegister()) {
+                    usedRegs.push_back(operands[2]->getRegNum());
+                }
+            }
+            break;
+        }
+        
+        // 浮点加载指令
+        case FLD: case FLW: {
+            // 浮点加载使用整数基址寄存器，但不产生浮点寄存器使用
+            break;
+        }
+        
+        // 浮点存储指令：FSD frs2, offset(rs1) - 使用frs2作为数据源
+        case FSD: case FSW: {
+            if (operands.size() >= 1 && operands[0]->isReg() && operands[0]->isFloatRegister()) {
+                usedRegs.push_back(operands[0]->getRegNum());
+            }
+            break;
+        }
+        
+        // 浮点移动指令
+        case FMOV_S: case FMOV_D: {
+            if (operands.size() >= 2 && operands[1]->isReg() && operands[1]->isFloatRegister()) {
+                usedRegs.push_back(operands[1]->getRegNum());
+            }
+            break;
+        }
+        
+        // 浮点比较指令
+        case FEQ_S: case FLT_S: case FLE_S:
+        case FEQ_D: case FLT_D: case FLE_D: {
+            if (operands.size() >= 3) {
+                if (operands[1]->isReg() && operands[1]->isFloatRegister()) {
+                    usedRegs.push_back(operands[1]->getRegNum());
+                }
+                if (operands[2]->isReg() && operands[2]->isFloatRegister()) {
+                    usedRegs.push_back(operands[2]->getRegNum());
+                }
+            }
+            break;
+        }
+        
+        default: {
+            // 通用策略：检查所有操作数中的浮点寄存器
+            for (size_t i = 1; i < operands.size(); ++i) {
+                if (operands[i]->isReg() && operands[i]->isFloatRegister()) {
+                    usedRegs.push_back(operands[i]->getRegNum());
+                }
+            }
+            break;
+        }
+    }
+    
+    // 去除重复的寄存器
+    std::sort(usedRegs.begin(), usedRegs.end());
+    usedRegs.erase(std::unique(usedRegs.begin(), usedRegs.end()), usedRegs.end());
+    
+    return usedRegs;
+}
+
+// 获取定义的整数寄存器
+std::vector<unsigned> Instruction::getDefinedIntegerRegs() const {
+    std::vector<unsigned> definedRegs;
     if (operands.empty()) return definedRegs;
     
     switch (opcode) {
-        // 大多数指令：第一个操作数是目标寄存器
-        case ADD: case SUB: case MUL: case DIV: 
+        // 大多数整数指令：第一个操作数是目标寄存器
+        case ADD: case SUB: case MUL: case DIV:
         case AND: case OR: case XOR: case SLL: case SRL: case SRA:
-        case SLT: case SLTU: case ADDI: case SLTI: case SLTIU: 
+        case SLT: case SLTU: case ADDI: case SLTI: case SLTIU:
         case XORI: case ORI: case ANDI: case SLLI: case SRLI: case SRAI:
         case LD: case LW: case LH: case LB: case LWU: case LHU: case LBU:
         case LUI: case AUIPC: case MV: {
-            if (operands[0]->isReg()) {
+            if (operands[0]->isReg() && operands[0]->isIntegerRegister()) {
                 definedRegs.push_back(operands[0]->getRegNum());
             }
             break;
         }
         
         // 存储指令不定义寄存器
-        case SD: case SW: case SH: case SB: {
-            // 存储指令不定义寄存器
+        case SD: case SW: case SH: case SB:
+        case FSD: case FSW: {
             break;
         }
         
@@ -453,15 +488,24 @@ std::vector<unsigned> Instruction::getDefinedRegs() const {
         
         // 跳转指令定义返回地址寄存器
         case JAL: case JALR: {
-            if (operands[0]->isReg()) {
+            if (operands[0]->isReg() && operands[0]->isIntegerRegister()) {
+                definedRegs.push_back(operands[0]->getRegNum());
+            }
+            break;
+        }
+        
+        // 浮点比较指令定义整数寄存器
+        case FEQ_S: case FLT_S: case FLE_S:
+        case FEQ_D: case FLT_D: case FLE_D: {
+            if (operands[0]->isReg() && operands[0]->isIntegerRegister()) {
                 definedRegs.push_back(operands[0]->getRegNum());
             }
             break;
         }
         
         default: {
-            // 默认情况：如果第一个操作数是寄存器，则认为是目标寄存器
-            if (!operands.empty() && operands[0]->isReg()) {
+            // 默认情况：如果第一个操作数是整数寄存器，则认为是目标寄存器
+            if (!operands.empty() && operands[0]->isReg() && operands[0]->isIntegerRegister()) {
                 definedRegs.push_back(operands[0]->getRegNum());
             }
             break;
@@ -471,5 +515,80 @@ std::vector<unsigned> Instruction::getDefinedRegs() const {
     return definedRegs;
 }
 
+// 获取定义的浮点寄存器
+std::vector<unsigned> Instruction::getDefinedFloatRegs() const {
+    std::vector<unsigned> definedRegs;
+    if (operands.empty()) return definedRegs;
+    
+    switch (opcode) {
+        // 浮点算术指令：第一个操作数是目标寄存器
+        case FADD_S: case FSUB_S: case FMUL_S: case FDIV_S:
+        case FADD_D: case FSUB_D: case FMUL_D: case FDIV_D:
+        case FMOV_S: case FMOV_D: {
+            if (operands[0]->isReg() && operands[0]->isFloatRegister()) {
+                definedRegs.push_back(operands[0]->getRegNum());
+            }
+            break;
+        }
+        
+        // 浮点加载指令
+        case FLD: case FLW: {
+            if (operands[0]->isReg() && operands[0]->isFloatRegister()) {
+                definedRegs.push_back(operands[0]->getRegNum());
+            }
+            break;
+        }
+        
+        // 浮点存储指令不定义浮点寄存器
+        case FSD: case FSW: {
+            break;
+        }
+        
+        // 浮点比较指令不定义浮点寄存器（定义整数寄存器）
+        case FEQ_S: case FLT_S: case FLE_S:
+        case FEQ_D: case FLT_D: case FLE_D: {
+            break;
+        }
+        
+        default: {
+            // 默认情况：如果第一个操作数是浮点寄存器，则认为是目标寄存器
+            if (!operands.empty() && operands[0]->isReg() && operands[0]->isFloatRegister()) {
+                definedRegs.push_back(operands[0]->getRegNum());
+            }
+            break;
+        }
+    }
+    
+    return definedRegs;
+}
+
+// 保持向后兼容的函数
+std::vector<unsigned> Instruction::getUsedRegs() const {
+    auto intRegs = getUsedIntegerRegs();
+    auto floatRegs = getUsedFloatRegs();
+    
+    std::vector<unsigned> allRegs;
+    allRegs.insert(allRegs.end(), intRegs.begin(), intRegs.end());
+    allRegs.insert(allRegs.end(), floatRegs.begin(), floatRegs.end());
+    
+    std::sort(allRegs.begin(), allRegs.end());
+    allRegs.erase(std::unique(allRegs.begin(), allRegs.end()), allRegs.end());
+    
+    return allRegs;
+}
+
+std::vector<unsigned> Instruction::getDefinedRegs() const {
+    auto intRegs = getDefinedIntegerRegs();
+    auto floatRegs = getDefinedFloatRegs();
+    
+    std::vector<unsigned> allRegs;
+    allRegs.insert(allRegs.end(), intRegs.begin(), intRegs.end());
+    allRegs.insert(allRegs.end(), floatRegs.begin(), floatRegs.end());
+    
+    std::sort(allRegs.begin(), allRegs.end());
+    allRegs.erase(std::unique(allRegs.begin(), allRegs.end()), allRegs.end());
+    
+    return allRegs;
+}
 
 }  // namespace riscv64

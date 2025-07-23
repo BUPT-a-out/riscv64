@@ -39,6 +39,14 @@ class MachineOperand {
         throw std::runtime_error("Not a register operand");
     }
 
+    virtual bool isFloatRegister() const {
+        return false;
+    }
+
+    virtual bool isIntegerRegister() const {
+        return false;
+    }
+
     virtual std::int64_t getValue() const {
         throw std::runtime_error("Not a immediate operand");
     }
@@ -85,9 +93,9 @@ class RegisterOperand : public MachineOperand {
     void setRegNum(unsigned reg) { regNum = reg; }
     bool isVirtual() const { return is_virtual; }
     RegisterType getRegisterType() const { return regType; }
-    bool isFloatRegister() const { return regType == RegisterType::Float; }
 
-    // unsigned abiToRegNum() const;
+    bool isFloatRegister() const { return regType == RegisterType::Float; }
+    bool isIntegerRegister() const { return regType == RegisterType::Integer; }
 
     std::string toString(bool use_abi = true) const;
 
