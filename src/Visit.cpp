@@ -323,177 +323,99 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
             base_addr->toString());
     }
 
-    // 计算偏移量
-    // if (gep_inst->getNumIndices() > 3) {
-    //     throw std::runtime_error(
-    //         "GEP instruction must have <= 3 indices: " + inst->toString() +
-    //         ", got " + std::to_string(gep_inst->getNumIndices()));
-    // }
-
-    // 获取指针指向的类型
-    auto* pointed_type = gep_inst->getSourceElementType();
-
-    // 初始化偏移量为0
-    auto offset_reg = codeGen_->allocateReg();
-    auto li_zero_inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
-    li_zero_inst->addOperand(std::make_unique<RegisterOperand>(
-        offset_reg->getRegNum(), offset_reg->isVirtual()));
-    li_zero_inst->addOperand(std::make_unique<ImmediateOperand>(0));
-    parent_bb->addInstruction(std::move(li_zero_inst));
-
-    // 辅助函数：计算类型的字节大小
-    std::function<size_t(const midend::Type*)> calculateTypeSize =
-        [&](const midend::Type* type) -> size_t {
-        if (type->isPointerType()) {
-            return 8;  // 64位指针
-        } else if (type->isIntegerType()) {
-            return type->getBitWidth() / 8;
-        } else if (type->isArrayType()) {
-            auto* array_type = static_cast<const midend::ArrayType*>(type);
-            auto element_size = calculateTypeSize(array_type->getElementType());
-            return element_size * array_type->getNumElements();
-        } else {
-            return 4;  // 默认大小
-        }
-    };
-
-    // 第一个索引通常是0，用于"穿透"指针，我们可以跳过它
-    // 如果第一个索引不是0，我们需要计算指针本身的偏移
-    auto* current_type = pointed_type;
-
-    // 读取 strides
+    // 获取 strides 和索引
     auto strides = gep_inst->getStrides();
     if (strides.size() != gep_inst->getNumIndices()) {
         throw std::runtime_error("Strides size mismatch with indices count");
     }
 
+    // 初始化总偏移量为0
+    auto total_offset_reg = codeGen_->allocateReg();
+    auto li_zero_inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
+    li_zero_inst->addOperand(std::make_unique<RegisterOperand>(
+        total_offset_reg->getRegNum(), total_offset_reg->isVirtual()));
+    li_zero_inst->addOperand(std::make_unique<ImmediateOperand>(0));
+    parent_bb->addInstruction(std::move(li_zero_inst));
+
+    // 遍历所有索引，计算 index[i] * stride[i] 并累加
     for (unsigned i = 0; i < gep_inst->getNumIndices(); ++i) {
         auto* index_value = gep_inst->getIndex(i);
         auto index_operand = visit(index_value, parent_bb);
+        auto stride = strides[i];
 
-        // 对于第一个索引，如果不是0，需要计算指针偏移
-        if (i == 0) {
-            // 检查是否为常量0，如果是则跳过
-            if (auto* const_int =
-                    midend::dyn_cast<midend::ConstantInt>(index_value)) {
-                if (const_int->getSignedValue() == 0) {
-                    continue;  // 跳过第一个索引为0的情况
-                }
+        std::cout << "Processing index " << i
+                  << ": value = " << index_value->toString()
+                  << ", stride = " << stride << std::endl;
+
+        // 检查索引是否为常量0，如果是则跳过
+        if (auto* const_int = midend::dyn_cast<midend::ConstantInt>(index_value)) {
+            if (const_int->getSignedValue() == 0) {
+                continue;  // 跳过索引为0的情况，不会产生偏移
+            }
+        }
+
+        // 将索引转换为寄存器
+        auto index_reg = immToReg(std::move(index_operand), parent_bb);
+
+        // 计算 index * stride
+        std::unique_ptr<RegisterOperand> offset_reg;
+        
+        if (stride == 0) {
+            // stride为0，跳过
+            continue;
+        } else if (stride == 1) {
+            // stride为1，直接使用索引
+            offset_reg = std::move(index_reg);
+        } else if ((stride & (stride - 1)) == 0) {
+            // stride是2的幂，使用左移优化
+            int shift_amount = 0;
+            auto temp = static_cast<unsigned int>(stride);
+            while (temp > 1) {
+                temp >>= 1;
+                shift_amount++;
             }
 
-            // 如果第一个索引不是0，计算指针偏移
-            size_t type_size = calculateTypeSize(current_type);
-            auto stride = strides[i];
-
-            // 计算偏移：index * stride
-            auto index_reg = immToReg(std::move(index_operand), parent_bb);
-            auto size_reg = codeGen_->allocateReg();
-            auto li_size_inst =
+            offset_reg = codeGen_->allocateReg();
+            auto slli_inst =
+                std::make_unique<Instruction>(Opcode::SLLI, parent_bb);
+            slli_inst->addOperand(std::make_unique<RegisterOperand>(
+                offset_reg->getRegNum(), offset_reg->isVirtual()));
+            slli_inst->addOperand(std::move(index_reg));
+            slli_inst->addOperand(
+                std::make_unique<ImmediateOperand>(shift_amount));
+            parent_bb->addInstruction(std::move(slli_inst));
+        } else {
+            // 一般情况，使用乘法
+            auto stride_reg = codeGen_->allocateReg();
+            auto li_stride_inst =
                 std::make_unique<Instruction>(Opcode::LI, parent_bb);
-            li_size_inst->addOperand(std::make_unique<RegisterOperand>(
-                size_reg->getRegNum(), size_reg->isVirtual()));
-            li_size_inst->addOperand(
+            li_stride_inst->addOperand(std::make_unique<RegisterOperand>(
+                stride_reg->getRegNum(), stride_reg->isVirtual()));
+            li_stride_inst->addOperand(
                 std::make_unique<ImmediateOperand>(stride));
-            parent_bb->addInstruction(std::move(li_size_inst));
+            parent_bb->addInstruction(std::move(li_stride_inst));
 
-            auto mul_reg = codeGen_->allocateReg();
+            offset_reg = codeGen_->allocateReg();
             auto mul_inst =
                 std::make_unique<Instruction>(Opcode::MUL, parent_bb);
             mul_inst->addOperand(std::make_unique<RegisterOperand>(
-                mul_reg->getRegNum(), mul_reg->isVirtual()));
+                offset_reg->getRegNum(), offset_reg->isVirtual()));
             mul_inst->addOperand(std::move(index_reg));
-            mul_inst->addOperand(std::move(size_reg));
+            mul_inst->addOperand(std::move(stride_reg));
             parent_bb->addInstruction(std::move(mul_inst));
-
-            // 累加到总偏移量
-            auto new_offset_reg = codeGen_->allocateReg();
-            auto add_inst =
-                std::make_unique<Instruction>(Opcode::ADD, parent_bb);
-            add_inst->addOperand(std::make_unique<RegisterOperand>(
-                new_offset_reg->getRegNum(), new_offset_reg->isVirtual()));
-            add_inst->addOperand(std::make_unique<RegisterOperand>(
-                offset_reg->getRegNum(), offset_reg->isVirtual()));
-            add_inst->addOperand(std::move(mul_reg));
-            parent_bb->addInstruction(std::move(add_inst));
-
-            offset_reg = std::move(new_offset_reg);
-            continue;
         }
 
-        // 处理第二个及以后的索引
-        if (current_type->isArrayType()) {
-            const auto* array_type =
-                dynamic_cast<const midend::ArrayType*>(current_type);
+        // 累加到总偏移量：total_offset += index * stride
+        auto new_total_offset_reg = codeGen_->allocateReg();
+        auto add_inst = std::make_unique<Instruction>(Opcode::ADD, parent_bb);
+        add_inst->addOperand(std::make_unique<RegisterOperand>(
+            new_total_offset_reg->getRegNum(), new_total_offset_reg->isVirtual()));
+        add_inst->addOperand(std::make_unique<RegisterOperand>(
+            total_offset_reg->getRegNum(), total_offset_reg->isVirtual()));
+        add_inst->addOperand(std::move(offset_reg));
+        parent_bb->addInstruction(std::move(add_inst));
 
-            // 关键修复：计算当前维度的步长
-            // 步长 = 内层所有维度的元素总大小
-            auto stride = strides[i];
-
-            // 计算偏移：index * stride
-            auto index_reg = immToReg(std::move(index_operand), parent_bb);
-
-            std::unique_ptr<RegisterOperand> element_offset_reg;
-            if (stride == 1) {
-                // 如果步长是1，直接使用索引
-                element_offset_reg = std::move(index_reg);
-            } else if ((stride & (stride - 1)) == 0) {
-                // 如果步长是2的幂，使用左移
-                int shift_amount = 0;
-                auto temp = static_cast<unsigned int>(stride);
-                while (temp > 1) {
-                    temp >>= 1;
-                    shift_amount++;
-                }
-
-                element_offset_reg = codeGen_->allocateReg();
-                auto slli_inst =
-                    std::make_unique<Instruction>(Opcode::SLLI, parent_bb);
-                slli_inst->addOperand(std::make_unique<RegisterOperand>(
-                    element_offset_reg->getRegNum(),
-                    element_offset_reg->isVirtual()));
-                slli_inst->addOperand(std::move(index_reg));
-                slli_inst->addOperand(
-                    std::make_unique<ImmediateOperand>(shift_amount));
-                parent_bb->addInstruction(std::move(slli_inst));
-            } else {
-                // 一般情况，使用乘法
-                auto size_reg = codeGen_->allocateReg();
-                auto li_size_inst =
-                    std::make_unique<Instruction>(Opcode::LI, parent_bb);
-                li_size_inst->addOperand(std::make_unique<RegisterOperand>(
-                    size_reg->getRegNum(), size_reg->isVirtual()));
-                li_size_inst->addOperand(
-                    std::make_unique<ImmediateOperand>(stride));
-                parent_bb->addInstruction(std::move(li_size_inst));
-
-                element_offset_reg = codeGen_->allocateReg();
-                auto mul_inst =
-                    std::make_unique<Instruction>(Opcode::MUL, parent_bb);
-                mul_inst->addOperand(std::make_unique<RegisterOperand>(
-                    element_offset_reg->getRegNum(),
-                    element_offset_reg->isVirtual()));
-                mul_inst->addOperand(std::move(index_reg));
-                mul_inst->addOperand(std::move(size_reg));
-                parent_bb->addInstruction(std::move(mul_inst));
-            }
-
-            // 累加到总偏移量
-            auto new_offset_reg = codeGen_->allocateReg();
-            auto add_inst =
-                std::make_unique<Instruction>(Opcode::ADD, parent_bb);
-            add_inst->addOperand(std::make_unique<RegisterOperand>(
-                new_offset_reg->getRegNum(), new_offset_reg->isVirtual()));
-            add_inst->addOperand(std::make_unique<RegisterOperand>(
-                offset_reg->getRegNum(), offset_reg->isVirtual()));
-            add_inst->addOperand(std::move(element_offset_reg));
-            parent_bb->addInstruction(std::move(add_inst));
-
-            offset_reg = std::move(new_offset_reg);
-            current_type = array_type->getElementType();
-        } else {
-            throw std::runtime_error("Unsupported type for GEP indexing: " +
-                                     current_type->toString());
-        }
+        total_offset_reg = std::move(new_total_offset_reg);
     }
 
     // 计算最终地址：基地址 + 总偏移量
@@ -504,7 +426,7 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
     final_add_inst->addOperand(std::make_unique<RegisterOperand>(
         base_addr_reg->getRegNum(), base_addr_reg->isVirtual()));
     final_add_inst->addOperand(std::make_unique<RegisterOperand>(
-        offset_reg->getRegNum(), offset_reg->isVirtual()));
+        total_offset_reg->getRegNum(), total_offset_reg->isVirtual()));
     parent_bb->addInstruction(std::move(final_add_inst));
 
     // 建立GEP指令结果到寄存器的映射
