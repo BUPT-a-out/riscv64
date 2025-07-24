@@ -25,7 +25,7 @@ class Visitor {
     // 访问方法声明
     Module visit(const midend::Module* module);
     void visit(const midend::Function* func, Module* parent_module);
-    void visit(const midend::BasicBlock* bb, Function* parent_func);
+    BasicBlock* visit(const midend::BasicBlock* bb, Function* parent_func);
     std::unique_ptr<MachineOperand> visit(const midend::Instruction* inst,
                                           BasicBlock* parent_bb);
     std::unique_ptr<MachineOperand> visit(const midend::Value* value,

@@ -1,10 +1,10 @@
 #pragma once
 
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <utility>
-#include <functional>
 #include <vector>
 
 #include "BasicBlock.h"
@@ -25,7 +25,7 @@ class Function {
     }
 
     // 提供访问基本块的方法
-    BasicBlock* getBasicBlock(size_t index) const {
+    BasicBlock* getBasicBlockByIndex(size_t index) const {
         return basic_blocks[index].get();
     }
 
@@ -74,13 +74,24 @@ class Function {
 
     // 管理函数的栈帧信息
 
-    BasicBlock* getBasicBlockByLabel(const std::string& label) const {
-        for (const auto& block : basic_blocks) {
-            if (block->getLabel() == label) {
-                return block.get();
-            }
+    // BasicBlock* getBasicBlockByLabel(const std::string& label) const {
+    //     for (const auto& block : basic_blocks) {
+    //         if (block->getLabel() == label) {
+    //             return block.get();
+    //         }
+    //     }
+    //     return nullptr;  // 如果没有找到，返回 nullptr
+    // }
+    BasicBlock* getBasicBlock(const midend::BasicBlock* bb) const {
+        auto it = bbMap_.find(bb);
+        if (it != bbMap_.end()) {
+            return it->second;
         }
-        return nullptr;  // 如果没有找到，返回 nullptr
+        throw std::runtime_error("BasicBlock " + bb->toString() +
+                                 " not found in function: " + getName());
+    }
+    void mapBasicBlock(const midend::BasicBlock* bb, BasicBlock* riscvBB) {
+        bbMap_[bb] = riscvBB;
     }
     StackFrameManager* getStackFrameManager() const {
         return stackFrameManager_.get();
@@ -92,6 +103,7 @@ class Function {
     std::string name;
     std::vector<std::unique_ptr<BasicBlock>> basic_blocks;
     std::unique_ptr<StackFrameManager> stackFrameManager_;
+    std::unordered_map<const midend::BasicBlock*, BasicBlock*> bbMap_;
 };
 
 }  // namespace riscv64
