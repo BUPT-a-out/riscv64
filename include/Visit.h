@@ -57,7 +57,7 @@ class Visitor {
         std::list<std::unique_ptr<Instruction>>::const_iterator insert_pos =
             {});
     std::unique_ptr<MachineOperand> funcArgToReg(
-        const midend::Argument* argument);
+        const midend::Argument* argument, BasicBlock* parent_bb = nullptr);
 
     void assignVirtRegsToFuncArgs(midend::Function* func);
 

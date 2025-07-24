@@ -348,7 +348,8 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
                   << ", stride = " << stride << std::endl;
 
         // 检查索引是否为常量0，如果是则跳过
-        if (auto* const_int = midend::dyn_cast<midend::ConstantInt>(index_value)) {
+        if (auto* const_int =
+                midend::dyn_cast<midend::ConstantInt>(index_value)) {
             if (const_int->getSignedValue() == 0) {
                 continue;  // 跳过索引为0的情况，不会产生偏移
             }
@@ -359,7 +360,7 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
 
         // 计算 index * stride
         std::unique_ptr<RegisterOperand> offset_reg;
-        
+
         if (stride == 0) {
             // stride为0，跳过
             continue;
@@ -409,7 +410,8 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
         auto new_total_offset_reg = codeGen_->allocateReg();
         auto add_inst = std::make_unique<Instruction>(Opcode::ADD, parent_bb);
         add_inst->addOperand(std::make_unique<RegisterOperand>(
-            new_total_offset_reg->getRegNum(), new_total_offset_reg->isVirtual()));
+            new_total_offset_reg->getRegNum(),
+            new_total_offset_reg->isVirtual()));
         add_inst->addOperand(std::make_unique<RegisterOperand>(
             total_offset_reg->getRegNum(), total_offset_reg->isVirtual()));
         add_inst->addOperand(std::move(offset_reg));
@@ -455,8 +457,11 @@ std::unique_ptr<MachineOperand> Visitor::visitCallInst(
                                  inst->toString());
     }
 
-    // 存入寄存器
-    for (size_t arg_i = 0; arg_i < called_func->getNumArgs(); ++arg_i) {
+    // 处理参数传递
+    size_t num_args = called_func->getNumArgs();
+
+    // 前8个参数通过寄存器传递
+    for (size_t arg_i = 0; arg_i < std::min(num_args, size_t(8)); ++arg_i) {
         auto* dest_arg = called_func->getArg(arg_i);
         if (dest_arg == nullptr) {
             throw std::runtime_error(
@@ -472,7 +477,7 @@ std::unique_ptr<MachineOperand> Visitor::visitCallInst(
         }
 
         // 将参数转换为寄存器（真实的寄存器）
-        auto dest_arg_operand = funcArgToReg(dest_arg);
+        auto dest_arg_operand = funcArgToReg(dest_arg, parent_bb);
 
         // Cast to RegisterOperand since function arguments should be in
         // registers
@@ -488,6 +493,35 @@ std::unique_ptr<MachineOperand> Visitor::visitCallInst(
         // 将参数存储到寄存器中
         storeOperandToReg(visit(source_operand, parent_bb), std::move(dest_reg),
                           parent_bb);
+    }
+
+    // 超过8个的参数通过栈传递 - 调用者负责将参数存储到栈上
+    if (num_args > 8) {
+        for (size_t arg_i = 8; arg_i < num_args; ++arg_i) {
+            auto* source_operand = call_inst->getArgOperand(arg_i);
+            if (source_operand == nullptr) {
+                throw std::runtime_error(
+                    "Source operand for argument " + std::to_string(arg_i) +
+                    " is null in call instruction: " + inst->toString());
+            }
+
+            // 获取参数值并转换为寄存器（如果是立即数）
+            auto source_value = visit(source_operand, parent_bb);
+            auto source_reg = immToReg(std::move(source_value), parent_bb);
+
+            // 计算栈上的偏移量：第9个参数(index=8)放在0(sp)，第10个参数放在4(sp)，以此类推
+            int stack_offset =
+                static_cast<int>((arg_i - 8) * 4);  // 假设每个参数4字节
+
+            // 生成存储指令：将参数存储到调用者的栈帧顶部
+            auto sw_inst = std::make_unique<Instruction>(Opcode::SW, parent_bb);
+            sw_inst->addOperand(std::move(source_reg));  // source register
+            sw_inst->addOperand(std::make_unique<MemoryOperand>(
+                std::make_unique<RegisterOperand>("sp"),
+                std::make_unique<ImmediateOperand>(
+                    stack_offset)));  // 存储到sp+offset
+            parent_bb->addInstruction(std::move(sw_inst));
+        }
     }
 
     // 生成调用指令
@@ -1842,16 +1876,41 @@ std::optional<RegisterOperand*> Visitor::findRegForValue(
 }
 
 std::unique_ptr<MachineOperand> Visitor::funcArgToReg(
-    const midend::Argument* argument) {
+    const midend::Argument* argument, BasicBlock* parent_bb) {
     // 获取函数参数对应的物理寄存器或者栈帧
     if (argument->getArgNo() < 8) {
         // 如果参数编号小于的寄存器数量，直接返回对应的寄存器
         return std::make_unique<RegisterOperand>(
             "a" + std::to_string(argument->getArgNo()));
     }
-    // 否则，从栈帧中取出来
-    // TODO(rikka): 处理栈帧中的参数
-    throw std::runtime_error("Stack frame arguments not implemented yet");
+
+    // 对于超过8个的参数，需要从栈上读取
+    // 被调用者需要考虑自己的函数序言对sp的修改
+    if (parent_bb == nullptr) {
+        throw std::runtime_error(
+            "Cannot generate load instruction for stack argument without "
+            "BasicBlock context");
+    }
+
+    // 计算正确的偏移量：需要越过当前函数的栈帧
+    // 被调用者的栈帧大小通常在后期确定，这里使用相对于帧指针的访问
+    // 栈参数位置：调用者在call指令前将参数放在自己的栈顶
+    // 被调用者需要从自己的栈帧之上读取这些参数
+
+    // 使用帧指针访问，避免依赖具体的栈帧大小
+    // 第9个参数(arg_no=8)位于帧指针+0处，第10个参数放在4(sp)，以此类推
+    int arg_offset = (argument->getArgNo() - 8) * 4;
+
+    auto lw_inst = std::make_unique<Instruction>(Opcode::LW, parent_bb);
+    auto arg_reg = codeGen_->allocateReg();
+    lw_inst->addOperand(std::make_unique<RegisterOperand>(
+        arg_reg->getRegNum(), arg_reg->isVirtual()));  // rd
+    lw_inst->addOperand(std::make_unique<MemoryOperand>(
+        std::make_unique<RegisterOperand>("s0"),  // 使用帧指针而不是sp
+        std::make_unique<ImmediateOperand>(arg_offset)));  // 相对于s0的偏移
+    parent_bb->addInstruction(std::move(lw_inst));
+    return std::make_unique<RegisterOperand>(arg_reg->getRegNum(),
+                                             arg_reg->isVirtual());
 }
 
 std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
@@ -1930,7 +1989,7 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         auto new_reg = codeGen_->allocateReg();
         codeGen_->mapValueToReg(value, new_reg->getRegNum(),
                                 new_reg->isVirtual());
-        auto source_reg = funcArgToReg(argument);
+        auto source_reg = funcArgToReg(argument, parent_bb);
         storeOperandToReg(std::move(source_reg),
                           std::make_unique<RegisterOperand>(
                               new_reg->getRegNum(), new_reg->isVirtual()),
