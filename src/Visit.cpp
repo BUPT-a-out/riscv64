@@ -109,6 +109,25 @@ void Visitor::createCFG(Function* func) {
                 case Opcode::BGEZ: {
                     // 条件跳转，取第 1 个操作数作为条件，第 2
                     // 个操作数作为目标基本块
+                    if (inst->getOperand(0)->isImm()) {
+                        auto* immCondition = dynamic_cast<ImmediateOperand*>(
+                            inst->getOperand(0));
+                        if (immCondition->getValue() != 0) {
+                            // 如果条件是立即数且不为0，直接跳转到目标基本块
+                            auto* target = dynamic_cast<LabelOperand*>(
+                                inst->getOperand(1));
+                            if (target == nullptr) {
+                                throw std::runtime_error(
+                                    "Invalid target for unconditional jump");
+                            }
+                            successor =
+                                getBBForLabel(target->getLabelName(), func);
+                            bb->addSuccessor(successor);
+                            successor->addPredecessor(bb.get());
+                            return;
+                        }
+                    }
+
                     auto* condition =
                         dynamic_cast<RegisterOperand*>(inst->getOperand(0));
                     auto* target =
