@@ -40,11 +40,16 @@ void Visitor::visit(const midend::Function* func, Module* parent_module) {
     parent_module->addFunction(std::move(riscv_func));
 
     for (const auto& bb : *func) {
-        codeGen_->mapBBToLabel(bb, bb->getName());
+        // codeGen_->mapBBToLabel(bb, bb->getName());
+        auto new_riscv_bb = std::make_unique<BasicBlock>(func_ptr, bb->getName());
+        auto* bb_ptr = new_riscv_bb.get();
+        func_ptr->addBasicBlock(std::move(new_riscv_bb));
+        func_ptr->mapBasicBlock(bb, bb_ptr);
     }
 
     for (const auto& bb : *func) {
         visit(bb, func_ptr);
+        // func_ptr->mapBasicBlock(bb, new_riscv_bb);
     }
 
     // 此时 func_ptr 已经包含了所有基本块，开始维护 CFG
@@ -190,15 +195,16 @@ void Visitor::createCFG(Function* func) {
 }
 
 // 访问基本块
-void Visitor::visit(const midend::BasicBlock* bb, Function* parent_func) {
+BasicBlock* Visitor::visit(const midend::BasicBlock* bb, Function* parent_func) {
     // 其他操作...
-    auto riscv_bb = std::make_unique<BasicBlock>(parent_func, bb->getName());
-    auto* bb_ptr = riscv_bb.get();
-    parent_func->addBasicBlock(std::move(riscv_bb));
+    auto* bb_ptr = parent_func->getBasicBlock(bb);
+    // parent_func->addBasicBlock(std::move(riscv_bb));
+    // parent_func->mapBasicBlock(bb, bb_ptr);
 
     for (const auto& inst : *bb) {
         visit(inst, bb_ptr);
     }
+    return bb_ptr;  // 返回新创建的基本块指针
 }
 
 // 访问指令
@@ -581,10 +587,8 @@ std::unique_ptr<MachineOperand> Visitor::visitPhiInst(
 
     auto* parent_func = parent_bb->getParent();
 
-    auto* incoming_block_1 = parent_func->getBasicBlockByLabel(
-        phi_inst->getIncomingBlock(0)->getName());
-    auto* incoming_block_2 = parent_func->getBasicBlockByLabel(
-        phi_inst->getIncomingBlock(1)->getName());
+    auto* incoming_block_1 = parent_func->getBasicBlock(phi_inst->getIncomingBlock(0));
+    auto* incoming_block_2 = parent_func->getBasicBlock(phi_inst->getIncomingBlock(1));
 
     if (incoming_block_1 == nullptr || incoming_block_2 == nullptr) {
         throw std::runtime_error(
