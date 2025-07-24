@@ -29,6 +29,7 @@ Module RISCV64Target::instructionSelectionPass(const midend::Module& module) {
     std::cout << "\n=== Phase 1: Instruction Selection ===" << std::endl;
     CodeGenerator codegen;
     auto riscv_module = codegen.visitor_->visit(&module);
+    std::cout << module.toString() << std::endl;
     return riscv_module;
 }
 
@@ -59,6 +60,8 @@ Module& RISCV64Target::initialFrameIndexPass(riscv64::Module& module) {
             }
         }
     }
+
+    std::cout << module.toString() << std::endl;
     
     return module;
 }
@@ -70,6 +73,8 @@ Module& RISCV64Target::registerAllocationPass(riscv64::Module& module) {
         RegAllocChaitin allocator(function.get());
         allocator.allocateRegisters();
     }
+
+    std::cout << module.toString() << std::endl;
 
     return module;
 }
