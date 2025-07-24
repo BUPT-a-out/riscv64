@@ -39,7 +39,7 @@ void RegAllocChaitin::allocateRegisters() {
     removeRebundantCopies();
 
     if (!assigningFloat) {
-        SpillCodeOptimizer::optimizeSpillCode(function);
+        // SpillCodeOptimizer::optimizeSpillCode(function);
     }
 
     printAllocationResult();
