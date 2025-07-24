@@ -1872,9 +1872,9 @@ void Visitor::visitRetInstruction(const midend::Instruction* ret_inst,
         throw std::runtime_error("Unsupported return instruction: " +
                                  ret_inst->toString());
     }
-    if (ret_inst->getNumOperands() != 1) {
+    if (ret_inst->getNumOperands() > 1) {
         throw std::runtime_error(
-            "Return instruction must have one operand, got " +
+            "Return instruction must no more than one operand, got " +
             std::to_string(ret_inst->getNumOperands()));
     }
 
