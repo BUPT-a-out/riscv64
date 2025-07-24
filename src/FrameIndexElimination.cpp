@@ -93,8 +93,8 @@ void FrameIndexElimination::assignFinalOffsets() {
     // 计算各区域偏移
     layout.returnAddressOffset = layout.totalFrameSize - 8;  // ra
     layout.framePointerOffset = layout.totalFrameSize - 16;  // s0
-    layout.localVariableAreaOffset = 0;      // 从s0开始向下
-    layout.spillAreaOffset = -localVarSize;  // 在局部变量区下方
+    layout.localVariableAreaOffset = 0;                      // 从s0开始向下
+    layout.spillAreaOffset = -localVarSize;                  // 在局部变量区下方
 
     // 为每个Frame Index分配具体偏移 (相对于s0)
     int currentLocalOffset = 0;
@@ -118,25 +118,7 @@ void FrameIndexElimination::assignFinalOffsets() {
 
 int FrameIndexElimination::calculateSavedRegisterSize() {
     // 分析函数中使用的callee-saved寄存器
-    std::set<int> usedSavedRegs;
-    usedSavedRegs.insert(1);  // ra (总是需要保存)
-    usedSavedRegs.insert(8);  // s0/fp (总是需要保存)
-
-    // 扫描所有指令，查找使用的s寄存器
-    for (auto& bb : *function) {
-        for (auto& inst : *bb) {
-            for (const auto& operand : inst->getOperands()) {
-                if (auto* regOp =
-                        dynamic_cast<RegisterOperand*>(operand.get())) {
-                    int regNum = regOp->getRegNum();
-                    // s1-s11 对应寄存器号 9-19
-                    if (regNum >= 9 && regNum <= 19) {
-                        usedSavedRegs.insert(regNum);
-                    }
-                }
-            }
-        }
-    }
+    auto usedSavedRegs = collectSavedRegisters();
 
     return usedSavedRegs.size() * 8;  // 每个寄存器8字节
 }
@@ -283,6 +265,7 @@ void FrameIndexElimination::generateFinalPrologueEpilogue() {
     }
 }
 
+// savedreg 只有整数寄存器.
 std::vector<int> FrameIndexElimination::collectSavedRegisters() {
     std::set<int> usedSavedRegs;
     usedSavedRegs.insert(1);  // ra
@@ -295,9 +278,11 @@ std::vector<int> FrameIndexElimination::collectSavedRegisters() {
                 if (auto* regOp =
                         dynamic_cast<RegisterOperand*>(operand.get())) {
                     int regNum = regOp->getRegNum();
-                    // s1-s11 对应寄存器号 9-19
-                    if (regNum >= 9 && regNum <= 19) {
-                        usedSavedRegs.insert(regNum);
+                    // s1-s11 对应寄存器号 9, 18-27
+                    if (regOp->isIntegerRegister()) {
+                        if (regNum == 9 || (regNum >= 18 && regNum <= 27)) {
+                            usedSavedRegs.insert(regNum);
+                        }
                     }
                 }
             }
