@@ -4,8 +4,6 @@
 #include <iostream>
 #include <set>
 
-#include "Instructions/All.h"
-
 namespace riscv64 {
 
 void FrameIndexElimination::run() {
@@ -24,49 +22,19 @@ void FrameIndexElimination::computeFinalFrameLayout() {
     std::cout << "Computing final frame layout for function: "
               << function->getName() << std::endl;
 
-    // 收集所有栈对象（alloca + spill slots）
-    std::vector<StackObject*> allStackObjects;
-    std::set<int> allFrameIndices;
-
-    // 从指令中收集所有使用的Frame Index
-    for (auto& bb : *function) {
-        for (auto& inst : *bb) {
-            if (inst->getOpcode() == Opcode::FRAMEADDR) {
-                const auto& operands = inst->getOperands();
-                if (operands.size() >= 2) {
-                    if (auto* fi = dynamic_cast<FrameIndexOperand*>(
-                            operands[1].get())) {
-                        allFrameIndices.insert(fi->getIndex());
-                    }
-                }
-            }
-        }
-    }
-
-    // 获取对应的栈对象
-    int totalLocalVarSize = 0;
-    int totalSpillSize = 0;
-
-    for (int fi : allFrameIndices) {
-        auto* obj = stackManager->getStackObjectByIdentifier(fi);
-        if (obj) {
-            allStackObjects.push_back(obj);
-            if (obj->type == StackObjectType::AllocatedStackSlot) {
-                totalLocalVarSize += alignTo(obj->size, obj->alignment);
-            } else if (obj->type == StackObjectType::SpilledRegister) {
-                totalSpillSize += alignTo(obj->size, obj->alignment);
-            }
-            std::cout << "Found FI(" << fi << ") type=" << (int)obj->type
-                      << ", size=" << obj->size << std::endl;
-        }
-    }
-
     assignFinalOffsets();
-
-    std::cout << "Final layout - Local vars: " << totalLocalVarSize
-              << " bytes, Spills: " << totalSpillSize << " bytes" << std::endl;
 }
 
+// TODO: order right.
+
+// 目前的布局: (未加入栈上参数)
+// 高地址端
+
+// 保留寄存器 ra s0 (s1-s11)
+// alloca对象
+// spill寄存器
+
+// 低地址端
 void FrameIndexElimination::assignFinalOffsets() {
     // 计算保存寄存器需要的空间
     int savedRegSize = calculateSavedRegisterSize();
@@ -75,6 +43,7 @@ void FrameIndexElimination::assignFinalOffsets() {
     int localVarSize = 0;
     int spillSize = 0;
 
+    // TODO: count better, extract method
     for (const auto& obj : stackManager->getAllStackObjects()) {
         if (obj->type == StackObjectType::AllocatedStackSlot) {
             localVarSize += alignTo(obj->size, obj->alignment);
@@ -84,6 +53,7 @@ void FrameIndexElimination::assignFinalOffsets() {
     }
 
     // 计算调用参数所需的栈空间
+    // 这个计算很令人迷惑.
     int callArgSize = calculateMaxCallArgSize();
 
     // 计算总栈帧大小：基础保存寄存器 + 局部变量 + 溢出寄存器 + 调用参数
@@ -91,24 +61,35 @@ void FrameIndexElimination::assignFinalOffsets() {
     layout.totalFrameSize = alignTo(totalSize, 16);  // 16字节对齐
 
     // 计算各区域偏移
+
+    // 我们会把fp即s0指向栈帧的高地址端
+    // 我们最后将fp作为基址
+
+    // 这两个offset是相对sp的, 但是实际上在代码里完全没用到
     layout.returnAddressOffset = layout.totalFrameSize - 8;  // ra
     layout.framePointerOffset = layout.totalFrameSize - 16;  // s0
-    layout.localVariableAreaOffset = 0;                      // 从s0开始向下
-    layout.spillAreaOffset = -localVarSize;                  // 在局部变量区下方
+
+    // 其实这两个变量也完全没用到
+    // layout.localVariableAreaOffset = 0;
+    // layout.spillAreaOffset = -localVarSize;
 
     // 为每个Frame Index分配具体偏移 (相对于s0)
-    int currentLocalOffset = 0;
-    int currentSpillOffset = layout.spillAreaOffset;
+    int currentLocalOffset = -savedRegSize;
+    int currentSpillOffset = currentLocalOffset - localVarSize;
 
+    // TODO: 写个方法分别获取不同类型对象
     for (const auto& obj : stackManager->getAllStackObjects()) {
+        // 按这种初始化, 先做减法.
         if (obj->type == StackObjectType::AllocatedStackSlot) {
             currentLocalOffset -= alignTo(obj->size, obj->alignment);
             layout.frameIndexToOffset[obj->identifier] = currentLocalOffset;
+
             std::cout << "FI(" << obj->identifier << ") [alloca] -> s0"
                       << currentLocalOffset << std::endl;
         } else if (obj->type == StackObjectType::SpilledRegister) {
             currentSpillOffset -= alignTo(obj->size, obj->alignment);
             layout.frameIndexToOffset[obj->identifier] = currentSpillOffset;
+
             std::cout << "FI(" << obj->identifier << ") [spill reg "
                       << obj->regNum << "] -> s0" << currentSpillOffset
                       << std::endl;
@@ -116,6 +97,7 @@ void FrameIndexElimination::assignFinalOffsets() {
     }
 }
 
+// TODO: 合并这个莫名其妙的函数
 int FrameIndexElimination::calculateSavedRegisterSize() {
     // 分析函数中使用的callee-saved寄存器
     auto usedSavedRegs = collectSavedRegisters();
@@ -184,10 +166,8 @@ void FrameIndexElimination::generateFinalPrologueEpilogue() {
     // 收集需要保存的寄存器
     std::vector<int> savedRegs = collectSavedRegisters();
 
-    // 删除现有的栈管理指令
-    removeExistingPrologueEpilogue();
-
     // 生成序言 (插入到函数开头)
+    // TODO(rikka): use getEntryBlock
     BasicBlock* entryBlock = function->getBasicBlock(0);
     if (entryBlock) {
         std::vector<std::unique_ptr<Instruction>> prologueInsts;
@@ -232,29 +212,29 @@ void FrameIndexElimination::generateFinalPrologueEpilogue() {
 
     // 生成尾声 (插入到所有ret指令前)
     for (auto& bb : *function) {
-        // TODO: 找基本块最后一条更有效率
+        // TODO(rikka): 找基本块最后一条更有效率
         for (auto it = bb->begin(); it != bb->end(); ++it) {
             if ((*it)->getOpcode() == Opcode::RET) {
                 // 恢复所有保存的寄存器
-                int offset = layout.totalFrameSize - 8;
+                int offset = layout.totalFrameSize;
                 for (int regNum : savedRegs) {
+                    offset -= 8;
                     auto restoreReg = std::make_unique<Instruction>(Opcode::LD);
                     restoreReg->addOperand(
                         std::make_unique<RegisterOperand>(regNum, false));
                     restoreReg->addOperand(std::make_unique<MemoryOperand>(
-                        std::make_unique<RegisterOperand>(2, false),
+                        std::make_unique<RegisterOperand>(2, false), // sp
                         std::make_unique<ImmediateOperand>(offset)));
                     it = bb->insert(it, std::move(restoreReg));
                     ++it;
-                    offset -= 8;
                 }
 
                 // 恢复栈指针: addi sp, sp, frameSize
                 auto restoreSp = std::make_unique<Instruction>(Opcode::ADDI);
                 restoreSp->addOperand(
-                    std::make_unique<RegisterOperand>(2, false));
+                    std::make_unique<RegisterOperand>(2, false)); // sp
                 restoreSp->addOperand(
-                    std::make_unique<RegisterOperand>(2, false));
+                    std::make_unique<RegisterOperand>(2, false)); // sp
                 restoreSp->addOperand(
                     std::make_unique<ImmediateOperand>(layout.totalFrameSize));
                 it = bb->insert(it, std::move(restoreSp));
@@ -291,64 +271,6 @@ std::vector<int> FrameIndexElimination::collectSavedRegisters() {
     }
 
     return std::vector<int>(usedSavedRegs.begin(), usedSavedRegs.end());
-}
-
-// TODO: no this fucking shit
-void FrameIndexElimination::removeExistingPrologueEpilogue() {
-    // 删除现有的栈管理指令，避免重复
-    for (auto& bb : *function) {
-        for (auto it = bb->begin(); it != bb->end();) {
-            bool shouldRemove = false;
-
-            // 删除旧的栈调整指令
-            if ((*it)->getOpcode() == Opcode::ADDI) {
-                const auto& operands = (*it)->getOperands();
-                if (operands.size() >= 3) {
-                    auto* dest =
-                        dynamic_cast<RegisterOperand*>(operands[0].get());
-                    auto* src =
-                        dynamic_cast<RegisterOperand*>(operands[1].get());
-                    if (dest && src && dest->getRegNum() == 2 &&
-                        src->getRegNum() == 2) {
-                        // 这是栈指针调整指令
-                        shouldRemove = true;
-                    }
-                }
-            }
-
-            // 删除旧的寄存器保存/恢复指令
-            if ((*it)->getOpcode() == Opcode::SD ||
-                (*it)->getOpcode() == Opcode::LD) {
-                const auto& operands = (*it)->getOperands();
-                if (operands.size() >= 2) {
-                    if (auto* memOp =
-                            dynamic_cast<MemoryOperand*>(operands[1].get())) {
-                        if (auto* baseReg = dynamic_cast<RegisterOperand*>(
-                                memOp->getBaseReg())) {
-                            if (baseReg->getRegNum() ==
-                                2) {  // 基于sp的内存访问
-                                auto* regOp = dynamic_cast<RegisterOperand*>(
-                                    operands[0].get());
-                                if (regOp && (regOp->getRegNum() == 1 ||
-                                              regOp->getRegNum() == 8 ||
-                                              (regOp->getRegNum() >= 9 &&
-                                               regOp->getRegNum() <= 19))) {
-                                    // 这是保存/恢复寄存器的指令
-                                    shouldRemove = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (shouldRemove) {
-                it = bb->erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
 }
 
 void FrameIndexElimination::eliminateFrameIndices() {
@@ -389,6 +311,7 @@ void FrameIndexElimination::eliminateFrameIndexInstruction(
                                  " not found in final layout");
     }
 
+    // this offset is offset from sp.
     int offset = offsetIt->second;
 
     std::cout << "Eliminating frameaddr " << destReg->toString() << ", FI("

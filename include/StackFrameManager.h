@@ -38,7 +38,7 @@ struct StackObject {
           identifier(id) {}
 };
 
-// 栈帧管理器
+// 栈帧管理器: 这个类只管理alloca的变量和spill的变量
 class StackFrameManager {
    private:
     Function* function;

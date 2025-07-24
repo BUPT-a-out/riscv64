@@ -481,8 +481,11 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
     }
 
     // 第二阶段：为溢出寄存器创建抽象Frame Index
+
+    // TODO: is it still in use?
     stackManager.allocateSpillSlot(reg);
 
+    // TODO: extract method
     // 创建抽象的栈对象用于溢出
     auto* sfm = function->getStackFrameManager();
     int fi_id = sfm->getNewStackObjectIdentifier();

@@ -68,9 +68,6 @@ class FrameIndexElimination {
 
     // 收集需要保存的寄存器列表
     std::vector<int> collectSavedRegisters();
-
-    // 移除现有的序言/尾声指令
-    void removeExistingPrologueEpilogue();
 };
 
 }  // namespace riscv64
