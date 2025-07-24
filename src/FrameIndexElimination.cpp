@@ -232,6 +232,7 @@ void FrameIndexElimination::generateFinalPrologueEpilogue() {
 
     // 生成尾声 (插入到所有ret指令前)
     for (auto& bb : *function) {
+        // TODO: 找基本块最后一条更有效率
         for (auto it = bb->begin(); it != bb->end(); ++it) {
             if ((*it)->getOpcode() == Opcode::RET) {
                 // 恢复所有保存的寄存器
@@ -292,6 +293,7 @@ std::vector<int> FrameIndexElimination::collectSavedRegisters() {
     return std::vector<int>(usedSavedRegs.begin(), usedSavedRegs.end());
 }
 
+// TODO: no this fucking shit
 void FrameIndexElimination::removeExistingPrologueEpilogue() {
     // 删除现有的栈管理指令，避免重复
     for (auto& bb : *function) {

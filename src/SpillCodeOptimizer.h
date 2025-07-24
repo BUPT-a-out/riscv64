@@ -1,15 +1,18 @@
-#include "Instructions/Function.h"
 #include "Instructions/BasicBlock.h"
+#include "Instructions/Function.h"
 
 namespace riscv64 {
 
 class SpillCodeOptimizer {
-public:
+   public:
     static void optimizeSpillCode(Function* function);
-private:
+
+   private:
     static void removeRedundantFrameAddr(Function* function);
-    static void replaceRegisterInBasicBlock(BasicBlock* bb, unsigned oldReg, unsigned newReg);
-    static bool isFrameAddrInstruction(Instruction* inst, int& frameIndex, unsigned& dstReg);
+    static void replaceIntegerRegisterInBasicBlock(BasicBlock* bb,
+                                                   unsigned oldReg,
+                                                   unsigned newReg);
+    static bool isFrameAddrInstruction(Instruction* inst, int& frameIndex,
+                                       unsigned& dstReg);
 };
-    
-}
+}  // namespace riscv64

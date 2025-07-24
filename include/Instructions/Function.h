@@ -94,7 +94,6 @@ class Function {
     std::string name;
     std::vector<std::unique_ptr<BasicBlock>> basic_blocks;
     std::unique_ptr<StackFrameManager> stackFrameManager_;
-    // ... 还可以包含栈帧信息 (StackFrameInfo), 保存的寄存器列表等
 };
 
 }  // namespace riscv64

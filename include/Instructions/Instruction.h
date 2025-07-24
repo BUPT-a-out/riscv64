@@ -248,9 +248,6 @@ class Instruction {
     bool isFrameSetup() const;
     bool isFramePointerRelated() const;
 
-    std::vector<unsigned> getUsedRegs() const;
-    std::vector<unsigned> getDefinedRegs() const;
-
     std::vector<unsigned> getDefinedIntegerRegs() const;
     std::vector<unsigned> getUsedIntegerRegs() const;
     std::vector<unsigned> getDefinedFloatRegs() const;

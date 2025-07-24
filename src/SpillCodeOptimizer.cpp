@@ -1,6 +1,7 @@
 #include "SpillCodeOptimizer.h"
 namespace riscv64 {
 
+// It only plays with integer regs.
 void SpillCodeOptimizer::optimizeSpillCode(Function* function) {
     std::cout << "Starting spill code optimization..." << std::endl;
     removeRedundantFrameAddr(function);
@@ -28,11 +29,6 @@ void SpillCodeOptimizer::removeRedundantFrameAddr(Function* function) {
                 std::cout << "Found frameaddr: reg=" << dstReg
                           << ", FI=" << frameIndex << std::endl;
 
-                std::cout << "current map: \n";
-                for (auto m : frameToRegMap) {
-                    std::cout << "fi " << m.first << " -> " << m.second << "\n";
-                }
-
                 // 使用frameToRegMap快速查找是否已经有寄存器保存了相同frameIndex的地址
                 auto existingIt = frameToRegMap.find(frameIndex);
                 if (existingIt != frameToRegMap.end()) {
@@ -42,7 +38,8 @@ void SpillCodeOptimizer::removeRedundantFrameAddr(Function* function) {
                               << std::endl;
 
                     // 用现有寄存器替换当前寄存器的所有后续使用
-                    replaceRegisterInBasicBlock(bb.get(), dstReg, existingReg);
+                    replaceIntegerRegisterInBasicBlock(bb.get(), dstReg,
+                                                       existingReg);
 
                     // 标记删除冗余指令
                     toErase.push_back(it);
@@ -66,7 +63,8 @@ void SpillCodeOptimizer::removeRedundantFrameAddr(Function* function) {
                 }
             } else {
                 // 检查指令是否重新定义了缓存中的寄存器，如果重新定义了就清除缓存
-                auto definedRegs = inst->getDefinedRegs();
+                auto definedRegs = inst->getDefinedIntegerRegs();
+
                 for (unsigned reg : definedRegs) {
                     auto regFrameIt = regToFrameMap.find(reg);
                     if (regFrameIt != regToFrameMap.end()) {
@@ -119,9 +117,12 @@ bool SpillCodeOptimizer::isFrameAddrInstruction(Instruction* inst,
     return true;
 }
 
-void SpillCodeOptimizer::replaceRegisterInBasicBlock(BasicBlock* bb,
-                                                     unsigned oldReg,
-                                                     unsigned newReg) {
+void SpillCodeOptimizer::replaceIntegerRegisterInBasicBlock(BasicBlock* bb,
+                                                            unsigned oldReg,
+                                                            unsigned newReg) {
+    if (oldReg == newReg) {
+        return;
+    }
     std::cout << "Replacing register " << oldReg << " with " << newReg
               << " in basic block" << std::endl;
 
@@ -131,7 +132,8 @@ void SpillCodeOptimizer::replaceRegisterInBasicBlock(BasicBlock* bb,
             if (operand->isReg()) {
                 RegisterOperand* regOp =
                     static_cast<RegisterOperand*>(operand.get());
-                if (regOp->getRegNum() == oldReg) {
+                if (regOp->getRegNum() == oldReg &&
+                    regOp->isIntegerRegister()) {
                     std::cout << "  Replacing register operand " << oldReg
                               << " -> " << newReg << std::endl;
                     regOp->setRegNum(newReg);
@@ -140,7 +142,8 @@ void SpillCodeOptimizer::replaceRegisterInBasicBlock(BasicBlock* bb,
                 MemoryOperand* memOp =
                     static_cast<MemoryOperand*>(operand.get());
                 if (memOp->getBaseReg() &&
-                    memOp->getBaseReg()->getRegNum() == oldReg) {
+                    memOp->getBaseReg()->getRegNum() == oldReg &&
+                    memOp->getBaseReg()->isIntegerRegister()) {
                     std::cout << "  Replacing memory base register " << oldReg
                               << " -> " << newReg << std::endl;
                     memOp->getBaseReg()->setRegNum(newReg);

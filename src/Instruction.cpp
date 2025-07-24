@@ -562,33 +562,4 @@ std::vector<unsigned> Instruction::getDefinedFloatRegs() const {
     return definedRegs;
 }
 
-// 保持向后兼容的函数
-std::vector<unsigned> Instruction::getUsedRegs() const {
-    auto intRegs = getUsedIntegerRegs();
-    auto floatRegs = getUsedFloatRegs();
-    
-    std::vector<unsigned> allRegs;
-    allRegs.insert(allRegs.end(), intRegs.begin(), intRegs.end());
-    allRegs.insert(allRegs.end(), floatRegs.begin(), floatRegs.end());
-    
-    std::sort(allRegs.begin(), allRegs.end());
-    allRegs.erase(std::unique(allRegs.begin(), allRegs.end()), allRegs.end());
-    
-    return allRegs;
-}
-
-std::vector<unsigned> Instruction::getDefinedRegs() const {
-    auto intRegs = getDefinedIntegerRegs();
-    auto floatRegs = getDefinedFloatRegs();
-    
-    std::vector<unsigned> allRegs;
-    allRegs.insert(allRegs.end(), intRegs.begin(), intRegs.end());
-    allRegs.insert(allRegs.end(), floatRegs.begin(), floatRegs.end());
-    
-    std::sort(allRegs.begin(), allRegs.end());
-    allRegs.erase(std::unique(allRegs.begin(), allRegs.end()), allRegs.end());
-    
-    return allRegs;
-}
-
 }  // namespace riscv64

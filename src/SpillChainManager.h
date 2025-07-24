@@ -10,7 +10,7 @@ namespace riscv64 {
 // 溢出临时寄存器管理器
 class SpillChainManager {
 public:
-    SpillChainManager(const std::vector<unsigned>& availableRegs);
+    SpillChainManager(const std::vector<unsigned>& availableRegs, bool isFloat = false);
     
     // 为spill操作分配临时寄存器
     unsigned allocateTempRegister(unsigned spilledReg, Instruction* inst);
@@ -37,6 +37,8 @@ private:
         bool isInUse;         // 是否正在使用
         int chainDepth;       // spill链深度
     };
+
+    bool isFloat;
     
     std::vector<unsigned> availablePhysicalRegs;  // 可用的物理寄存器
     std::unordered_map<unsigned, TempRegInfo> tempRegMap;  // 临时寄存器映射

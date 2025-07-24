@@ -183,6 +183,10 @@ class RegAllocChaitin {
     bool isUsedAsArgument(unsigned virtualReg) const;
     bool isUsedAcrossCalls(unsigned virtualReg) const;
 
+    std::vector<unsigned> getDefinedRegs(Instruction* inst) const;
+    std::vector<unsigned> getUsedRegs(Instruction* inst) const;
+
+
     // 调试和统计
     void printInterferenceGraph() const;
     void printAllocationResult() const;
