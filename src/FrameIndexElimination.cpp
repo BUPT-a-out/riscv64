@@ -175,15 +175,40 @@ void FrameIndexElimination::generateFinalPrologueEpilogue() {
     if (entryBlock) {
         std::vector<std::unique_ptr<Instruction>> prologueInsts;
 
-        // 1. 调整栈指针: addi sp, sp, -frameSize
-        auto adjustSp = std::make_unique<Instruction>(Opcode::ADDI);
-        adjustSp->addOperand(
-            std::make_unique<RegisterOperand>(2, false));  // sp
-        adjustSp->addOperand(
-            std::make_unique<RegisterOperand>(2, false));  // sp
-        adjustSp->addOperand(
-            std::make_unique<ImmediateOperand>(-layout.totalFrameSize));
-        prologueInsts.push_back(std::move(adjustSp));
+        // 1. 调整栈指针: 处理大的栈帧大小
+        if (isValidImmediateOffset(-layout.totalFrameSize)) {
+            // 栈帧大小在立即数范围内
+            auto adjustSp = std::make_unique<Instruction>(Opcode::ADDI);
+            adjustSp->addOperand(
+                std::make_unique<RegisterOperand>(2, false));  // sp
+            adjustSp->addOperand(
+                std::make_unique<RegisterOperand>(2, false));  // sp
+            adjustSp->addOperand(
+                std::make_unique<ImmediateOperand>(-layout.totalFrameSize));
+            prologueInsts.push_back(std::move(adjustSp));
+        } else {
+            // 栈帧大小超出立即数范围，需要分步处理
+            std::cout << "Large frame size detected: " << layout.totalFrameSize
+                      << ", using temporary register" << std::endl;
+
+            // 先将帧大小加载到临时寄存器
+            auto liInst = std::make_unique<Instruction>(Opcode::LI);
+            liInst->addOperand(
+                std::make_unique<RegisterOperand>(5, false));  // t0
+            liInst->addOperand(
+                std::make_unique<ImmediateOperand>(layout.totalFrameSize));
+            prologueInsts.push_back(std::move(liInst));
+
+            // 然后执行 sp = sp - frameSize (即 sp = sp + (-frameSize))
+            auto subInst = std::make_unique<Instruction>(Opcode::SUB);
+            subInst->addOperand(
+                std::make_unique<RegisterOperand>(2, false));  // sp
+            subInst->addOperand(
+                std::make_unique<RegisterOperand>(2, false));  // sp
+            subInst->addOperand(
+                std::make_unique<RegisterOperand>(5, false));  // t0
+            prologueInsts.push_back(std::move(subInst));
+        }
 
         // 2. 保存所有需要保存的寄存器
         int offset = layout.totalFrameSize - 8;  // 从栈顶开始
@@ -191,20 +216,66 @@ void FrameIndexElimination::generateFinalPrologueEpilogue() {
             auto saveReg = std::make_unique<Instruction>(Opcode::SD);
             saveReg->addOperand(
                 std::make_unique<RegisterOperand>(regNum, false));
-            saveReg->addOperand(std::make_unique<MemoryOperand>(
-                std::make_unique<RegisterOperand>(2, false),  // sp
-                std::make_unique<ImmediateOperand>(offset)));
+
+            if (isValidImmediateOffset(offset)) {
+                saveReg->addOperand(std::make_unique<MemoryOperand>(
+                    std::make_unique<RegisterOperand>(2, false),  // sp
+                    std::make_unique<ImmediateOperand>(offset)));
+            } else {
+                // 偏移量超出范围，先计算地址
+                auto liOffsetInst = std::make_unique<Instruction>(Opcode::LI);
+                liOffsetInst->addOperand(
+                    std::make_unique<RegisterOperand>(5, false));  // t0
+                liOffsetInst->addOperand(
+                    std::make_unique<ImmediateOperand>(offset));
+                prologueInsts.push_back(std::move(liOffsetInst));
+
+                auto addAddrInst = std::make_unique<Instruction>(Opcode::ADD);
+                addAddrInst->addOperand(
+                    std::make_unique<RegisterOperand>(5, false));  // t0
+                addAddrInst->addOperand(
+                    std::make_unique<RegisterOperand>(2, false));  // sp
+                addAddrInst->addOperand(
+                    std::make_unique<RegisterOperand>(5, false));  // t0
+                prologueInsts.push_back(std::move(addAddrInst));
+
+                saveReg->addOperand(std::make_unique<MemoryOperand>(
+                    std::make_unique<RegisterOperand>(5, false),  // t0
+                    std::make_unique<ImmediateOperand>(0)));
+            }
+
             prologueInsts.push_back(std::move(saveReg));
             offset -= 8;
         }
 
-        // 3. 设置帧指针: addi s0, sp, frameSize
-        auto setFp = std::make_unique<Instruction>(Opcode::ADDI);
-        setFp->addOperand(std::make_unique<RegisterOperand>(8, false));  // s0
-        setFp->addOperand(std::make_unique<RegisterOperand>(2, false));  // sp
-        setFp->addOperand(
-            std::make_unique<ImmediateOperand>(layout.totalFrameSize));
-        prologueInsts.push_back(std::move(setFp));
+        // 3. 设置帧指针: 处理大的栈帧大小
+        if (isValidImmediateOffset(layout.totalFrameSize)) {
+            auto setFp = std::make_unique<Instruction>(Opcode::ADDI);
+            setFp->addOperand(
+                std::make_unique<RegisterOperand>(8, false));  // s0
+            setFp->addOperand(
+                std::make_unique<RegisterOperand>(2, false));  // sp
+            setFp->addOperand(
+                std::make_unique<ImmediateOperand>(layout.totalFrameSize));
+            prologueInsts.push_back(std::move(setFp));
+        } else {
+            // 帧大小超出立即数范围
+            auto liInst = std::make_unique<Instruction>(Opcode::LI);
+            liInst->addOperand(
+                std::make_unique<RegisterOperand>(5, false));  // t0
+            liInst->addOperand(
+                std::make_unique<ImmediateOperand>(layout.totalFrameSize));
+            prologueInsts.push_back(std::move(liInst));
+
+            auto addInst = std::make_unique<Instruction>(Opcode::ADD);
+            addInst->addOperand(
+                std::make_unique<RegisterOperand>(8, false));  // s0
+            addInst->addOperand(
+                std::make_unique<RegisterOperand>(2, false));  // sp
+            addInst->addOperand(
+                std::make_unique<RegisterOperand>(5, false));  // t0
+            prologueInsts.push_back(std::move(addInst));
+        }
 
         // 逆序插入以保持正确顺序
         for (auto it = prologueInsts.rbegin(); it != prologueInsts.rend();
@@ -225,23 +296,74 @@ void FrameIndexElimination::generateFinalPrologueEpilogue() {
                     auto restoreReg = std::make_unique<Instruction>(Opcode::LD);
                     restoreReg->addOperand(
                         std::make_unique<RegisterOperand>(regNum, false));
-                    restoreReg->addOperand(std::make_unique<MemoryOperand>(
-                        std::make_unique<RegisterOperand>(2, false),  // sp
-                        std::make_unique<ImmediateOperand>(offset)));
+
+                    if (isValidImmediateOffset(offset)) {
+                        restoreReg->addOperand(std::make_unique<MemoryOperand>(
+                            std::make_unique<RegisterOperand>(2, false),  // sp
+                            std::make_unique<ImmediateOperand>(offset)));
+                    } else {
+                        // 偏移量超出范围，先计算地址
+                        auto liOffsetInst =
+                            std::make_unique<Instruction>(Opcode::LI);
+                        liOffsetInst->addOperand(
+                            std::make_unique<RegisterOperand>(5, false));  // t0
+                        liOffsetInst->addOperand(
+                            std::make_unique<ImmediateOperand>(offset));
+                        it = bb->insert(it, std::move(liOffsetInst));
+                        ++it;
+
+                        auto addAddrInst =
+                            std::make_unique<Instruction>(Opcode::ADD);
+                        addAddrInst->addOperand(
+                            std::make_unique<RegisterOperand>(5, false));  // t0
+                        addAddrInst->addOperand(
+                            std::make_unique<RegisterOperand>(2, false));  // sp
+                        addAddrInst->addOperand(
+                            std::make_unique<RegisterOperand>(5, false));  // t0
+                        it = bb->insert(it, std::move(addAddrInst));
+                        ++it;
+
+                        restoreReg->addOperand(std::make_unique<MemoryOperand>(
+                            std::make_unique<RegisterOperand>(5, false),  // t0
+                            std::make_unique<ImmediateOperand>(0)));
+                    }
+
                     it = bb->insert(it, std::move(restoreReg));
                     ++it;
                 }
 
-                // 恢复栈指针: addi sp, sp, frameSize
-                auto restoreSp = std::make_unique<Instruction>(Opcode::ADDI);
-                restoreSp->addOperand(
-                    std::make_unique<RegisterOperand>(2, false));  // sp
-                restoreSp->addOperand(
-                    std::make_unique<RegisterOperand>(2, false));  // sp
-                restoreSp->addOperand(
-                    std::make_unique<ImmediateOperand>(layout.totalFrameSize));
-                it = bb->insert(it, std::move(restoreSp));
-                ++it;
+                // 恢复栈指针: 处理大的栈帧大小
+                if (isValidImmediateOffset(layout.totalFrameSize)) {
+                    auto restoreSp =
+                        std::make_unique<Instruction>(Opcode::ADDI);
+                    restoreSp->addOperand(
+                        std::make_unique<RegisterOperand>(2, false));  // sp
+                    restoreSp->addOperand(
+                        std::make_unique<RegisterOperand>(2, false));  // sp
+                    restoreSp->addOperand(std::make_unique<ImmediateOperand>(
+                        layout.totalFrameSize));
+                    it = bb->insert(it, std::move(restoreSp));
+                    ++it;
+                } else {
+                    // 栈帧大小超出立即数范围
+                    auto liInst = std::make_unique<Instruction>(Opcode::LI);
+                    liInst->addOperand(
+                        std::make_unique<RegisterOperand>(5, false));  // t0
+                    liInst->addOperand(std::make_unique<ImmediateOperand>(
+                        layout.totalFrameSize));
+                    it = bb->insert(it, std::move(liInst));
+                    ++it;
+
+                    auto addInst = std::make_unique<Instruction>(Opcode::ADD);
+                    addInst->addOperand(
+                        std::make_unique<RegisterOperand>(2, false));  // sp
+                    addInst->addOperand(
+                        std::make_unique<RegisterOperand>(2, false));  // sp
+                    addInst->addOperand(
+                        std::make_unique<RegisterOperand>(5, false));  // t0
+                    it = bb->insert(it, std::move(addInst));
+                    ++it;
+                }
 
                 break;  // 每个基本块最多一个ret
             }
@@ -328,7 +450,7 @@ void FrameIndexElimination::generateAddWithLargeOffset(
     int64_t offset) {
     if (isValidImmediateOffset(offset)) {
         // 偏移量在有效范围内，直接生成 addi 指令
-        auto addInst = std::make_unique<Instruction>(Opcode::ADDI);
+        auto addInst = std::make_unique<Instruction>(Opcode::ADDI, bb);
         addInst->addOperand(
             std::make_unique<RegisterOperand>(destRegNum, destIsVirtual));
         addInst->addOperand(
@@ -342,22 +464,22 @@ void FrameIndexElimination::generateAddWithLargeOffset(
         std::cout << "Large offset detected: " << offset
                   << ", splitting into multiple instructions" << std::endl;
 
-        // 1. 将大偏移量加载到一个临时寄存器
-        // 注意：这里我们需要一个临时寄存器，但在这个阶段我们无法分配虚拟寄存器
-        // 我们使用 t0 (x5) 作为临时寄存器
-        auto liInst = std::make_unique<Instruction>(Opcode::LI);
-        liInst->addOperand(std::make_unique<RegisterOperand>(5, false));  // t0
+        // 1. 将大偏移量加载到目标寄存器（避免使用额外的临时寄存器）
+        auto liInst = std::make_unique<Instruction>(Opcode::LI, bb);
+        liInst->addOperand(
+            std::make_unique<RegisterOperand>(destRegNum, destIsVirtual));
         liInst->addOperand(std::make_unique<ImmediateOperand>(offset));
         it = bb->insert(it, std::move(liInst));
         ++it;
 
-        // 2. 计算最终地址：dest = base + offset_in_temp_reg
-        auto addInst = std::make_unique<Instruction>(Opcode::ADD);
+        // 2. 计算最终地址：dest = base + dest
+        auto addInst = std::make_unique<Instruction>(Opcode::ADD, bb);
         addInst->addOperand(
             std::make_unique<RegisterOperand>(destRegNum, destIsVirtual));
         addInst->addOperand(
             std::make_unique<RegisterOperand>(baseRegNum, baseIsVirtual));
-        addInst->addOperand(std::make_unique<RegisterOperand>(5, false));  // t0
+        addInst->addOperand(
+            std::make_unique<RegisterOperand>(destRegNum, destIsVirtual));
         it = bb->insert(it, std::move(addInst));
         ++it;
     }
