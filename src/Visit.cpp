@@ -652,6 +652,25 @@ void Visitor::visitBranchInst(const midend::Instruction* inst,
         auto* true_bb = branch_inst->getTrueBB();
         auto* false_bb = branch_inst->getFalseBB();
 
+        if (condition->isImm()) {
+            // 如果条件是立即数，直接跳转到真分支或假分支
+            auto* imm_cond = dynamic_cast<ImmediateOperand*>(condition.get());
+            if (imm_cond->getValue() != 0) {
+                // 条件为真，跳转到真分支
+                auto instruction =
+                    std::make_unique<Instruction>(Opcode::J, parent_bb);
+                instruction->addOperand(std::make_unique<LabelOperand>(true_bb));
+                parent_bb->addInstruction(std::move(instruction));
+            } else {
+                // 条件为假，跳转到假分支
+                auto instruction =
+                    std::make_unique<Instruction>(Opcode::J, parent_bb);
+                instruction->addOperand(std::make_unique<LabelOperand>(false_bb));
+                parent_bb->addInstruction(std::move(instruction));
+            }
+            return;
+        }
+
         // 生成条件跳转指令
         auto instruction =
             std::make_unique<Instruction>(Opcode::BNEZ, parent_bb);
