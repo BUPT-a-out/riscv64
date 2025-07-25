@@ -26,7 +26,9 @@ Module Visitor::visit(const midend::Module* module) {
         visit(global, &riscv_module);
     }
     for (auto* const func : *module) {
-        visit(func, &riscv_module);
+        if (func->isDefinition()) {
+            visit(func, &riscv_module);
+        }
     }
 
     return riscv_module;
