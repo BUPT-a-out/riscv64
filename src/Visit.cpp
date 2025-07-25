@@ -1665,12 +1665,9 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto xor_inst =
                     std::make_unique<Instruction>(Opcode::XOR, parent_bb);
                 xor_inst->addOperand(std::make_unique<RegisterOperand>(
-                    xor_reg->getRegNum(),
-                    xor_reg
-                        ->isVirtual()));  // rd
-                                          // xor_inst->addOperand(std::move(lhs_reg));
-                                          // // rs1
-                xor_inst->addOperand(std::move(rhs_reg));  // rs2
+                    xor_reg->getRegNum(), xor_reg->isVirtual()));  // rd
+                xor_inst->addOperand(std::move(lhs_reg));          // rs1
+                xor_inst->addOperand(std::move(rhs_reg));          // rs2
                 parent_bb->addInstruction(std::move(xor_inst));
 
                 new_reg = codeGen_->allocateReg();
