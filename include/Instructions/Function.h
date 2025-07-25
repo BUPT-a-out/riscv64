@@ -97,6 +97,27 @@ class Function {
         return stackFrameManager_.get();
     }
 
+    unsigned getMaxRegNum() const {
+        unsigned M = 0;
+        for (const auto& bb_ptr:basic_blocks) {
+            const auto* bb = bb_ptr.get();
+            for (const auto& inst_ptr: *bb) {
+                const auto* inst = inst_ptr.get();
+                const auto& ops = inst->getOperands();
+                for (const auto& op: ops) {
+                    if (op->isReg()) {
+                        const auto num = op->getRegNum();
+                        M = std::max(M, num);
+                    } else if (op->isMem()) {
+                        const auto num = static_cast<MemoryOperand*>(op.get())->getBaseReg()->getRegNum();
+                        M = std::max(M, num);
+                    }
+                }
+            }
+        }
+        return M;
+    }
+
     std::string toString() const;
 
    private:

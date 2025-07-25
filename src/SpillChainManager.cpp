@@ -8,17 +8,20 @@
 
 namespace riscv64 {
 
-SpillChainManager::SpillChainManager(const std::vector<unsigned>& availableRegs, bool isFloat)
-    : isFloat(isFloat), availablePhysicalRegs(availableRegs) {
+SpillChainManager::SpillChainManager(const std::vector<unsigned>& availableRegs,
+                                     unsigned tempRegCounter, bool isFloat)
+    : isFloat(isFloat),
+      tempRegCounter(tempRegCounter),
+      availablePhysicalRegs(availableRegs) {
     // 初始化临时寄存器优先级顺序
-    
-    // 优先使用临时寄存器 t0-t6
-    std::vector<unsigned> tempIntegerPriority = {5,  6,  7, 28,
-                                          29, 30, 31};  // t0-t2, t3-t6
 
-    // 优先使用临时寄存器 ft0-ft7
-    std::vector<unsigned> tempFloatPriority = {0,  1,  2, 3,
-                                          4, 5, 6, 7};  // ft0-ft7
+    // 整数优先使用临时寄存器 t0-t6
+    std::vector<unsigned> tempIntegerPriority = {5,  6,  7, 28,
+                                                 29, 30, 31};  // t0-t2, t3-t6
+
+    // 浮点优先使用临时寄存器 ft0-ft7
+    std::vector<unsigned> tempFloatPriority = {0, 1, 2, 3,
+                                               4, 5, 6, 7};  // ft0-ft7
 
     auto tempPriority = isFloat ? tempFloatPriority : tempIntegerPriority;
 
@@ -71,8 +74,6 @@ unsigned SpillChainManager::allocateTempRegister(unsigned spilledReg,
     tempInfo.chainDepth = currentDepth + 1;
 
     // 分配新的临时寄存器ID（虚拟寄存器ID范围之外）
-    // TODO: use max in function, because I need alloc twice. float first, then int
-    static unsigned tempRegCounter = 100000;
     unsigned tempRegId = tempRegCounter++;
 
     tempRegMap[tempRegId] = tempInfo;

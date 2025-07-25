@@ -27,7 +27,7 @@ void FrameIndexElimination::computeFinalFrameLayout() {
 
 // TODO: order right.
 
-// 目前的布局: (未加入栈上参数)
+// 目前的布局:
 // 高地址端
 
 // 保留寄存器 ra s0 (s1-s11)
@@ -35,6 +35,8 @@ void FrameIndexElimination::computeFinalFrameLayout() {
 // spill寄存器
 
 // 低地址端
+
+// TODO: compute float
 void FrameIndexElimination::assignFinalOffsets() {
     // 计算保存寄存器需要的空间
     int savedRegSize = calculateSavedRegisterSize();
@@ -97,10 +99,10 @@ void FrameIndexElimination::assignFinalOffsets() {
     }
 }
 
-// TODO: 合并这个莫名其妙的函数
+// TODO: float
 int FrameIndexElimination::calculateSavedRegisterSize() {
     // 分析函数中使用的callee-saved寄存器
-    auto usedSavedRegs = collectSavedRegisters();
+    auto usedSavedRegs = collectSavedIntegerRegisters();
 
     return usedSavedRegs.size() * 8;  // 每个寄存器8字节
 }
@@ -164,7 +166,8 @@ void FrameIndexElimination::generateFinalPrologueEpilogue() {
               << layout.totalFrameSize << std::endl;
 
     // 收集需要保存的寄存器
-    std::vector<int> savedRegs = collectSavedRegisters();
+    // TODO: float
+    std::vector<int> savedRegs = collectSavedIntegerRegisters();
 
     // 生成序言 (插入到函数开头)
     // TODO(rikka): use getEntryBlock
@@ -223,7 +226,7 @@ void FrameIndexElimination::generateFinalPrologueEpilogue() {
                     restoreReg->addOperand(
                         std::make_unique<RegisterOperand>(regNum, false));
                     restoreReg->addOperand(std::make_unique<MemoryOperand>(
-                        std::make_unique<RegisterOperand>(2, false), // sp
+                        std::make_unique<RegisterOperand>(2, false),  // sp
                         std::make_unique<ImmediateOperand>(offset)));
                     it = bb->insert(it, std::move(restoreReg));
                     ++it;
@@ -232,9 +235,9 @@ void FrameIndexElimination::generateFinalPrologueEpilogue() {
                 // 恢复栈指针: addi sp, sp, frameSize
                 auto restoreSp = std::make_unique<Instruction>(Opcode::ADDI);
                 restoreSp->addOperand(
-                    std::make_unique<RegisterOperand>(2, false)); // sp
+                    std::make_unique<RegisterOperand>(2, false));  // sp
                 restoreSp->addOperand(
-                    std::make_unique<RegisterOperand>(2, false)); // sp
+                    std::make_unique<RegisterOperand>(2, false));  // sp
                 restoreSp->addOperand(
                     std::make_unique<ImmediateOperand>(layout.totalFrameSize));
                 it = bb->insert(it, std::move(restoreSp));
@@ -246,8 +249,8 @@ void FrameIndexElimination::generateFinalPrologueEpilogue() {
     }
 }
 
-// savedreg 只有整数寄存器.
-std::vector<int> FrameIndexElimination::collectSavedRegisters() {
+// 应该保存的整数寄存器.
+std::vector<int> FrameIndexElimination::collectSavedIntegerRegisters() {
     std::set<int> usedSavedRegs;
     usedSavedRegs.insert(1);  // ra
     usedSavedRegs.insert(8);  // s0/fp
@@ -262,6 +265,31 @@ std::vector<int> FrameIndexElimination::collectSavedRegisters() {
                     // s1-s11 对应寄存器号 9, 18-27
                     if (regOp->isIntegerRegister()) {
                         if (regNum == 9 || (regNum >= 18 && regNum <= 27)) {
+                            usedSavedRegs.insert(regNum);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return std::vector<int>(usedSavedRegs.begin(), usedSavedRegs.end());
+}
+
+// 应该保存的浮点寄存器
+std::vector<int> FrameIndexElimination::collectSavedFloatRegisters() {
+    std::set<int> usedSavedRegs;
+
+    // 扫描所有指令，查找使用的fs寄存器
+    for (auto& bb : *function) {
+        for (auto& inst : *bb) {
+            for (const auto& operand : inst->getOperands()) {
+                if (auto* regOp =
+                        dynamic_cast<RegisterOperand*>(operand.get())) {
+                    int regNum = regOp->getRegNum();
+                    // fs0-fs11
+                    if (regOp->isFloatRegister()) {
+                        if (ABI::isCalleeSaved(regNum, true)) {
                             usedSavedRegs.insert(regNum);
                         }
                     }

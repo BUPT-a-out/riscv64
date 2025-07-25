@@ -767,20 +767,7 @@ std::unique_ptr<MachineOperand> Visitor::visitAllocaInst(
     size_t typeSize = calculateTypeSize(allocated_type);
 
     // 创建抽象的栈对象（第一阶段不分配具体偏移）
-    int fi_id = sfm->getNewStackObjectIdentifier();
-    auto stack_obj = std::make_unique<StackObject>(
-        StackObjectType::AllocatedStackSlot, static_cast<int>(typeSize),
-        8,  // 8字节对齐
-        0   // 第一阶段不设置regNum
-    );
-    stack_obj->identifier = fi_id;
-
-    // 添加到栈帧管理器，但不计算偏移
-    sfm->addStackObject(std::move(stack_obj));
-    sfm->mapAllocaToStackSlot(inst, fi_id);
-
-    std::cout << "Created abstract Frame Index FI(" << fi_id
-              << ") for alloca, size: " << typeSize << " bytes" << std::endl;
+    int fi_id = sfm->createAllocaObject(inst, typeSize);
 
     return std::make_unique<FrameIndexOperand>(fi_id);
 }

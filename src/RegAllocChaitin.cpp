@@ -15,7 +15,8 @@ namespace riscv64 {
 void RegAllocChaitin::allocateRegisters() {
     initializeABIConstraints();
 
-    spillChainManager = std::make_unique<SpillChainManager>(availableRegs, assigningFloat);
+    spillChainManager = std::make_unique<SpillChainManager>(
+        availableRegs, function->getMaxRegNum() + 100, assigningFloat);
 
     computeLiveness();
 
@@ -154,7 +155,8 @@ void RegAllocChaitin::computeDefUse(BasicBlock* bb, LivenessInfo& info) {
         // 特殊处理函数调用指令
         if (inst->isCallInstr()) {
             // 函数调用会隐式修改所有调用者保存寄存器
-            std::vector<unsigned> callerSavedRegs = ABI::getCallerSavedRegs(assigningFloat);
+            std::vector<unsigned> callerSavedRegs =
+                ABI::getCallerSavedRegs(assigningFloat);
 
             for (unsigned reg : callerSavedRegs) {
                 info.def.insert(reg);  // 调用者保存寄存器被隐式定义
@@ -210,7 +212,8 @@ void RegAllocChaitin::buildInterferenceGraph() {
 
             // 特殊处理函数调用指令
             if (inst->isCallInstr()) {
-                std::vector<unsigned> callerSavedRegs = ABI::getCallerSavedRegs(assigningFloat);
+                std::vector<unsigned> callerSavedRegs =
+                    ABI::getCallerSavedRegs(assigningFloat);
 
                 // 调用者保存寄存器与所有在调用后仍活跃的虚拟寄存器冲突
                 for (unsigned callerReg : callerSavedRegs) {
@@ -472,7 +475,6 @@ std::vector<unsigned> RegAllocChaitin::selectSpillCandidates() {
     return candidates;
 }
 
-// TODO: FLW FSW
 void RegAllocChaitin::insertSpillCode(unsigned reg) {
     if (!spillChainManager->canSpillRegister(reg)) {
         std::cerr << "Warning: Cannot spill register " << reg
@@ -482,24 +484,10 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
 
     // 第二阶段：为溢出寄存器创建抽象Frame Index
 
-    // TODO: is it still in use?
-    stackManager.allocateSpillSlot(reg);
-
-    // TODO: extract method
     // 创建抽象的栈对象用于溢出
     auto* sfm = function->getStackFrameManager();
-    int fi_id = sfm->getNewStackObjectIdentifier();
-    auto spill_obj =
-        std::make_unique<StackObject>(StackObjectType::SpilledRegister,
-                                      8,   // 寄存器大小固定为8字节
-                                      8,   // 8字节对齐
-                                      reg  // 记录原始寄存器编号
-        );
-    spill_obj->identifier = fi_id;
-    sfm->addStackObject(std::move(spill_obj));
 
-    std::cout << "Created spill Frame Index FI(" << fi_id << ") for register "
-              << reg << std::endl;
+    auto fi_id = sfm->createSpillObject(reg);
 
     for (auto& bb : *function) {
         for (auto it = bb->begin(); it != bb->end(); ++it) {
@@ -508,7 +496,13 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
             // 处理load/store指令的特殊情况
             if (inst->getOpcode() == Opcode::LW ||
                 inst->getOpcode() == Opcode::SW) {
-                handleLoadStoreSpill(inst, reg, fi_id, it, bb.get());
+                handleIntegerLoadStoreSpill(inst, reg, fi_id, it, bb.get());
+                continue;
+            }
+
+            if (inst->getOpcode() == Opcode::FLW ||
+                inst->getOpcode() == Opcode::FSW) {
+                handleFloatLoadStoreSpill(inst, reg, fi_id, it, bb.get());
                 continue;
             }
 
@@ -531,15 +525,27 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
                 it = bb->insert(it, std::move(frameAddrInst));
                 ++it;
 
-                // 生成load指令从溢出槽加载值
-                auto loadInst = std::make_unique<Instruction>(Opcode::LW);
-                loadInst->addOperand(
-                    std::make_unique<RegisterOperand>(tempReg, false));
-                loadInst->addOperand(std::make_unique<MemoryOperand>(
-                    std::make_unique<RegisterOperand>(tempReg, false),
-                    std::make_unique<ImmediateOperand>(0)));
-                it = bb->insert(it, std::move(loadInst));
-                ++it;
+                if (assigningFloat) {
+                    // 生成load指令从溢出槽加载值
+                    auto loadInst = std::make_unique<Instruction>(Opcode::FLW);
+                    loadInst->addOperand(
+                        std::make_unique<RegisterOperand>(tempReg, false));
+                    loadInst->addOperand(std::make_unique<MemoryOperand>(
+                        std::make_unique<RegisterOperand>(tempReg, false),
+                        std::make_unique<ImmediateOperand>(0)));
+                    it = bb->insert(it, std::move(loadInst));
+                    ++it;
+                } else {
+                    // 生成load指令从溢出槽加载值
+                    auto loadInst = std::make_unique<Instruction>(Opcode::LW);
+                    loadInst->addOperand(
+                        std::make_unique<RegisterOperand>(tempReg, false));
+                    loadInst->addOperand(std::make_unique<MemoryOperand>(
+                        std::make_unique<RegisterOperand>(tempReg, false),
+                        std::make_unique<ImmediateOperand>(0)));
+                    it = bb->insert(it, std::move(loadInst));
+                    ++it;
+                }
 
                 // 更新原指令中的寄存器引用
                 updateRegisterInInstruction(inst, reg, tempReg);
@@ -571,23 +577,33 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
                 ++it;
 
                 // 生成store指令将值存储到溢出槽
-                auto storeInst = std::make_unique<Instruction>(Opcode::SW);
-                storeInst->addOperand(
-                    std::make_unique<RegisterOperand>(tempReg, false));
-                storeInst->addOperand(std::make_unique<MemoryOperand>(
-                    std::make_unique<RegisterOperand>(addrReg, false),
-                    std::make_unique<ImmediateOperand>(0)));
-                it = bb->insert(it, std::move(storeInst));
+                if (assigningFloat) {
+                    auto storeInst = std::make_unique<Instruction>(Opcode::FSW);
+                    storeInst->addOperand(
+                        std::make_unique<RegisterOperand>(tempReg, false));
+                    storeInst->addOperand(std::make_unique<MemoryOperand>(
+                        std::make_unique<RegisterOperand>(addrReg, false),
+                        std::make_unique<ImmediateOperand>(0)));
+                    it = bb->insert(it, std::move(storeInst));
+                } else {
+                    auto storeInst = std::make_unique<Instruction>(Opcode::SW);
+                    storeInst->addOperand(
+                        std::make_unique<RegisterOperand>(tempReg, false));
+                    storeInst->addOperand(std::make_unique<MemoryOperand>(
+                        std::make_unique<RegisterOperand>(addrReg, false),
+                        std::make_unique<ImmediateOperand>(0)));
+                    it = bb->insert(it, std::move(storeInst));
+                }
             }
         }
     }
 }
 
-// TODO: FLW FSW
-void RegAllocChaitin::handleLoadStoreSpill(Instruction* inst,
-                                           unsigned spilledReg, int frameIndex,
-                                           BasicBlock::iterator& it,
-                                           BasicBlock* bb) {
+void RegAllocChaitin::handleIntegerLoadStoreSpill(Instruction* inst,
+                                                  unsigned spilledReg,
+                                                  int frameIndex,
+                                                  BasicBlock::iterator& it,
+                                                  BasicBlock* bb) {
     const auto& operands = inst->getOperands();
     bool needsReload = false;
     bool needsSpill = false;
@@ -625,14 +641,14 @@ void RegAllocChaitin::handleLoadStoreSpill(Instruction* inst,
 
     // 处理基址寄存器被溢出的情况
     if (isBaseRegSpilled && needsReload) {
-        insertLoadStoreReload(inst, spilledReg, frameIndex, it, bb);
+        insertIntegerLoadStoreReload(inst, spilledReg, frameIndex, it, bb);
     }
 
     // 处理数据寄存器被溢出的情况
     if (isDataRegSpilled) {
         if (needsSpill) {
             // 对于load指令，目标寄存器被溢出，需要在指令后插入spill代码
-            insertLoadStoreSpill(inst, spilledReg, frameIndex, it, bb);
+            insertIntegerLoadStoreSpill(inst, spilledReg, frameIndex, it, bb);
         } else if (needsReload) {
             // 对于store指令，源寄存器被溢出，需要在指令前插入reload代码
             // 为数据重载分配临时寄存器
@@ -672,10 +688,11 @@ void RegAllocChaitin::handleLoadStoreSpill(Instruction* inst,
     }
 }
 
-void RegAllocChaitin::insertLoadStoreReload(Instruction* inst,
-                                            unsigned spilledReg, int frameIndex,
-                                            BasicBlock::iterator& it,
-                                            BasicBlock* bb) {
+void RegAllocChaitin::insertIntegerLoadStoreReload(Instruction* inst,
+                                                   unsigned spilledReg,
+                                                   int frameIndex,
+                                                   BasicBlock::iterator& it,
+                                                   BasicBlock* bb) {
     // 为地址计算分配一个临时寄存器
     unsigned addrTempReg =
         spillChainManager->allocateTempRegister(spilledReg, inst);
@@ -702,10 +719,11 @@ void RegAllocChaitin::insertLoadStoreReload(Instruction* inst,
     updateLoadStoreOperands(inst, spilledReg, addrTempReg);
 }
 
-void RegAllocChaitin::insertLoadStoreSpill(Instruction* inst,
-                                           unsigned spilledReg, int frameIndex,
-                                           BasicBlock::iterator& it,
-                                           BasicBlock* bb) {
+void RegAllocChaitin::insertIntegerLoadStoreSpill(Instruction* inst,
+                                                  unsigned spilledReg,
+                                                  int frameIndex,
+                                                  BasicBlock::iterator& it,
+                                                  BasicBlock* bb) {
     // 分配临时寄存器用于地址计算
     unsigned addrTempReg =
         spillChainManager->allocateTempRegister(spilledReg, inst);
@@ -783,13 +801,106 @@ void RegAllocChaitin::updateLoadStoreOperands(Instruction* inst,
     }
 }
 
+void RegAllocChaitin::handleFloatLoadStoreSpill(Instruction* inst,
+                                                unsigned spilledReg,
+                                                int frameIndex,
+                                                BasicBlock::iterator& it,
+                                                BasicBlock* bb) {
+    // 在浮点分配阶段，只处理浮点数据寄存器的溢出
+    const auto& operands = inst->getOperands();
+    bool isFloatDataRegSpilled = false;
+
+    // 检查第一个操作数（浮点数据寄存器）是否被溢出
+    if (!operands.empty() && operands[0]->isReg() &&
+        operands[0]->getRegNum() == spilledReg) {
+        isFloatDataRegSpilled = true;
+    }
+
+    if (!isFloatDataRegSpilled) {
+        return;  // 基址寄存器在整数分配阶段处理
+    }
+
+    if (inst->getOpcode() == Opcode::FLW) {
+        // FLW: 目标浮点寄存器被溢出，需要在指令后插入FSW
+        insertFloatLoadSpill(inst, spilledReg, frameIndex, it, bb);
+    } else if (inst->getOpcode() == Opcode::FSW) {
+        // FSW: 源浮点寄存器被溢出，需要在指令前插入FLW
+        insertFloatStoreReload(inst, spilledReg, frameIndex, it, bb);
+    }
+}
+
+void RegAllocChaitin::insertFloatLoadSpill(Instruction* inst,
+                                           unsigned spilledReg, int frameIndex,
+                                           BasicBlock::iterator& it,
+                                           BasicBlock* bb) {
+    // 分配临时浮点寄存器
+    unsigned tempFloatReg =
+        spillChainManager->allocateTempRegister(spilledReg, inst);
+
+    // 更新原FLW指令使用临时寄存器
+    updateRegisterInInstruction(inst, spilledReg, tempFloatReg);
+    ++it;
+
+    // 生成frameaddr指令获取溢出槽地址（使用整数临时寄存器）
+    unsigned addrTempReg =
+        spillChainManager->allocateTempRegister(spilledReg, nullptr);
+    auto frameAddrInst = std::make_unique<Instruction>(Opcode::FRAMEADDR);
+    frameAddrInst->addOperand(
+        std::make_unique<RegisterOperand>(addrTempReg, false));
+    frameAddrInst->addOperand(std::make_unique<FrameIndexOperand>(frameIndex));
+    it = bb->insert(it, std::move(frameAddrInst));
+    ++it;
+
+    // 生成FSW指令将临时浮点寄存器值存储到溢出槽
+    auto storeInst = std::make_unique<Instruction>(Opcode::FSW);
+    storeInst->addOperand(
+        std::make_unique<RegisterOperand>(tempFloatReg, false));
+    storeInst->addOperand(std::make_unique<MemoryOperand>(
+        std::make_unique<RegisterOperand>(addrTempReg, false),
+        std::make_unique<ImmediateOperand>(0)));
+    it = bb->insert(it, std::move(storeInst));
+}
+
+void RegAllocChaitin::insertFloatStoreReload(Instruction* inst,
+                                             unsigned spilledReg,
+                                             int frameIndex,
+                                             BasicBlock::iterator& it,
+                                             BasicBlock* bb) {
+    // 分配临时浮点寄存器和地址寄存器
+    unsigned tempFloatReg =
+        spillChainManager->allocateTempRegister(spilledReg, inst);
+    unsigned addrTempReg =
+        spillChainManager->allocateTempRegister(spilledReg, nullptr);
+
+    // 生成frameaddr指令
+    auto frameAddrInst = std::make_unique<Instruction>(Opcode::FRAMEADDR);
+    frameAddrInst->addOperand(
+        std::make_unique<RegisterOperand>(addrTempReg, false));
+    frameAddrInst->addOperand(std::make_unique<FrameIndexOperand>(frameIndex));
+    it = bb->insert(it, std::move(frameAddrInst));
+    ++it;
+
+    // 生成FLW指令从溢出槽重载值
+    auto loadInst = std::make_unique<Instruction>(Opcode::FLW);
+    loadInst->addOperand(
+        std::make_unique<RegisterOperand>(tempFloatReg, false));
+    loadInst->addOperand(std::make_unique<MemoryOperand>(
+        std::make_unique<RegisterOperand>(addrTempReg, false),
+        std::make_unique<ImmediateOperand>(0)));
+    it = bb->insert(it, std::move(loadInst));
+    ++it;
+
+    // 更新原FSW指令使用重载后的浮点寄存器
+    updateRegisterInInstruction(inst, spilledReg, tempFloatReg);
+}
+
 // 更新指令中的寄存器引用
 void RegAllocChaitin::updateRegisterInInstruction(Instruction* inst,
                                                   unsigned oldReg,
                                                   unsigned newReg) {
     const auto& operands = inst->getOperands();
     for (const auto& operand : operands) {
-        if (operand->isReg()) {
+        if (operand->isReg() && operand->isFloatRegister() == assigningFloat) {
             RegisterOperand* regOp =
                 static_cast<RegisterOperand*>(operand.get());
             if (regOp->getRegNum() == oldReg) {
@@ -994,7 +1105,8 @@ int RegAllocChaitin::calculateABIPriority(unsigned src, unsigned dst) const {
     if (crossesFunctionCall(src, dst)) {
         if (isPhysicalReg(dst) && ABI::isCalleeSaved(dst, assigningFloat)) {
             priority += 25;
-        } else if (isPhysicalReg(src) && ABI::isCalleeSaved(src, assigningFloat)) {
+        } else if (isPhysicalReg(src) &&
+                   ABI::isCalleeSaved(src, assigningFloat)) {
             priority += 20;
         }
     }
@@ -1003,7 +1115,8 @@ int RegAllocChaitin::calculateABIPriority(unsigned src, unsigned dst) const {
     if (!crossesFunctionCall(src, dst)) {
         if (isPhysicalReg(dst) && ABI::isCallerSaved(dst, assigningFloat)) {
             priority += 15;
-        } else if (isPhysicalReg(src) && ABI::isCallerSaved(src, assigningFloat)) {
+        } else if (isPhysicalReg(src) &&
+                   ABI::isCallerSaved(src, assigningFloat)) {
             priority += 12;
         }
     }
@@ -1192,7 +1305,8 @@ bool RegAllocChaitin::canCoalesce(unsigned src, unsigned dst) {
 
 bool RegAllocChaitin::canCoalesceWithABI(unsigned src, unsigned dst) const {
     // 不能合并保留寄存器
-    if (ABI::isReservedReg(src, assigningFloat) || ABI::isReservedReg(dst, assigningFloat)) {
+    if (ABI::isReservedReg(src, assigningFloat) ||
+        ABI::isReservedReg(dst, assigningFloat)) {
         return false;
     }
 
@@ -1200,9 +1314,11 @@ bool RegAllocChaitin::canCoalesceWithABI(unsigned src, unsigned dst) const {
     if (isPhysicalReg(src) || isPhysicalReg(dst)) {
         // 调用者保存和被调用者保存寄存器不能合并
         if (isPhysicalReg(src) && isPhysicalReg(dst)) {
-            if (ABI::isCallerSaved(src, assigningFloat) && ABI::isCalleeSaved(dst, assigningFloat))
+            if (ABI::isCallerSaved(src, assigningFloat) &&
+                ABI::isCalleeSaved(dst, assigningFloat))
                 return false;
-            if (ABI::isCalleeSaved(src, assigningFloat) && ABI::isCallerSaved(dst, assigningFloat))
+            if (ABI::isCalleeSaved(src, assigningFloat) &&
+                ABI::isCallerSaved(dst, assigningFloat))
                 return false;
         }
 
@@ -1397,7 +1513,6 @@ bool RegAllocChaitin::isPhysicalReg(unsigned reg) const {
     return reg < 32;  // RISC-V有32个物理寄存器 x0-x31/f0-f31
 }
 
-// TODO: float
 std::vector<unsigned> RegAllocChaitin::getABIPreferredRegs(
     unsigned virtualReg) const {
     std::vector<unsigned> preferredRegs;
@@ -1415,7 +1530,7 @@ std::vector<unsigned> RegAllocChaitin::getABIPreferredRegs(
     // 根据使用模式推荐寄存器
     if (isUsedAsArgument(virtualReg)) {
         // 优先使用参数寄存器
-        for (unsigned reg = 10; reg <= 17; ++reg) {  // a0-a7
+        for (unsigned reg = 10; reg <= 17; ++reg) {  // a0-a7 / fa0-fa7
             if (std::find(preferredRegs.begin(), preferredRegs.end(), reg) ==
                 preferredRegs.end()) {
                 preferredRegs.push_back(reg);
@@ -1425,30 +1540,63 @@ std::vector<unsigned> RegAllocChaitin::getABIPreferredRegs(
 
     if (isUsedAcrossCalls(virtualReg)) {
         // 优先使用被调用者保存寄存器
-        // s1
-        if (std::find(preferredRegs.begin(), preferredRegs.end(), 9) ==
-            preferredRegs.end()) {
-            preferredRegs.push_back(9);
+        if (assigningFloat) {
+            // fs0-fs11
+            for (unsigned reg = 8; reg <= 9; ++reg) {
+                if (std::find(preferredRegs.begin(), preferredRegs.end(),
+                              reg) == preferredRegs.end()) {
+                    preferredRegs.push_back(reg);
+                }
+            }
+
+            for (unsigned reg = 18; reg <= 27; ++reg) {  // fs2-fs11
+                if (std::find(preferredRegs.begin(), preferredRegs.end(),
+                              reg) == preferredRegs.end()) {
+                    preferredRegs.push_back(reg);
+                }
+            }
+        } else {
+            // s1
+            if (std::find(preferredRegs.begin(), preferredRegs.end(), 9) ==
+                preferredRegs.end()) {
+                preferredRegs.push_back(9);
+            }
+
+            for (unsigned reg = 18; reg <= 27; ++reg) {  // s2-s11
+                if (std::find(preferredRegs.begin(), preferredRegs.end(),
+                              reg) == preferredRegs.end()) {
+                    preferredRegs.push_back(reg);
+                }
+            }
         }
 
-        for (unsigned reg = 18; reg <= 27; ++reg) {  // s2-s11
-            if (std::find(preferredRegs.begin(), preferredRegs.end(), reg) ==
-                preferredRegs.end()) {
-                preferredRegs.push_back(reg);
-            }
-        }
     } else {
         // 优先使用调用者保存寄存器
-        for (unsigned reg = 5; reg <= 7; ++reg) {  // t0-t2
-            if (std::find(preferredRegs.begin(), preferredRegs.end(), reg) ==
-                preferredRegs.end()) {
-                preferredRegs.push_back(reg);
+        if (assigningFloat) {
+            for (unsigned reg = 0; reg <= 7; ++reg) {  // ft0-ft7
+                if (std::find(preferredRegs.begin(), preferredRegs.end(),
+                              reg) == preferredRegs.end()) {
+                    preferredRegs.push_back(reg);
+                }
             }
-        }
-        for (unsigned reg = 28; reg <= 31; ++reg) {  // t3-t6
-            if (std::find(preferredRegs.begin(), preferredRegs.end(), reg) ==
-                preferredRegs.end()) {
-                preferredRegs.push_back(reg);
+            for (unsigned reg = 28; reg <= 31; ++reg) {  // ft8-ft11
+                if (std::find(preferredRegs.begin(), preferredRegs.end(),
+                              reg) == preferredRegs.end()) {
+                    preferredRegs.push_back(reg);
+                }
+            }
+        } else {
+            for (unsigned reg = 5; reg <= 7; ++reg) {  // t0-t2
+                if (std::find(preferredRegs.begin(), preferredRegs.end(),
+                              reg) == preferredRegs.end()) {
+                    preferredRegs.push_back(reg);
+                }
+            }
+            for (unsigned reg = 28; reg <= 31; ++reg) {  // t3-t6
+                if (std::find(preferredRegs.begin(), preferredRegs.end(),
+                              reg) == preferredRegs.end()) {
+                    preferredRegs.push_back(reg);
+                }
             }
         }
     }
@@ -1493,28 +1641,34 @@ bool RegAllocChaitin::isUsedAcrossCalls(unsigned virtualReg) const {
 }
 
 // TODO: once is enough
-// TODO: float
 void RegAllocChaitin::initializeABIConstraints() {
     // 设置可用寄存器列表（排除保留寄存器）
     availableRegs.clear();
 
-    // 添加调用者保存寄存器
-    for (unsigned reg = 5; reg <= 7; ++reg) {  // t0-t2
-        availableRegs.push_back(reg);
-    }
+    if (assigningFloat) {
+        // 都能用
+        for (unsigned reg = 0; reg <= 31; ++reg) {
+            availableRegs.push_back(reg);
+        }
+    } else {
+        // 添加调用者保存寄存器
+        for (unsigned reg = 5; reg <= 7; ++reg) {  // t0-t2
+            availableRegs.push_back(reg);
+        }
 
-    for (unsigned reg = 10; reg <= 17; ++reg) {  // a0-a7
-        availableRegs.push_back(reg);
-    }
-    for (unsigned reg = 28; reg <= 31; ++reg) {  // t3-t6
-        availableRegs.push_back(reg);
-    }
+        for (unsigned reg = 10; reg <= 17; ++reg) {  // a0-a7
+            availableRegs.push_back(reg);
+        }
+        for (unsigned reg = 28; reg <= 31; ++reg) {  // t3-t6
+            availableRegs.push_back(reg);
+        }
 
-    // 添加被调用者保存寄存器
-    // s0作为fp不能分配
-    availableRegs.push_back(9); // s1
-    for (unsigned reg = 18; reg <= 27; ++reg) {  // s2-s11
-        availableRegs.push_back(reg);
+        // 添加被调用者保存寄存器
+        // s0作为fp不能分配
+        availableRegs.push_back(9);                  // s1
+        for (unsigned reg = 18; reg <= 27; ++reg) {  // s2-s11
+            availableRegs.push_back(reg);
+        }
     }
 
     // 根据函数特征设置特定约束
@@ -1566,7 +1720,8 @@ void RegAllocChaitin::setParameterConstraints() {
                 unsigned dstReg = operands[0]->getRegNum();
                 unsigned srcReg = operands[1]->getRegNum();
 
-                if (ABI::isArgumentReg(srcReg, assigningFloat) && !isPhysicalReg(dstReg)) {
+                if (ABI::isArgumentReg(srcReg, assigningFloat) &&
+                    !isPhysicalReg(dstReg)) {
                     // 强制约束：参数虚拟寄存器必须分配到对应的参数物理寄存器
                     addStrongPhysicalConstraint(dstReg, srcReg);
                     paramToVirtual[srcReg] = dstReg;
@@ -1617,7 +1772,8 @@ void RegAllocChaitin::setReturnValueConstraints() {
                                                  "constraint: virtual reg "
                                               << srcReg << " -> physical reg "
                                               << reg << " ("
-                                              << ABI::getABINameFromRegNum(reg, assigningFloat)
+                                              << ABI::getABINameFromRegNum(
+                                                     reg, assigningFloat)
                                               << ")" << std::endl;
                                 }
                             }
@@ -1660,7 +1816,6 @@ void RegAllocChaitin::setCallSiteConstraints() {
     }
 }
 
-
 void RegAllocChaitin::setPreCallConstraints(BasicBlock* bb,
                                             Instruction* callInst) {
     // 查找调用指令在基本块中的位置
@@ -1689,8 +1844,8 @@ void RegAllocChaitin::setPreCallConstraints(BasicBlock* bb,
                         std::cout
                             << "Added call argument constraint: virtual reg "
                             << srcReg << " -> physical reg " << reg << " ("
-                            << ABI::getABINameFromRegNum(reg, assigningFloat) << ")"
-                            << std::endl;
+                            << ABI::getABINameFromRegNum(reg, assigningFloat)
+                            << ")" << std::endl;
                     }
                 }
                 paramCount++;
@@ -1726,8 +1881,8 @@ void RegAllocChaitin::setPostCallConstraints(BasicBlock* bb,
                         std::cout
                             << "Added call return constraint: virtual reg "
                             << dstReg << " -> physical reg " << reg << " ("
-                            << ABI::getABINameFromRegNum(reg, assigningFloat) << ")"
-                            << std::endl;
+                            << ABI::getABINameFromRegNum(reg, assigningFloat)
+                            << ")" << std::endl;
                     }
                 }
             }
@@ -1759,7 +1914,6 @@ std::vector<unsigned> RegAllocChaitin::getUsedRegs(Instruction* inst) const {
     }
 }
 
-
 /// Print
 void RegAllocChaitin::printInterferenceGraph() const {
     std::cout << "Interference Graph:\n";
@@ -1778,7 +1932,8 @@ void RegAllocChaitin::printAllocationResult() const {
         if (!isPhysicalReg(virtualReg)) {
             std::cout << "Virtual register " << virtualReg
                       << " -> Physical register " << physicalReg << " ("
-                      << ABI::getABINameFromRegNum(physicalReg, assigningFloat) << ")\n";
+                      << ABI::getABINameFromRegNum(physicalReg, assigningFloat)
+                      << ")\n";
         }
     }
 

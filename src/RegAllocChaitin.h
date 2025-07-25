@@ -85,8 +85,10 @@ class RegAllocChaitin {
     void clearDegreeCache() { degreeCache.clear(); }
 
    public:
-    explicit RegAllocChaitin(Function* func, bool assigningFloat=false)
-        : assigningFloat(assigningFloat), function(func), stackManager(StackFrameManager(function)) {}
+    explicit RegAllocChaitin(Function* func, bool assigningFloat = false)
+        : assigningFloat(assigningFloat),
+          function(func),
+          stackManager(StackFrameManager(function)) {}
 
     // 主要的寄存器分配接口
     void allocateRegisters();
@@ -109,20 +111,30 @@ class RegAllocChaitin {
     void handleSpills();
     std::vector<unsigned> selectSpillCandidates();
     void insertSpillCode(unsigned reg);
-    void handleLoadStoreSpill(Instruction* inst, unsigned spilledReg,
-                              int frameIndex, BasicBlock::iterator& it,
-                              BasicBlock* bb);
+    void handleIntegerLoadStoreSpill(Instruction* inst, unsigned spilledReg,
+                                     int frameIndex, BasicBlock::iterator& it,
+                                     BasicBlock* bb);
 
-    void insertLoadStoreReload(Instruction* inst, unsigned spilledReg,
-                               int frameIndex, BasicBlock::iterator& it,
-                               BasicBlock* bb);
-    void insertLoadStoreSpill(Instruction* inst, unsigned spilledReg,
-                              int frameIndex, BasicBlock::iterator& it,
-                              BasicBlock* bb);
+    void insertIntegerLoadStoreReload(Instruction* inst, unsigned spilledReg,
+                                      int frameIndex, BasicBlock::iterator& it,
+                                      BasicBlock* bb);
+    void insertIntegerLoadStoreSpill(Instruction* inst, unsigned spilledReg,
+                                     int frameIndex, BasicBlock::iterator& it,
+                                     BasicBlock* bb);
     void updateLoadStoreOperands(Instruction* inst, unsigned oldReg,
                                  unsigned addrTempReg, unsigned dataTempReg);
     void updateLoadStoreOperands(Instruction* inst, unsigned oldReg,
                                  unsigned addrTempReg);
+
+    void handleFloatLoadStoreSpill(Instruction* inst, unsigned spilledReg,
+                                   int frameIndex, BasicBlock::iterator& it,
+                                   BasicBlock* bb);
+    void insertFloatLoadSpill(Instruction* inst, unsigned spilledReg,
+                              int frameIndex, BasicBlock::iterator& it,
+                              BasicBlock* bb);
+    void insertFloatStoreReload(Instruction* inst, unsigned spilledReg,
+                                int frameIndex, BasicBlock::iterator& it,
+                                BasicBlock* bb);
 
     // 重写指令中的寄存器
     void rewriteInstructions();
@@ -185,7 +197,6 @@ class RegAllocChaitin {
 
     std::vector<unsigned> getDefinedRegs(Instruction* inst) const;
     std::vector<unsigned> getUsedRegs(Instruction* inst) const;
-
 
     // 调试和统计
     void printInterferenceGraph() const;

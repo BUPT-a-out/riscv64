@@ -45,15 +45,11 @@ class StackFrameManager {
 
     std::vector<std::unique_ptr<StackObject>> stackObjects;
     // TODO: spill float elsewhere
-    std::unordered_map<unsigned, int> spilledRegToStackSlot;
+
     std::unordered_map<const midend::Value*, int> allocaToStackSlot;
 
    public:
     explicit StackFrameManager(Function* func) : function(func) {}
-
-    // 栈对象管理
-    int allocateStackSlot(StackObjectType type, int size, int alignment = 8,
-                          unsigned regNum = 0);
 
     StackObject* getStackObject(int slotIndex) const;
     const std::vector<std::unique_ptr<StackObject>>& getAllStackObjects()
@@ -62,10 +58,6 @@ class StackFrameManager {
     }
 
     // alloca 对象管理
-    int getNewStackObjectIdentifier() {
-        static int nextId = 0;
-        return nextId++;
-    }
 
     void addStackObject(std::unique_ptr<StackObject> obj) {
         stackObjects.push_back(std::move(obj));
@@ -102,8 +94,46 @@ class StackFrameManager {
         return count;
     }
 
-    // 溢出寄存器管理
-    int allocateSpillSlot(unsigned regNum);
+    int createAllocaObject(const midend::Instruction* inst, int typeSize) {
+        int fi_id = getNewStackObjectIdentifier();
+        auto stack_obj = std::make_unique<StackObject>(
+            StackObjectType::AllocatedStackSlot, static_cast<int>(typeSize),
+            8,  // 8字节对齐
+            0   // 第一阶段不设置regNum
+        );
+        stack_obj->identifier = fi_id;
+
+        // 添加到栈帧管理器，但不计算偏移
+        addStackObject(std::move(stack_obj));
+        mapAllocaToStackSlot(inst, fi_id);
+
+        std::cout << "Created abstract Frame Index FI(" << fi_id
+                << ") for alloca, size: " << typeSize << " bytes" << std::endl;
+        return fi_id;
+    }
+
+    // TODO: float
+    int createSpillObject(unsigned reg) {
+        int fi_id = getNewStackObjectIdentifier();
+        auto spill_obj =
+            std::make_unique<StackObject>(StackObjectType::SpilledRegister,
+                                        8,   // 寄存器大小固定为8字节
+                                        8,   // 8字节对齐
+                                        reg  // 记录原始寄存器编号
+            );
+        spill_obj->identifier = fi_id;
+        addStackObject(std::move(spill_obj));
+
+        std::cout << "Created spill Frame Index FI(" << fi_id << ") for register "
+                << reg << std::endl;
+        return fi_id;
+    }
+
+    private:
+        int getNewStackObjectIdentifier() {
+            static int nextId = 0;
+            return nextId++;
+        }
 };
 
 }  // namespace riscv64
