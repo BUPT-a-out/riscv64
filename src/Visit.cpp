@@ -1953,7 +1953,13 @@ void Visitor::visitRetInstruction(const midend::Instruction* ret_inst,
             std::to_string(ret_inst->getNumOperands()));
     }
 
-    // 处理返回值
+    if (ret_inst->getNumOperands() == 0) {
+        // 无返回值，直接添加返回指令
+        auto riscv_ret_inst = std::make_unique<Instruction>(Opcode::RET, parent_bb);
+        parent_bb->addInstruction(std::move(riscv_ret_inst));
+        return;
+    }
+
     auto ret_operand = visit(ret_inst->getOperand(0), parent_bb);
     storeOperandToReg(std::move(ret_operand),
                       std::make_unique<RegisterOperand>("a0"), parent_bb);
