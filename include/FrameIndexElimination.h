@@ -67,7 +67,9 @@ class FrameIndexElimination {
     int calculateMaxCallArgSize();
 
     // 收集需要保存的寄存器列表
-    std::vector<int> collectSavedRegisters();
+    std::vector<int> collectSavedIntegerRegisters();
+    std::vector<int> collectSavedFloatRegisters();
+
 };
 
 }  // namespace riscv64
