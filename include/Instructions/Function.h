@@ -46,16 +46,9 @@ class Function {
     bool empty() const { return basic_blocks.empty(); }
     const std::string& getName() const { return name; }
 
-    BasicBlock* getEntryBlock() const {
-        auto it = std::find_if(
-            basic_blocks.begin(), basic_blocks.end(),
-            [](const auto& block) { return block->getLabel() == "entry"; });
-        if (it != basic_blocks.end()) {
-            // std::cout << "Found entry block: " << (*it)->getLabel() <<
-            // std::endl;
-            return it->get();
-        }
-        return nullptr;
+    BasicBlock* getEntryBlock() const { 
+        if (basic_blocks.empty()) return nullptr;
+        return basic_blocks.front().get();
     }
 
     auto getPostOrder() {
@@ -66,12 +59,16 @@ class Function {
             if (visited.count(bb)) return;
             visited.insert(bb);
             for (BasicBlock* succ : bb->getSuccessors()) {
-                dfs(succ);
+                if (succ) {
+                    dfs(succ);
+                }
             }
             postOrder.push_back(bb);
         };
-
-        dfs(getEntryBlock());
+        auto eb = getEntryBlock();
+        if (eb) {
+            dfs(eb);
+        }
         return postOrder;
     }
 
