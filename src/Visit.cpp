@@ -659,13 +659,15 @@ void Visitor::visitBranchInst(const midend::Instruction* inst,
                 // 条件为真，跳转到真分支
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::J, parent_bb);
-                instruction->addOperand(std::make_unique<LabelOperand>(true_bb));
+                instruction->addOperand(
+                    std::make_unique<LabelOperand>(true_bb));
                 parent_bb->addInstruction(std::move(instruction));
             } else {
                 // 条件为假，跳转到假分支
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::J, parent_bb);
-                instruction->addOperand(std::make_unique<LabelOperand>(false_bb));
+                instruction->addOperand(
+                    std::make_unique<LabelOperand>(false_bb));
                 parent_bb->addInstruction(std::move(instruction));
             }
             return;
@@ -1880,6 +1882,18 @@ void Visitor::storeOperandToReg(
                 inst->addOperand(std::make_unique<RegisterOperand>(
                     reg_source->getRegNum(),
                     reg_source->isVirtual()));  // rs
+                parent_bb->insert(insert_pos, std::move(inst));
+                break;
+            }
+            case OperandType::FrameIndex: {
+                auto inst =
+                    std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
+                auto* frame_source =
+                    dynamic_cast<FrameIndexOperand*>(source_operand.get());
+
+                inst->addOperand(std::move(dest_reg));  // rd
+                inst->addOperand(std::make_unique<FrameIndexOperand>(
+                    frame_source->getIndex()));  // FI
                 parent_bb->insert(insert_pos, std::move(inst));
                 break;
             }
