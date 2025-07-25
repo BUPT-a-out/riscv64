@@ -575,14 +575,10 @@ std::unique_ptr<MachineOperand> Visitor::visitCallInst(
             int stack_offset =
                 static_cast<int>((arg_i - 8) * 4);  // 假设每个参数4字节
 
-            // 生成存储指令：将参数存储到调用者的栈帧顶部
-            auto sw_inst = std::make_unique<Instruction>(Opcode::SW, parent_bb);
-            sw_inst->addOperand(std::move(source_reg));  // source register
-            sw_inst->addOperand(std::make_unique<MemoryOperand>(
-                std::make_unique<RegisterOperand>("sp"),
-                std::make_unique<ImmediateOperand>(
-                    stack_offset)));  // 存储到sp+offset
-            parent_bb->addInstruction(std::move(sw_inst));
+            // 使用新的辅助函数生成存储指令
+            generateMemoryInstruction(Opcode::SW, std::move(source_reg),
+                                      std::make_unique<RegisterOperand>("sp"),
+                                      stack_offset, parent_bb);
         }
     }
 
@@ -772,6 +768,10 @@ std::unique_ptr<MachineOperand> Visitor::visitAllocaInst(
     return std::make_unique<FrameIndexOperand>(fi_id);
 }
 
+// 注释：这些函数已经在 Visit.cpp 中实现，FrameIndexElimination
+// 中复用了相同的逻辑 未来可以考虑将这些函数提取到一个共同的工具类中，比如
+// RISCVUtils.h/cpp
+
 // 处理 store 指令
 void Visitor::visitStoreInst(const midend::Instruction* inst,
                              BasicBlock* parent_bb) {
@@ -925,15 +925,15 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
 
         // 加载到新的寄存器（也使用新的寄存器）
         auto new_reg = codeGen_->allocateReg();
-        auto load_inst_ptr =
-            std::make_unique<Instruction>(Opcode::LW, parent_bb);
-        load_inst_ptr->addOperand(std::make_unique<RegisterOperand>(
-            new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-        load_inst_ptr->addOperand(std::make_unique<MemoryOperand>(
+
+        // 使用新的辅助函数生成内存指令
+        generateMemoryInstruction(
+            Opcode::LW,
+            std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                              new_reg->isVirtual()),
             std::make_unique<RegisterOperand>(frame_addr_reg->getRegNum(),
                                               frame_addr_reg->isVirtual()),
-            std::make_unique<ImmediateOperand>(0)));  // memory address
-        parent_bb->addInstruction(std::move(load_inst_ptr));
+            0, parent_bb);
 
         // 建立load指令结果值到寄存器的映射
         codeGen_->mapValueToReg(inst, new_reg->getRegNum(),
@@ -958,15 +958,15 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
 
         // 加载到新的寄存器
         auto new_reg = codeGen_->allocateReg();
-        auto load_inst_ptr =
-            std::make_unique<Instruction>(Opcode::LW, parent_bb);
-        load_inst_ptr->addOperand(std::make_unique<RegisterOperand>(
-            new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-        load_inst_ptr->addOperand(std::make_unique<MemoryOperand>(
+
+        // 使用新的辅助函数生成内存指令
+        generateMemoryInstruction(
+            Opcode::LW,
+            std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                              new_reg->isVirtual()),
             std::make_unique<RegisterOperand>(address_reg->getRegNum(),
                                               address_reg->isVirtual()),
-            std::make_unique<ImmediateOperand>(0)));  // memory address
-        parent_bb->addInstruction(std::move(load_inst_ptr));
+            0, parent_bb);
 
         // 建立load指令结果值到寄存器的映射
         codeGen_->mapValueToReg(inst, new_reg->getRegNum(),
@@ -990,15 +990,15 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
 
         // 从全局变量地址加载值
         auto new_reg = codeGen_->allocateReg();
-        auto load_inst_ptr =
-            std::make_unique<Instruction>(Opcode::LW, parent_bb);
-        load_inst_ptr->addOperand(std::make_unique<RegisterOperand>(
-            new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-        load_inst_ptr->addOperand(std::make_unique<MemoryOperand>(
+
+        // 使用新的辅助函数生成内存指令
+        generateMemoryInstruction(
+            Opcode::LW,
+            std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                              new_reg->isVirtual()),
             std::make_unique<RegisterOperand>(global_addr_reg->getRegNum(),
                                               global_addr_reg->isVirtual()),
-            std::make_unique<ImmediateOperand>(0)));  // memory address
-        parent_bb->addInstruction(std::move(load_inst_ptr));
+            0, parent_bb);
 
         // 建立load指令结果值到寄存器的映射
         codeGen_->mapValueToReg(inst, new_reg->getRegNum(),
@@ -1665,9 +1665,12 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto xor_inst =
                     std::make_unique<Instruction>(Opcode::XOR, parent_bb);
                 xor_inst->addOperand(std::make_unique<RegisterOperand>(
-                    xor_reg->getRegNum(), xor_reg->isVirtual()));  // rd
-                xor_inst->addOperand(std::move(lhs_reg));          // rs1
-                xor_inst->addOperand(std::move(rhs_reg));          // rs2
+                    xor_reg->getRegNum(),
+                    xor_reg
+                        ->isVirtual()));  // rd
+                                          // xor_inst->addOperand(std::move(lhs_reg));
+                                          // // rs1
+                xor_inst->addOperand(std::move(rhs_reg));  // rs2
                 parent_bb->addInstruction(std::move(xor_inst));
 
                 new_reg = codeGen_->allocateReg();
@@ -1942,7 +1945,8 @@ void Visitor::visitRetInstruction(const midend::Instruction* ret_inst,
 
     if (ret_inst->getNumOperands() == 0) {
         // 无返回值，直接添加返回指令
-        auto riscv_ret_inst = std::make_unique<Instruction>(Opcode::RET, parent_bb);
+        auto riscv_ret_inst =
+            std::make_unique<Instruction>(Opcode::RET, parent_bb);
         parent_bb->addInstruction(std::move(riscv_ret_inst));
         return;
     }
@@ -1983,25 +1987,83 @@ std::unique_ptr<MachineOperand> Visitor::funcArgToReg(
             "BasicBlock context");
     }
 
-    // 计算正确的偏移量：需要越过当前函数的栈帧
-    // 被调用者的栈帧大小通常在后期确定，这里使用相对于帧指针的访问
-    // 栈参数位置：调用者在call指令前将参数放在自己的栈顶
-    // 被调用者需要从自己的栈帧之上读取这些参数
-
-    // 使用帧指针访问，避免依赖具体的栈帧大小
-    // 第9个参数(arg_no=8)位于帧指针+0处，第10个参数放在4(sp)，以此类推
+    // 计算正确的偏移量
     int arg_offset = (argument->getArgNo() - 8) * 4;
 
-    auto lw_inst = std::make_unique<Instruction>(Opcode::LW, parent_bb);
     auto arg_reg = codeGen_->allocateReg();
-    lw_inst->addOperand(std::make_unique<RegisterOperand>(
-        arg_reg->getRegNum(), arg_reg->isVirtual()));  // rd
-    lw_inst->addOperand(std::make_unique<MemoryOperand>(
-        std::make_unique<RegisterOperand>("s0"),  // 使用帧指针而不是sp
-        std::make_unique<ImmediateOperand>(arg_offset)));  // 相对于s0的偏移
-    parent_bb->addInstruction(std::move(lw_inst));
+
+    // 使用新的辅助函数生成加载指令
+    generateMemoryInstruction(
+        Opcode::LW,
+        std::make_unique<RegisterOperand>(arg_reg->getRegNum(),
+                                          arg_reg->isVirtual()),
+        std::make_unique<RegisterOperand>("s0"),  // 使用帧指针
+        arg_offset, parent_bb);
+
     return std::make_unique<RegisterOperand>(arg_reg->getRegNum(),
                                              arg_reg->isVirtual());
+}
+
+// 检查偏移量是否在有效的立即数范围内（-2048 到 +2047）
+bool Visitor::isValidImmediateOffset(int64_t offset) {
+    return offset >= -2048 && offset <= 2047;
+}
+
+// 处理大偏移量：生成临时寄存器并计算地址
+std::unique_ptr<RegisterOperand> Visitor::handleLargeOffset(
+    std::unique_ptr<RegisterOperand> base_reg, int64_t offset,
+    BasicBlock* parent_bb) {
+    if (isValidImmediateOffset(offset)) {
+        // 偏移量在有效范围内，直接返回原始寄存器
+        return base_reg;
+    }
+
+    // 偏移量超出范围，需要使用临时寄存器计算地址
+    auto temp_reg = codeGen_->allocateReg();
+
+    // 将偏移量加载到临时寄存器
+    auto li_inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
+    li_inst->addOperand(std::make_unique<RegisterOperand>(
+        temp_reg->getRegNum(), temp_reg->isVirtual()));
+    li_inst->addOperand(std::make_unique<ImmediateOperand>(offset));
+    parent_bb->addInstruction(std::move(li_inst));
+
+    // 计算最终地址：base + offset
+    auto addr_reg = codeGen_->allocateReg();
+    auto add_inst = std::make_unique<Instruction>(Opcode::ADD, parent_bb);
+    add_inst->addOperand(std::make_unique<RegisterOperand>(
+        addr_reg->getRegNum(), addr_reg->isVirtual()));
+    add_inst->addOperand(std::move(base_reg));
+    add_inst->addOperand(std::move(temp_reg));
+    parent_bb->addInstruction(std::move(add_inst));
+
+    return addr_reg;
+}
+
+// 生成内存指令，自动处理大偏移量
+void Visitor::generateMemoryInstruction(
+    Opcode opcode, std::unique_ptr<RegisterOperand> target_reg,
+    std::unique_ptr<RegisterOperand> base_reg, int64_t offset,
+    BasicBlock* parent_bb) {
+    if (isValidImmediateOffset(offset)) {
+        // 偏移量在有效范围内，直接生成指令
+        auto inst = std::make_unique<Instruction>(opcode, parent_bb);
+        inst->addOperand(std::move(target_reg));
+        inst->addOperand(std::make_unique<MemoryOperand>(
+            std::move(base_reg), std::make_unique<ImmediateOperand>(offset)));
+        parent_bb->addInstruction(std::move(inst));
+    } else {
+        // 偏移量超出范围，先计算地址
+        auto addr_reg =
+            handleLargeOffset(std::move(base_reg), offset, parent_bb);
+
+        // 使用计算出的地址和 0 偏移量生成指令
+        auto inst = std::make_unique<Instruction>(opcode, parent_bb);
+        inst->addOperand(std::move(target_reg));
+        inst->addOperand(std::make_unique<MemoryOperand>(
+            std::move(addr_reg), std::make_unique<ImmediateOperand>(0)));
+        parent_bb->addInstruction(std::move(inst));
+    }
 }
 
 std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
@@ -2454,167 +2516,5 @@ void Visitor::visit(const midend::GlobalVariable* global_var,
                   << std::endl;
     }
 }
-
-// 辅助函数：转换LLVM初始化器到ConstantInitializer
-// ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
-//     const midend::Value* init, const midend::Type* type) {
-//     std::cout << "Converting initializer: " << init->toString()
-//               << " for type: " << type->toString() << std::endl;
-
-//     // 处理单个整数常量
-//     if (const auto* const_int = midend::dyn_cast<midend::ConstantInt>(init))
-//     {
-//         int32_t value = static_cast<int32_t>(const_int->getSignedValue());
-//         std::cout << "Found ConstantInt: " << value << std::endl;
-//         return value;
-//     }
-
-//     // 处理单个浮点常量
-//     if (const auto* const_float = midend::dyn_cast<midend::ConstantFP>(init))
-//     {
-//         float value = const_float->getValue();
-//         std::cout << "Found ConstantFP: " << value << std::endl;
-//         return value;
-//     }
-
-//     // 处理数组常量
-//     if (const auto* const_array =
-//             midend::dyn_cast<midend::ConstantArray>(init)) {
-//         std::cout << "Processing ConstantArray with "
-//                   << const_array->getNumOperands() << " elements" <<
-//                   std::endl;
-
-//         const auto* array_type = dynamic_cast<const
-//         midend::ArrayType*>(type); if (!array_type) {
-//             throw std::runtime_error(
-//                 "Expected array type for ConstantArray initializer");
-//         }
-
-//         auto* element_type = array_type->getElementType();
-//         std::cout << "Array element type: " << element_type->toString()
-//                   << std::endl;
-
-//         // 递归处理嵌套数组或基本类型元素
-//         if (element_type->isArrayType()) {
-//             // 多维数组：需要展平处理
-//             std::vector<int32_t> flattened_values;
-
-//             for (unsigned i = 0; i < const_array->getNumOperands(); ++i) {
-//                 auto* element = const_array->getOperand(i);
-//                 std::cout << "Processing nested array element " << i << ": "
-//                           << element->toString() << std::endl;
-
-//                 auto nested_init =
-//                 convertLLVMInitializerToConstantInitializer(
-//                     element, element_type);
-
-//                 // 将嵌套数组的值添加到展平数组中
-//                 std::visit(
-//                     [&flattened_values](const auto& value) {
-//                         using T = std::decay_t<decltype(value)>;
-//                         if constexpr (std::is_same_v<T,
-//                         std::vector<int32_t>>) {
-//                             flattened_values.insert(flattened_values.end(),
-//                                                     value.begin(),
-//                                                     value.end());
-//                         } else if constexpr (std::is_same_v<T, int32_t>) {
-//                             flattened_values.push_back(value);
-//                         }
-//                         // 对于其他类型，暂时忽略
-//                     },
-//                     nested_init);
-//             }
-
-//             std::cout << "Flattened array size: " << flattened_values.size()
-//                       << std::endl;
-//             return flattened_values;
-
-//         } else if (element_type->isIntegerType()) {
-//             // 一维整数数组
-//             std::vector<int32_t> values;
-//             values.reserve(const_array->getNumOperands());
-
-//             for (unsigned i = 0; i < const_array->getNumOperands(); ++i) {
-//                 auto* element = const_array->getOperand(i);
-//                 std::cout << "Processing int array element " << i << ": "
-//                           << element->toString() << std::endl;
-
-//                 if (const auto* const_int =
-//                         midend::dyn_cast<midend::ConstantInt>(element)) {
-//                     int32_t value =
-//                         static_cast<int32_t>(const_int->getSignedValue());
-//                     values.push_back(value);
-//                     std::cout << "  -> value: " << value << std::endl;
-//                 } else {
-//                     // 对于非常量元素，默认为0
-//                     std::cout << "  -> default value: 0" << std::endl;
-//                     values.push_back(0);
-//                 }
-//             }
-
-//             std::cout << "Created int array with " << values.size()
-//                       << " elements" << std::endl;
-//             return values;
-
-//         } else if (element_type->isFloatType()) {
-//             // 一维浮点数组
-//             std::vector<float> values;
-//             values.reserve(const_array->getNumOperands());
-
-//             for (unsigned i = 0; i < const_array->getNumOperands(); ++i) {
-//                 auto* element = const_array->getOperand(i);
-//                 std::cout << "Processing float array element " << i << ": "
-//                           << element->toString() << std::endl;
-
-//                 if (const auto* const_float =
-//                         midend::dyn_cast<midend::ConstantFP>(element)) {
-//                     float value = const_float->getValue();
-//                     values.push_back(value);
-//                     std::cout << "  -> value: " << value << std::endl;
-//                 } else {
-//                     // 对于非常量元素，默认为0.0
-//                     std::cout << "  -> default value: 0.0" << std::endl;
-//                     values.push_back(0.0F);
-//                 }
-//             }
-
-//             std::cout << "Created float array with " << values.size()
-//                       << " elements" << std::endl;
-//             return values;
-//         }
-//     }
-
-//     // 检查是否为零初始化数组（通过类型判断）
-//     if (type->isArrayType()) {
-//         const auto* array_type = static_cast<const midend::ArrayType*>(type);
-//         auto* element_type = array_type->getElementType();
-
-//         // 计算总元素数量（支持多维数组）
-//         size_t total_elements = 1;
-//         const midend::Type* current_type = type;
-//         while (current_type->isArrayType()) {
-//             auto* arr_type =
-//                 static_cast<const midend::ArrayType*>(current_type);
-//             total_elements *= arr_type->getNumElements();
-//             current_type = arr_type->getElementType();
-//         }
-
-//         std::cout << "Creating zero-initialized array with " <<
-//         total_elements
-//                   << " elements" << std::endl;
-
-//         if (current_type->isIntegerType()) {
-//             std::vector<int32_t> zero_values(total_elements, 0);
-//             return zero_values;
-//         } else if (current_type->isFloatType()) {
-//             std::vector<float> zero_values(total_elements, 0.0f);
-//             return zero_values;
-//         }
-//     }
-
-//     // 对于其他情况，返回零初始化
-//     std::cout << "Returning ZeroInitializer for unhandled case" << std::endl;
-//     return ZeroInitializer{};
-// }
 
 }  // namespace riscv64

@@ -74,6 +74,16 @@ class Visitor {
     CodeGenerator* codeGen_;
 
     std::optional<RegisterOperand*> findRegForValue(const midend::Value* value);
+
+    // 辅助函数：处理大偏移量的内存操作
+    bool isValidImmediateOffset(int64_t offset);
+    std::unique_ptr<RegisterOperand> handleLargeOffset(
+        std::unique_ptr<RegisterOperand> base_reg, int64_t offset,
+        BasicBlock* parent_bb);
+    void generateMemoryInstruction(Opcode opcode,
+                                   std::unique_ptr<RegisterOperand> target_reg,
+                                   std::unique_ptr<RegisterOperand> base_reg,
+                                   int64_t offset, BasicBlock* parent_bb);
 };
 
 }  // namespace riscv64

@@ -316,6 +316,53 @@ void FrameIndexElimination::eliminateFrameIndices() {
     }
 }
 
+// 检查偏移量是否在有效的立即数范围内（-2048 到 +2047）
+bool FrameIndexElimination::isValidImmediateOffset(int64_t offset) const {
+    return offset >= -2048 && offset <= 2047;
+}
+
+// 生成带有大偏移量的加法指令，自动处理偏移量超出范围的情况
+void FrameIndexElimination::generateAddWithLargeOffset(
+    BasicBlock* bb, std::list<std::unique_ptr<Instruction>>::iterator& it,
+    int destRegNum, bool destIsVirtual, int baseRegNum, bool baseIsVirtual,
+    int64_t offset) {
+    if (isValidImmediateOffset(offset)) {
+        // 偏移量在有效范围内，直接生成 addi 指令
+        auto addInst = std::make_unique<Instruction>(Opcode::ADDI);
+        addInst->addOperand(
+            std::make_unique<RegisterOperand>(destRegNum, destIsVirtual));
+        addInst->addOperand(
+            std::make_unique<RegisterOperand>(baseRegNum, baseIsVirtual));
+        addInst->addOperand(std::make_unique<ImmediateOperand>(offset));
+
+        it = bb->insert(it, std::move(addInst));
+        ++it;
+    } else {
+        // 偏移量超出范围，需要分步处理
+        std::cout << "Large offset detected: " << offset
+                  << ", splitting into multiple instructions" << std::endl;
+
+        // 1. 将大偏移量加载到一个临时寄存器
+        // 注意：这里我们需要一个临时寄存器，但在这个阶段我们无法分配虚拟寄存器
+        // 我们使用 t0 (x5) 作为临时寄存器
+        auto liInst = std::make_unique<Instruction>(Opcode::LI);
+        liInst->addOperand(std::make_unique<RegisterOperand>(5, false));  // t0
+        liInst->addOperand(std::make_unique<ImmediateOperand>(offset));
+        it = bb->insert(it, std::move(liInst));
+        ++it;
+
+        // 2. 计算最终地址：dest = base + offset_in_temp_reg
+        auto addInst = std::make_unique<Instruction>(Opcode::ADD);
+        addInst->addOperand(
+            std::make_unique<RegisterOperand>(destRegNum, destIsVirtual));
+        addInst->addOperand(
+            std::make_unique<RegisterOperand>(baseRegNum, baseIsVirtual));
+        addInst->addOperand(std::make_unique<RegisterOperand>(5, false));  // t0
+        it = bb->insert(it, std::move(addInst));
+        ++it;
+    }
+}
+
 void FrameIndexElimination::eliminateFrameIndexInstruction(
     BasicBlock* bb, std::list<std::unique_ptr<Instruction>>::iterator& it) {
     auto& inst = *it;
@@ -339,24 +386,27 @@ void FrameIndexElimination::eliminateFrameIndexInstruction(
                                  " not found in final layout");
     }
 
-    // this offset is offset from sp.
     int offset = offsetIt->second;
 
     std::cout << "Eliminating frameaddr " << destReg->toString() << ", FI("
-              << fiIndex << ") -> addi " << destReg->toString() << ", s0, "
-              << offset << std::endl;
+              << fiIndex << ") -> ";
 
-    // 创建最终的addi指令: addi destReg, s0, offset
-    auto newInst = std::make_unique<Instruction>(Opcode::ADDI);
-    newInst->addOperand(std::make_unique<RegisterOperand>(
-        destReg->getRegNum(), destReg->isVirtual()));
-    newInst->addOperand(std::make_unique<RegisterOperand>(8, false));  // s0
-    newInst->addOperand(std::make_unique<ImmediateOperand>(offset));
+    if (isValidImmediateOffset(offset)) {
+        std::cout << "addi " << destReg->toString() << ", s0, " << offset
+                  << std::endl;
+    } else {
+        std::cout << "li t0, " << offset << "; add " << destReg->toString()
+                  << ", s0, t0" << std::endl;
+    }
 
-    // 替换指令
-    it = bb->insert(it, std::move(newInst));
-    ++it;
-    it = bb->erase(it);  // 删除原frameaddr指令
+    // 使用新的辅助函数生成指令，自动处理大偏移量
+    generateAddWithLargeOffset(bb, it, destReg->getRegNum(),
+                               destReg->isVirtual(), 8,
+                               false,  // s0 (frame pointer)
+                               offset);
+
+    // 删除原frameaddr指令
+    it = bb->erase(it);
 }
 
 int FrameIndexElimination::alignTo(int value, int alignment) const {
