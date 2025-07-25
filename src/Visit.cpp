@@ -41,7 +41,8 @@ void Visitor::visit(const midend::Function* func, Module* parent_module) {
 
     for (const auto& bb : *func) {
         // codeGen_->mapBBToLabel(bb, bb->getName());
-        auto new_riscv_bb = std::make_unique<BasicBlock>(func_ptr, bb->getName());
+        auto new_riscv_bb =
+            std::make_unique<BasicBlock>(func_ptr, bb->getName());
         auto* bb_ptr = new_riscv_bb.get();
         func_ptr->addBasicBlock(std::move(new_riscv_bb));
         func_ptr->mapBasicBlock(bb, bb_ptr);
@@ -195,7 +196,8 @@ void Visitor::createCFG(Function* func) {
 }
 
 // 访问基本块
-BasicBlock* Visitor::visit(const midend::BasicBlock* bb, Function* parent_func) {
+BasicBlock* Visitor::visit(const midend::BasicBlock* bb,
+                           Function* parent_func) {
     // 其他操作...
     auto* bb_ptr = parent_func->getBasicBlock(bb);
     // parent_func->addBasicBlock(std::move(riscv_bb));
@@ -582,39 +584,44 @@ std::unique_ptr<MachineOperand> Visitor::visitPhiInst(
         throw std::runtime_error("Not a PHI instruction: " + inst->toString());
     }
 
-    auto value_1 = visit(phi_inst->getIncomingValue(0), parent_bb);
-    auto value_2 = visit(phi_inst->getIncomingValue(1), parent_bb);
-
+    // 分配一个公共虚拟寄存器用于PHI结果
+    auto phi_reg = codeGen_->allocateReg();
     auto* parent_func = parent_bb->getParent();
 
-    auto* incoming_block_1 = parent_func->getBasicBlock(phi_inst->getIncomingBlock(0));
-    auto* incoming_block_2 = parent_func->getBasicBlock(phi_inst->getIncomingBlock(1));
+    // 记录PHI的映射
+    codeGen_->mapValueToReg(inst, phi_reg->getRegNum(), phi_reg->isVirtual());
 
-    if (incoming_block_1 == nullptr || incoming_block_2 == nullptr) {
-        throw std::runtime_error(
-            "Incoming blocks not found for PHI instruction: " +
-            inst->toString());
+    // 对每个前驱块，在其跳转指令前插入赋值
+    for (unsigned i = 0; i < phi_inst->getNumIncomingValues(); ++i) {
+        auto* incoming_value = phi_inst->getIncomingValue(i);
+        auto* incoming_bb_midend = phi_inst->getIncomingBlock(i);
+        auto* incoming_bb = parent_func->getBasicBlock(incoming_bb_midend);
+
+        if (!incoming_bb) {
+            throw std::runtime_error("Incoming block not found for PHI");
+        }
+
+        // 计算插入点：跳转指令前
+        auto insert_pos = incoming_bb->end();
+        if (insert_pos != incoming_bb->begin()) {
+            --insert_pos;
+            // 跳过末尾的PHI相关赋值（如果有），确保在跳转指令前
+            // 这里假设最后一条是跳转指令
+        }
+
+        // 访问输入值（在前驱块上下文）
+        auto value_operand = visit(incoming_value, incoming_bb);
+
+        // 赋值到公共寄存器
+        auto dest_reg = std::make_unique<RegisterOperand>(phi_reg->getRegNum(),
+                                                          phi_reg->isVirtual());
+        storeOperandToReg(std::move(value_operand), std::move(dest_reg),
+                          incoming_bb, insert_pos);
     }
 
-    // 在最后一条跳转指令之前，插入 mov 指令
-    auto new_reg = codeGen_->allocateReg();
-
-    // 为 PHI 指令分配的寄存器创建副本用于插入
-    auto dest_reg_1 = std::make_unique<RegisterOperand>(new_reg->getRegNum(),
-                                                        new_reg->isVirtual());
-    auto dest_reg_2 = std::make_unique<RegisterOperand>(new_reg->getRegNum(),
-                                                        new_reg->isVirtual());
-
-    storeOperandToReg(std::move(value_1), std::move(dest_reg_1),
-                      incoming_block_1, std::prev(incoming_block_1->end()));
-    storeOperandToReg(std::move(value_2), std::move(dest_reg_2),
-                      incoming_block_2, std::prev(incoming_block_2->end()));
-
-    // 映射 PHI 指令到分配的寄存器
-    codeGen_->mapValueToReg(inst, new_reg->getRegNum(), new_reg->isVirtual());
-
-    return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
-                                             new_reg->isVirtual());
+    // PHI块本身不生成任何指令，只返回寄存器
+    return std::make_unique<RegisterOperand>(phi_reg->getRegNum(),
+                                             phi_reg->isVirtual());
 }
 
 void Visitor::visitBranchInst(const midend::Instruction* inst,
