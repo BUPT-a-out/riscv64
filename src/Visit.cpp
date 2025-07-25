@@ -291,9 +291,32 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
                                                  register_operand->isVirtual());
     }
 
+    // 处理 FrameIndex 操作数
+    if (operand->getType() == OperandType::FrameIndex) {
+        auto* frame_operand = dynamic_cast<FrameIndexOperand*>(operand.get());
+        if (frame_operand == nullptr) {
+            throw std::runtime_error("Invalid frame index operand type: " +
+                                     operand->toString());
+        }
+
+        // 生成一个新的寄存器，并使用 FRAMEADDR 指令获取帧地址
+        auto new_reg = codeGen_->allocateReg();
+        auto instruction =
+            std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
+        instruction->addOperand(std::make_unique<RegisterOperand>(
+            new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+        instruction->addOperand(std::make_unique<FrameIndexOperand>(
+            frame_operand->getIndex()));  // FI
+        parent_bb->addInstruction(std::move(instruction));
+
+        return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                                 new_reg->isVirtual());
+    }
+
     auto* imm_operand = dynamic_cast<ImmediateOperand*>(operand.get());
     if (imm_operand == nullptr) {
-        throw std::runtime_error("Invalid immediate operand type");
+        throw std::runtime_error("Invalid immediate operand type: " +
+                                 operand->toString());
     }
 
     if (imm_operand->getValue() == 0) {
@@ -534,9 +557,19 @@ std::unique_ptr<MachineOperand> Visitor::visitCallInst(
                     " is null in call instruction: " + inst->toString());
             }
 
-            // 获取参数值并转换为寄存器（如果是立即数）
+            // 获取参数值
             auto source_value = visit(source_operand, parent_bb);
-            auto source_reg = immToReg(std::move(source_value), parent_bb);
+
+            // 处理不同类型的操作数
+            std::unique_ptr<RegisterOperand> source_reg;
+
+            if (source_value->getType() == OperandType::FrameIndex) {
+                // 如果是 FrameIndex，需要先获取其地址
+                source_reg = immToReg(std::move(source_value), parent_bb);
+            } else {
+                // 对于其他类型（立即数、寄存器），使用原有逻辑
+                source_reg = immToReg(std::move(source_value), parent_bb);
+            }
 
             // 计算栈上的偏移量：第9个参数(index=8)放在0(sp)，第10个参数放在4(sp)，以此类推
             int stack_offset =
