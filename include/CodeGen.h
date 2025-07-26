@@ -56,6 +56,12 @@ class CodeGenerator {
         FrameIndexPass framePass(func);
         framePass.run();
     }
+    
+    // 清理函数级别的映射（保留全局变量映射）
+    void clearFunctionLevelMappings() {
+        valueToReg_.clear();
+    }
+
 };
 
 }  // namespace riscv64

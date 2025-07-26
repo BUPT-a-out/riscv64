@@ -36,6 +36,9 @@ Module Visitor::visit(const midend::Module* module) {
 
 // 访问函数
 void Visitor::visit(const midend::Function* func, Module* parent_module) {
+    // 为新函数清理函数级别的映射
+    codeGen_->clearFunctionLevelMappings();
+
     // 其他操作...
     auto riscv_func = std::make_unique<Function>(func->getName());
     auto* func_ptr = riscv_func.get();
@@ -54,6 +57,9 @@ void Visitor::visit(const midend::Function* func, Module* parent_module) {
         visit(bb, func_ptr);
         // func_ptr->mapBasicBlock(bb, new_riscv_bb);
     }
+
+    // 为新函数清理函数级别的映射
+    codeGen_->clearFunctionLevelMappings();
 
     // 此时 func_ptr 已经包含了所有基本块，开始维护 CFG
     createCFG(func_ptr);
