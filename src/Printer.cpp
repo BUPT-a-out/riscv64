@@ -223,12 +223,38 @@ std::string DataSegment::toString() const {
                     // print the value.
                     result += "  .float " + std::to_string(value) + "\n";
                 } else if constexpr (std::is_same_v<T, std::vector<int32_t>>) {
-                    for (int32_t val : value) {
-                        result += "  .word " + std::to_string(val) + "\n";
+                    // Optimize consecutive zeros with .space directive
+                    size_t i = 0;
+                    while (i < value.size()) {
+                        if (value[i] != 0) {
+                            result += "  .word " + std::to_string(value[i]) + "\n";
+                            i++;
+                        } else {
+                            // Count consecutive zeros
+                            size_t zero_start = i;
+                            while (i < value.size() && value[i] == 0) {
+                                i++;
+                            }
+                            size_t zero_count = i - zero_start;
+                            result += "  .space " + std::to_string(zero_count * 4) + "\n";
+                        }
                     }
                 } else if constexpr (std::is_same_v<T, std::vector<float>>) {
-                    for (float val : value) {
-                        result += "  .float " + std::to_string(val) + "\n";
+                    // Optimize consecutive zeros with .space directive
+                    size_t i = 0;
+                    while (i < value.size()) {
+                        if (value[i] != 0.0f) {
+                            result += "  .float " + std::to_string(value[i]) + "\n";
+                            i++;
+                        } else {
+                            // Count consecutive zeros
+                            size_t zero_start = i;
+                            while (i < value.size() && value[i] == 0.0f) {
+                                i++;
+                            }
+                            size_t zero_count = i - zero_start;
+                            result += "  .space " + std::to_string(zero_count * 4) + "\n";
+                        }
                     }
                 }
                 // ZeroInitializer is handled by BSS logic, so it shouldn't be
