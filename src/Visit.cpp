@@ -9,6 +9,7 @@
 
 #include "ABI.h"
 #include "CodeGen.h"
+#include "IR/IRPrinter.h"
 #include "IR/Instructions.h"
 #include "IR/Module.h"
 #include "Instructions/All.h"
@@ -916,7 +917,8 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
 
         if (frame_id == -1) {
             throw std::runtime_error(
-                "Cannot find frame index for alloca instruction in load");
+                "Cannot find frame index for alloca instruction in load" +
+                midend::IRPrinter::toString(alloca_inst));
         }
 
         // 生成frameaddr指令来获取栈地址（每次都使用新的寄存器）
@@ -2292,28 +2294,52 @@ ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
         if (element_type->isArrayType()) {
             // 多维数组：需要展平处理
             std::vector<int32_t> flattened_values;
+            
+            // Get the expected size of each sub-array
+            const auto* sub_array_type = static_cast<const midend::ArrayType*>(element_type);
+            size_t sub_array_size = sub_array_type->getNumElements();
+            
+            // Get the expected number of sub-arrays
+            const auto* outer_array_type = static_cast<const midend::ArrayType*>(type);
+            size_t num_sub_arrays = outer_array_type->getNumElements();
 
-            for (unsigned i = 0; i < const_array->getNumElements(); ++i) {
-                auto* element = const_array->getElement(i);
-                std::cout << "Processing nested array element " << i << ": "
-                          << element->toString() << std::endl;
+            for (unsigned i = 0; i < num_sub_arrays; ++i) {
+                if (i < const_array->getNumElements()) {
+                    // Process explicitly initialized sub-array
+                    auto* element = const_array->getElement(i);
+                    std::cout << "Processing nested array element " << i << ": "
+                              << element->toString() << std::endl;
 
-                auto nested_init = convertLLVMInitializerToConstantInitializer(
-                    element, element_type);
+                    auto nested_init = convertLLVMInitializerToConstantInitializer(
+                        element, element_type);
 
-                // 将嵌套数组的值添加到展平数组中
-                std::visit(
-                    [&flattened_values](const auto& value) {
-                        using T = std::decay_t<decltype(value)>;
-                        if constexpr (std::is_same_v<T, std::vector<int32_t>>) {
-                            flattened_values.insert(flattened_values.end(),
-                                                    value.begin(), value.end());
-                        } else if constexpr (std::is_same_v<T, int32_t>) {
-                            flattened_values.push_back(value);
-                        }
-                        // 对于其他类型，暂时忽略
-                    },
-                    nested_init);
+                    // Track how many elements we've added for this sub-array
+                    size_t sub_array_start = flattened_values.size();
+                    
+                    // 将嵌套数组的值添加到展平数组中
+                    std::visit(
+                        [&flattened_values](const auto& value) {
+                            using T = std::decay_t<decltype(value)>;
+                            if constexpr (std::is_same_v<T, std::vector<int32_t>>) {
+                                flattened_values.insert(flattened_values.end(),
+                                                        value.begin(), value.end());
+                            } else if constexpr (std::is_same_v<T, int32_t>) {
+                                flattened_values.push_back(value);
+                            }
+                            // 对于其他类型，暂时忽略
+                        },
+                        nested_init);
+                    
+                    // Pad with zeros if the sub-array is not fully initialized
+                    size_t elements_added = flattened_values.size() - sub_array_start;
+                    if (elements_added < sub_array_size) {
+                        flattened_values.insert(flattened_values.end(), 
+                                              sub_array_size - elements_added, 0);
+                    }
+                } else {
+                    // No initializer for this sub-array, fill with zeros
+                    flattened_values.insert(flattened_values.end(), sub_array_size, 0);
+                }
             }
 
             std::cout << "Flattened array size: " << flattened_values.size()
@@ -2323,7 +2349,11 @@ ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
         } else if (element_type->isIntegerType()) {
             // 一维整数数组
             std::vector<int32_t> values;
-            values.reserve(const_array->getNumElements());
+            
+            // Get the expected array size from the type
+            const auto* array_type = static_cast<const midend::ArrayType*>(type);
+            size_t expected_size = array_type->getNumElements();
+            values.reserve(expected_size);
 
             for (unsigned i = 0; i < const_array->getNumElements(); ++i) {
                 auto* element = const_array->getElement(i);
@@ -2342,6 +2372,11 @@ ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
                     values.push_back(0);
                 }
             }
+            
+            // Pad with zeros if the initializer is smaller than the array
+            if (values.size() < expected_size) {
+                values.insert(values.end(), expected_size - values.size(), 0);
+            }
 
             std::cout << "Created int array with " << values.size()
                       << " elements" << std::endl;
@@ -2350,7 +2385,11 @@ ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
         } else if (element_type->isFloatType()) {
             // 一维浮点数组
             std::vector<float> values;
-            values.reserve(const_array->getNumElements());
+            
+            // Get the expected array size from the type
+            const auto* array_type = static_cast<const midend::ArrayType*>(type);
+            size_t expected_size = array_type->getNumElements();
+            values.reserve(expected_size);
 
             for (unsigned i = 0; i < const_array->getNumElements(); ++i) {
                 auto* element = const_array->getElement(i);
@@ -2367,6 +2406,11 @@ ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
                     std::cout << "  -> default value: 0.0" << std::endl;
                     values.push_back(0.0F);
                 }
+            }
+            
+            // Pad with zeros if the initializer is smaller than the array
+            if (values.size() < expected_size) {
+                values.insert(values.end(), expected_size - values.size(), 0.0F);
             }
 
             std::cout << "Created float array with " << values.size()
