@@ -73,8 +73,6 @@ class RegAllocChaitin {
 
     std::unique_ptr<SpillChainManager> spillChainManager;
 
-    StackFrameManager stackManager;
-
     // 维护度数缓存，避免重复计算
     std::unordered_map<unsigned, int> degreeCache;
     void initializeDegreeCache();
@@ -87,8 +85,7 @@ class RegAllocChaitin {
    public:
     explicit RegAllocChaitin(Function* func, bool assigningFloat = false)
         : assigningFloat(assigningFloat),
-          function(func),
-          stackManager(StackFrameManager(function)) {}
+          function(func) {}
 
     // 主要的寄存器分配接口
     void allocateRegisters();

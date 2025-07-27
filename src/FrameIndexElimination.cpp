@@ -25,8 +25,6 @@ void FrameIndexElimination::computeFinalFrameLayout() {
     assignFinalOffsets();
 }
 
-// TODO: order right.
-
 // 目前的布局:
 // 高地址端
 
