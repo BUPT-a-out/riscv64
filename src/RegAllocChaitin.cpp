@@ -537,7 +537,7 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
                     ++it;
                 } else {
                     // 生成load指令从溢出槽加载值
-                    auto loadInst = std::make_unique<Instruction>(Opcode::LW);
+                    auto loadInst = std::make_unique<Instruction>(Opcode::LD);
                     loadInst->addOperand(
                         std::make_unique<RegisterOperand>(tempReg, false));
                     loadInst->addOperand(std::make_unique<MemoryOperand>(
@@ -586,7 +586,7 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
                         std::make_unique<ImmediateOperand>(0)));
                     it = bb->insert(it, std::move(storeInst));
                 } else {
-                    auto storeInst = std::make_unique<Instruction>(Opcode::SW);
+                    auto storeInst = std::make_unique<Instruction>(Opcode::SD);
                     storeInst->addOperand(
                         std::make_unique<RegisterOperand>(tempReg, false));
                     storeInst->addOperand(std::make_unique<MemoryOperand>(
@@ -706,7 +706,7 @@ void RegAllocChaitin::insertIntegerLoadStoreReload(Instruction* inst,
     ++it;
 
     // 第二步：从溢出槽加载实际的地址值到临时寄存器
-    auto loadAddrInst = std::make_unique<Instruction>(Opcode::LW);
+    auto loadAddrInst = std::make_unique<Instruction>(Opcode::LD);
     loadAddrInst->addOperand(
         std::make_unique<RegisterOperand>(addrTempReg, false));
     loadAddrInst->addOperand(std::make_unique<MemoryOperand>(
@@ -745,7 +745,7 @@ void RegAllocChaitin::insertIntegerLoadStoreSpill(Instruction* inst,
     ++it;
 
     // 第二步：生成store指令将数据寄存器的值存储到溢出槽
-    auto storeInst = std::make_unique<Instruction>(Opcode::SW);
+    auto storeInst = std::make_unique<Instruction>(Opcode::SD);
     storeInst->addOperand(
         std::make_unique<RegisterOperand>(dataTempReg, false));
     storeInst->addOperand(std::make_unique<MemoryOperand>(
