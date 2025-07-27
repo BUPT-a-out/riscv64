@@ -54,6 +54,31 @@ void Visitor::visit(const midend::Function* func, Module* parent_module) {
         func_ptr->mapBasicBlock(bb, bb_ptr);
     }
 
+    // 第二阶段：在第一个基本块开头处理所有函数参数
+    auto first_bb_iter = func->begin();
+    if (first_bb_iter != func->end()) {
+        auto* first_riscv_bb = func_ptr->getBasicBlock(*first_bb_iter);
+        if (first_riscv_bb != nullptr) {
+            // 预先为所有参数分配虚拟寄存器并生成转移指令
+            for (auto arg_it = func->arg_begin(); arg_it != func->arg_end(); arg_it++) {
+                // 为参数分配虚拟寄存器
+                auto new_reg = codeGen_->allocateReg();
+                codeGen_->mapValueToReg(arg_it->get(), new_reg->getRegNum(), new_reg->isVirtual());
+                
+                // 获取参数的源寄存器或栈位置
+                auto source_reg = funcArgToReg(arg_it->get(), first_riscv_bb);
+                
+                // 生成参数转移指令（插入到基本块开头）
+                storeOperandToReg(
+                    std::move(source_reg),
+                    std::make_unique<RegisterOperand>(new_reg->getRegNum(), new_reg->isVirtual()),
+                    first_riscv_bb,
+                    first_riscv_bb->begin()  // 插入到开头
+                );
+            }
+        }
+    }
+
     for (const auto& bb : *func) {
         visit(bb, func_ptr);
         // func_ptr->mapBasicBlock(bb, new_riscv_bb);
@@ -2143,17 +2168,14 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
 
     // 如果是函数参数，先看是否已经有对应的虚拟寄存器（开头处已经完成），如果没有则需要分配虚拟寄存器（在这一步完成）
     if (value->getValueKind() == midend::ValueKind::Argument) {
-        const auto* argument = midend::cast<midend::Argument>(value);
-        auto new_reg = codeGen_->allocateReg();
-        codeGen_->mapValueToReg(value, new_reg->getRegNum(),
-                                new_reg->isVirtual());
-        auto source_reg = funcArgToReg(argument, parent_bb);
-        storeOperandToReg(std::move(source_reg),
-                          std::make_unique<RegisterOperand>(
-                              new_reg->getRegNum(), new_reg->isVirtual()),
-                          parent_bb, parent_bb->begin());
-
-        return new_reg;
+        // 参数应该已经在函数开头被转移到虚拟寄存器了
+        const auto foundReg = findRegForValue(value);
+        if (foundReg.has_value()) {
+            return std::make_unique<RegisterOperand>(foundReg.value()->getRegNum(),
+                                                    foundReg.value()->isVirtual());
+        }
+        throw std::runtime_error("Function argument not found in register mapping: " + 
+                                value->toString());
     }
 
     // 检查是否是alloca指令，如果是则应该返回对应的FrameIndex
