@@ -88,6 +88,7 @@ class RegAllocChaitin {
           function(func) {}
 
     // 主要的寄存器分配接口
+    void run();
     void allocateRegisters();
 
    private:

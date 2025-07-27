@@ -12,12 +12,23 @@
 namespace riscv64 {
 
 /// Entry
-void RegAllocChaitin::allocateRegisters() {
+void RegAllocChaitin::run() {
     initializeABIConstraints();
 
-    spillChainManager = std::make_unique<SpillChainManager>(
-        availableRegs, function->getMaxRegNum() + 100, assigningFloat);
+    std::vector<unsigned int> realAvailable;
+    for (auto reg : availableRegs) {
+        if (reservedPhysicalRegs.find(reg) == reservedPhysicalRegs.end()) {
+            realAvailable.push_back(reg);
+        }
+    }
 
+    spillChainManager = std::make_unique<SpillChainManager>(
+        realAvailable, function->getMaxRegNum() + 100, assigningFloat);
+
+    allocateRegisters();
+}
+
+void RegAllocChaitin::allocateRegisters() {
     computeLiveness();
 
     buildInterferenceGraph();
@@ -1640,7 +1651,6 @@ bool RegAllocChaitin::isUsedAcrossCalls(unsigned virtualReg) const {
     return false;
 }
 
-// TODO: once is enough
 void RegAllocChaitin::initializeABIConstraints() {
     // 设置可用寄存器列表（排除保留寄存器）
     availableRegs.clear();

@@ -70,8 +70,9 @@ Module& RISCV64Target::registerAllocationPass(riscv64::Module& module) {
     std::cout << "\n=== Phase 2: Register Allocation ===" << std::endl;
     
     for (auto& function : module) {
-        RegAllocChaitin allocator(function.get());
-        allocator.allocateRegisters();
+        // TODO: float first then int
+        RegAllocChaitin allocatorInt(function.get(), false);
+        allocatorInt.run();
     }
 
     std::cout << module.toString() << std::endl;
