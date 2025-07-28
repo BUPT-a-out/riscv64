@@ -173,7 +173,7 @@ std::string getABINameFromRegNum(unsigned num) {
                             " out of range");
 }
 
-bool isCallerSaved(unsigned physreg) {
+bool isCallerSaved(unsigned physreg, bool isFloat) {
     // 浮点Caller-saved寄存器: ft0-ft7 (32-39), ft8-ft11 (60-63), fa0-fa7
     // (42-49)
     return (physreg >= 32 && physreg <= 39) ||  // ft0-ft7
@@ -188,34 +188,53 @@ bool isCallerSaved(unsigned physreg) {
            (physreg == 1);                       // ra
 }
 
-bool isCalleeSaved(unsigned physreg) {
-    // 浮点Callee-saved寄存器: fs0-fs1 (40-41), fs2-fs11 (50-59)
-    return (physreg >= 40 && physreg <= 41) ||  // fs0-fs1
-           (physreg >= 50 && physreg <= 59)     // fs2-fs11
+bool isCalleeSaved(unsigned physreg, bool isFloat) {
+    if (isFloat) {
 
-           // 整数Callee-saved寄存器: s0-s1 (8-9), s2-s11 (18-27), sp (2)
-           || (physreg >= 8 && physreg <= 9) ||  // s0-s1
-           (physreg >= 18 && physreg <= 27) ||   // s2-s11
-           (physreg == 2);                       // sp
+        
+        // 浮点Callee-saved寄存器: fs0-fs1 (40-41), fs2-fs11 (50-59)
+        return (physreg >= 40 && physreg <= 41) ||  // fs0-fs1
+        (physreg >= 50 && physreg <= 59);     // fs2-fs11
+    } else {
+        
+        // 整数Callee-saved寄存器: s0-s1 (8-9), s2-s11 (18-27), sp (2)
+        return (physreg >= 8 && physreg <= 9) ||  // s0-s1
+        (physreg >= 18 && physreg <= 27) ||   // s2-s11
+        (physreg == 2);                       // sp
+    }
 }
 
-bool isArgumentReg(unsigned physreg) {
-    // 浮点参数寄存器: fa0-fa7 (42-49)
-    return (physreg >= 42 && physreg <= 49)
-           // 整数参数寄存器: a0-a7 (10-17)
-           || (physreg >= 10 && physreg <= 17);
+bool isArgumentReg(unsigned physreg, bool isFloat) {
+    if (isFloat) {
+        // 浮点参数寄存器: fa0-fa7 (42-49)
+        return (physreg >= 42 && physreg <= 49);
+
+    } else {
+
+        // 整数参数寄存器: a0-a7 (10-17)
+        return (physreg >= 10 && physreg <= 17);
+    }
 }
 
-bool isReturnReg(unsigned physreg) {
-    // 浮点返回值寄存器: fa0-fa1 (42-43)
-    return (physreg >= 42 && physreg <= 43)
-           // 整数返回值寄存器: a0-a1 (10-11)
-           || (physreg >= 10 && physreg <= 11);
+bool isReturnReg(unsigned physreg, bool isFloat) {
+    if (isFloat) {
+        // 浮点返回值寄存器: fa0-fa1 (42-43)
+        return (physreg >= 42 && physreg <= 43);
+    }
+    else {
+
+        // 整数返回值寄存器: a0-a1 (10-11)
+        return (physreg >= 10 && physreg <= 11);
+    }
 }
 
-bool isReservedReg(unsigned physreg) {
-    // x0 (zero), x1 (ra), x2 (sp), x3 (gp), x4 (tp)
-    return physreg <= 4;
+bool isReservedReg(unsigned physreg, bool isFloat) {
+    if (isFloat) {
+        return false;
+    } else {
+        // x0 (zero), x1 (ra), x2 (sp), x3 (gp), x4 (tp)
+        return physreg <= 4;
+    }
 }
 
 std::vector<unsigned> getCallerSavedRegs(bool isFloat) {
