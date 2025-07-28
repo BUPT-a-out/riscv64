@@ -70,13 +70,13 @@ void Visitor::visit(const midend::Function* func, Module* parent_module) {
                 // 获取参数的源寄存器或栈位置
                 auto source_reg = funcArgToReg(arg_it->get(), first_riscv_bb);
 
-                // 生成参数转移指令（插入到基本块开头）
+                // 生成参数转移指令
                 storeOperandToReg(
                     std::move(source_reg),
                     std::make_unique<RegisterOperand>(new_reg->getRegNum(),
                                                       new_reg->isVirtual()),
-                    first_riscv_bb,
-                    first_riscv_bb->begin()  // 插入到开头
+                    first_riscv_bb
+                    // first_riscv_bb->begin()  // 插入到开头
                 );
             }
         }
