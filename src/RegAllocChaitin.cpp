@@ -18,6 +18,7 @@ void RegAllocChaitin::run() {
     std::vector<unsigned int> realAvailable;
     for (auto reg : availableRegs) {
         if (reservedPhysicalRegs.find(reg) == reservedPhysicalRegs.end()) {
+            if (reg <= 17 && reg >=10) continue;
             realAvailable.push_back(reg);
         }
     }
@@ -577,7 +578,7 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
                 // 在指令后插入spill代码
                 // 生成frameaddr指令获取溢出槽地址
                 unsigned addrReg =
-                    spillChainManager->allocateTempRegister(reg, nullptr);
+                    spillChainManager->allocateTempRegister(reg, inst);
                 auto frameAddrInst =
                     std::make_unique<Instruction>(Opcode::FRAMEADDR);
                 frameAddrInst->addOperand(
@@ -1669,6 +1670,7 @@ void RegAllocChaitin::initializeABIConstraints() {
         for (unsigned reg = 10; reg <= 17; ++reg) {  // a0-a7
             availableRegs.push_back(reg);
         }
+
         for (unsigned reg = 28; reg <= 31; ++reg) {  // t3-t6
             availableRegs.push_back(reg);
         }

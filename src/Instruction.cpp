@@ -468,7 +468,7 @@ std::vector<unsigned> Instruction::getDefinedIntegerRegs() const {
         case SLT: case SLTU: case ADDI: case SLTI: case SLTIU:
         case XORI: case ORI: case ANDI: case SLLI: case SRLI: case SRAI:
         case LD: case LW: case LH: case LB: case LWU: case LHU: case LBU:
-        case LUI: case AUIPC: case MV: {
+        case LUI: case AUIPC: case MV: case LA: case FRAMEADDR: {
             if (operands[0]->isReg() && operands[0]->isIntegerRegister()) {
                 definedRegs.push_back(operands[0]->getRegNum());
             }
