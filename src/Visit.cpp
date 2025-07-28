@@ -536,7 +536,7 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
             li_stride_inst->addOperand(std::make_unique<RegisterOperand>(
                 stride_reg->getRegNum(), stride_reg->isVirtual()));
             li_stride_inst->addOperand(
-                std::make_unique<ImmediateOperand>(stride));
+                std::make_unique<ImmediateOperand>(static_cast<std::int64_t>(stride)));
             parent_bb->addInstruction(std::move(li_stride_inst));
 
             offset_reg = codeGen_->allocateReg();

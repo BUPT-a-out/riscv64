@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -39,13 +40,9 @@ class MachineOperand {
         throw std::runtime_error("Not a register operand");
     }
 
-    virtual bool isFloatRegister() const {
-        return false;
-    }
+    virtual bool isFloatRegister() const { return false; }
 
-    virtual bool isIntegerRegister() const {
-        return false;
-    }
+    virtual bool isIntegerRegister() const { return false; }
 
     virtual std::int64_t getValue() const {
         throw std::runtime_error("Not a immediate operand");
@@ -115,10 +112,59 @@ class RegisterOperand : public MachineOperand {
 // 派生类：立即数操作数
 class ImmediateOperand : public MachineOperand {
    public:
-    explicit ImmediateOperand(std::int64_t value)
-        : MachineOperand(OperandType::Immediate), value(value) {}
+    RegisterType type;  // 用于标识立即数的类型，整数或浮点数
 
-    std::int64_t getValue() const { return value; }
+    explicit ImmediateOperand(std::int64_t value)
+        : MachineOperand(OperandType::Immediate),
+          type(RegisterType::Integer),
+          value(value) {}
+
+    explicit ImmediateOperand(std::int32_t int_value)
+        : MachineOperand(OperandType::Immediate),
+          type(RegisterType::Integer),  // 存储为 64 位
+          value(static_cast<std::int64_t>(int_value)) {}
+
+    // 存储 float32
+    explicit ImmediateOperand(float float_value)
+        : MachineOperand(OperandType::Immediate), type(RegisterType::Float) {
+        // 使用 memcpy 来安全地进行类型转换（type-punning）
+        // 这是标准兼容的做法，可以避免未定义行为
+        // 我们将 32 位的 float 的二进制表示复制到一个 32 位的整数中
+        if (sizeof(float) != sizeof(std::int32_t)) {
+            throw std::runtime_error("Size of float is not 4 bytes");
+        }
+        std::int32_t temp_int_bits = 0;
+        std::memcpy(&temp_int_bits, &float_value, sizeof(float));
+
+        // 然后将这个 32 位的整数存入 64 位的 value 成员
+        this->value = static_cast<std::int64_t>(temp_int_bits);
+    }
+
+    RegisterType getValueType() const { return type; }
+    bool isInt() const { return type == RegisterType::Integer; }
+    bool isFloat() const { return type == RegisterType::Float; }
+
+    std::int64_t getValue() const {
+        return value;
+    }  // 获取存储的 64 位整数值，适配旧的方法定义
+    // 获取整数值 (如果不是整数则会触发断言)
+    std::int32_t getIntValue() const {
+        assert(isInt() &&
+               "Attempted to get integer value from a float immediate operand");
+        return static_cast<std::int32_t>(value);
+    }
+
+    // 获取浮点数值 (如果不是浮点数则会触发断言)
+    float getFloatValue() const {
+        assert(
+            isFloat() &&
+            "Attempted to get float value from an integer immediate operand");
+        float temp_float_val;
+        // 将存储的 32 位二进制表示转换回 float
+        auto int_bits = static_cast<std::int32_t>(value);
+        std::memcpy(&temp_float_val, &int_bits, sizeof(float));
+        return temp_float_val;
+    }
 
     std::string toString() const;
 

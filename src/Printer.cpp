@@ -44,7 +44,12 @@ std::string RegisterOperand::toString(bool use_abi) const {
     return "x" + std::to_string(regNum);
 }
 
-std::string ImmediateOperand::toString() const { return std::to_string(value); }
+std::string ImmediateOperand::toString() const { 
+    if (type == RegisterType::Float) {
+        return std::to_string(getFloatValue());
+    }
+    return std::to_string(value);
+}
 
 std::string LabelOperand::toString() const { return getLabelName(); }
 
