@@ -411,7 +411,7 @@ bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
                     if (usedColors.find(color) == usedColors.end() &&
                         reservedPhysicalRegs.find(color) ==
                             reservedPhysicalRegs.end() &&
-                        !ABI::isReservedReg(color, assigningFloat)) {
+                        !ABI::isReservedReg(color)) {
                         selectedColor = color;
                         break;
                     }
@@ -1096,39 +1096,39 @@ int RegAllocChaitin::calculateABIPriority(unsigned src, unsigned dst) const {
 
     // 如果目标是物理寄存器，根据ABI类型给予不同权重
     if (isPhysicalReg(dst)) {
-        if (ABI::isArgumentReg(dst, assigningFloat)) {
+        if (ABI::isArgumentReg(dst)) {
             priority += 20;  // 参数寄存器优先级高
-        } else if (ABI::isCalleeSaved(dst, assigningFloat)) {
+        } else if (ABI::isCalleeSaved(dst)) {
             priority += 15;  // 被调用者保存寄存器次之
-        } else if (ABI::isCallerSaved(dst, assigningFloat)) {
+        } else if (ABI::isCallerSaved(dst)) {
             priority += 10;  // 调用者保存寄存器再次之
         }
     } else if (isPhysicalReg(src)) {
-        if (ABI::isArgumentReg(src, assigningFloat)) {
+        if (ABI::isArgumentReg(src)) {
             priority += 18;
-        } else if (ABI::isCalleeSaved(src, assigningFloat)) {
+        } else if (ABI::isCalleeSaved(src)) {
             priority += 13;
-        } else if (ABI::isCallerSaved(src, assigningFloat)) {
+        } else if (ABI::isCallerSaved(src)) {
             priority += 8;
         }
     }
 
     // 如果两个寄存器都跨越函数调用，且目标是被调用者保存寄存器，增加权重
     if (crossesFunctionCall(src, dst)) {
-        if (isPhysicalReg(dst) && ABI::isCalleeSaved(dst, assigningFloat)) {
+        if (isPhysicalReg(dst) && ABI::isCalleeSaved(dst)) {
             priority += 25;
         } else if (isPhysicalReg(src) &&
-                   ABI::isCalleeSaved(src, assigningFloat)) {
+                   ABI::isCalleeSaved(src)) {
             priority += 20;
         }
     }
 
     // 如果不跨越函数调用，且目标是调用者保存寄存器，增加权重
     if (!crossesFunctionCall(src, dst)) {
-        if (isPhysicalReg(dst) && ABI::isCallerSaved(dst, assigningFloat)) {
+        if (isPhysicalReg(dst) && ABI::isCallerSaved(dst)) {
             priority += 15;
         } else if (isPhysicalReg(src) &&
-                   ABI::isCallerSaved(src, assigningFloat)) {
+                   ABI::isCallerSaved(src)) {
             priority += 12;
         }
     }
@@ -1317,8 +1317,8 @@ bool RegAllocChaitin::canCoalesce(unsigned src, unsigned dst) {
 
 bool RegAllocChaitin::canCoalesceWithABI(unsigned src, unsigned dst) const {
     // 不能合并保留寄存器
-    if (ABI::isReservedReg(src, assigningFloat) ||
-        ABI::isReservedReg(dst, assigningFloat)) {
+    if (ABI::isReservedReg(src) ||
+        ABI::isReservedReg(dst)) {
         return false;
     }
 
@@ -1326,18 +1326,18 @@ bool RegAllocChaitin::canCoalesceWithABI(unsigned src, unsigned dst) const {
     if (isPhysicalReg(src) || isPhysicalReg(dst)) {
         // 调用者保存和被调用者保存寄存器不能合并
         if (isPhysicalReg(src) && isPhysicalReg(dst)) {
-            if (ABI::isCallerSaved(src, assigningFloat) &&
-                ABI::isCalleeSaved(dst, assigningFloat))
+            if (ABI::isCallerSaved(src) &&
+                ABI::isCalleeSaved(dst))
                 return false;
-            if (ABI::isCalleeSaved(src, assigningFloat) &&
-                ABI::isCallerSaved(dst, assigningFloat))
+            if (ABI::isCalleeSaved(src) &&
+                ABI::isCallerSaved(dst))
                 return false;
         }
 
         // 检查函数调用边界
         if (crossesFunctionCall(src, dst)) {
             unsigned physReg = isPhysicalReg(src) ? src : dst;
-            if (ABI::isCallerSaved(physReg, assigningFloat)) {
+            if (ABI::isCallerSaved(physReg)) {
                 return false;  // 调用者保存寄存器不能跨函数调用合并
             }
         }
@@ -1533,7 +1533,7 @@ std::vector<unsigned> RegAllocChaitin::getABIPreferredRegs(
     if (physicalConstraints.find(virtualReg) != physicalConstraints.end()) {
         const auto& constraints = physicalConstraints.at(virtualReg);
         for (unsigned physReg : constraints) {
-            if (!ABI::isReservedReg(physReg, assigningFloat)) {
+            if (!ABI::isReservedReg(physReg)) {
                 preferredRegs.push_back(physReg);
             }
         }
@@ -1713,7 +1713,7 @@ void RegAllocChaitin::setParameterConstraints() {
         for (const auto& inst : *bb) {
             auto usedRegs = getUsedRegs(inst.get());
             for (unsigned reg : usedRegs) {
-                if (ABI::isArgumentReg(reg, assigningFloat)) {
+                if (ABI::isArgumentReg(reg)) {
                     usedParamRegs.insert(reg);
                 }
             }
@@ -1732,7 +1732,7 @@ void RegAllocChaitin::setParameterConstraints() {
                 unsigned dstReg = operands[0]->getRegNum();
                 unsigned srcReg = operands[1]->getRegNum();
 
-                if (ABI::isArgumentReg(srcReg, assigningFloat) &&
+                if (ABI::isArgumentReg(srcReg) &&
                     !isPhysicalReg(dstReg)) {
                     // 强制约束：参数虚拟寄存器必须分配到对应的参数物理寄存器
                     addStrongPhysicalConstraint(dstReg, srcReg);
@@ -1772,9 +1772,9 @@ void RegAllocChaitin::setReturnValueConstraints() {
                     auto definedRegs = getDefinedRegs(prevInst);
                     auto usedRegs = getUsedRegs(prevInst);
 
-                    // 如果指令定义了a0或a1
+                    // 如果指令定义了a0或a1/ fa0fa1
                     for (unsigned reg : definedRegs) {
-                        if (ABI::isReturnReg(reg, assigningFloat)) {
+                        if (ABI::isReturnReg(reg)) {
                             // 查找产生返回值的虚拟寄存器
                             for (unsigned srcReg : usedRegs) {
                                 if (!isPhysicalReg(srcReg)) {
@@ -1785,7 +1785,7 @@ void RegAllocChaitin::setReturnValueConstraints() {
                                               << srcReg << " -> physical reg "
                                               << reg << " ("
                                               << ABI::getABINameFromRegNum(
-                                                     reg, assigningFloat)
+                                                     reg)
                                               << ")" << std::endl;
                                 }
                             }
@@ -1800,8 +1800,8 @@ void RegAllocChaitin::setReturnValueConstraints() {
                             unsigned dstReg = operands[0]->getRegNum();
                             unsigned srcReg = operands[1]->getRegNum();
 
-                            // 如果目标是a0或a1，源是虚拟寄存器
-                            if (ABI::isReturnReg(dstReg, assigningFloat) &&
+                            // 如果目标是a0或a1, fa0,fa1，源是虚拟寄存器
+                            if (ABI::isReturnReg(dstReg) &&
                                 !isPhysicalReg(srcReg)) {
                                 addPhysicalConstraint(srcReg, dstReg);
                             }
@@ -1847,7 +1847,7 @@ void RegAllocChaitin::setPreCallConstraints(BasicBlock* bb,
 
         // 查找向参数寄存器赋值的指令
         for (unsigned reg : definedRegs) {
-            if (ABI::isArgumentReg(reg, assigningFloat)) {
+            if (ABI::isArgumentReg(reg)) {
                 auto usedRegs = getUsedRegs(inst);
                 for (unsigned srcReg : usedRegs) {
                     if (!isPhysicalReg(srcReg)) {
@@ -1856,7 +1856,7 @@ void RegAllocChaitin::setPreCallConstraints(BasicBlock* bb,
                         std::cout
                             << "Added call argument constraint: virtual reg "
                             << srcReg << " -> physical reg " << reg << " ("
-                            << ABI::getABINameFromRegNum(reg, assigningFloat)
+                            << ABI::getABINameFromRegNum(reg)
                             << ")" << std::endl;
                     }
                 }
@@ -1884,7 +1884,7 @@ void RegAllocChaitin::setPostCallConstraints(BasicBlock* bb,
         auto definedRegs = getDefinedRegs(it->get());
 
         for (unsigned reg : usedRegs) {
-            if (ABI::isReturnReg(reg, assigningFloat)) {
+            if (ABI::isReturnReg(reg)) {
                 // 如果指令将返回值复制到虚拟寄存器
                 for (unsigned dstReg : definedRegs) {
                     if (!isPhysicalReg(dstReg)) {
@@ -1893,7 +1893,7 @@ void RegAllocChaitin::setPostCallConstraints(BasicBlock* bb,
                         std::cout
                             << "Added call return constraint: virtual reg "
                             << dstReg << " -> physical reg " << reg << " ("
-                            << ABI::getABINameFromRegNum(reg, assigningFloat)
+                            << ABI::getABINameFromRegNum(reg)
                             << ")" << std::endl;
                     }
                 }
@@ -1944,7 +1944,7 @@ void RegAllocChaitin::printAllocationResult() const {
         if (!isPhysicalReg(virtualReg)) {
             std::cout << "Virtual register " << virtualReg
                       << " -> Physical register " << physicalReg << " ("
-                      << ABI::getABINameFromRegNum(physicalReg, assigningFloat)
+                      << ABI::getABINameFromRegNum(physicalReg)
                       << ")\n";
         }
     }

@@ -409,7 +409,7 @@ std::vector<int> FrameIndexElimination::collectSavedFloatRegisters() {
                     int regNum = regOp->getRegNum();
                     // fs0-fs11
                     if (regOp->isFloatRegister()) {
-                        if (ABI::isCalleeSaved(regNum, true)) {
+                        if (ABI::isCalleeSaved(regNum)) {
                             usedSavedRegs.insert(regNum);
                         }
                     }
