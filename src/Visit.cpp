@@ -60,18 +60,21 @@ void Visitor::visit(const midend::Function* func, Module* parent_module) {
         auto* first_riscv_bb = func_ptr->getBasicBlock(*first_bb_iter);
         if (first_riscv_bb != nullptr) {
             // 预先为所有参数分配虚拟寄存器并生成转移指令
-            for (auto arg_it = func->arg_begin(); arg_it != func->arg_end(); arg_it++) {
+            for (auto arg_it = func->arg_begin(); arg_it != func->arg_end();
+                 arg_it++) {
                 // 为参数分配虚拟寄存器
                 auto new_reg = codeGen_->allocateReg();
-                codeGen_->mapValueToReg(arg_it->get(), new_reg->getRegNum(), new_reg->isVirtual());
-                
+                codeGen_->mapValueToReg(arg_it->get(), new_reg->getRegNum(),
+                                        new_reg->isVirtual());
+
                 // 获取参数的源寄存器或栈位置
                 auto source_reg = funcArgToReg(arg_it->get(), first_riscv_bb);
-                
+
                 // 生成参数转移指令（插入到基本块开头）
                 storeOperandToReg(
                     std::move(source_reg),
-                    std::make_unique<RegisterOperand>(new_reg->getRegNum(), new_reg->isVirtual()),
+                    std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                                      new_reg->isVirtual()),
                     first_riscv_bb,
                     first_riscv_bb->begin()  // 插入到开头
                 );
@@ -306,6 +309,9 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Instruction* inst,
         case midend::Opcode::GetElementPtr:
             return visitGEPInst(inst, parent_bb);
             break;
+        case midend::Opcode::Cast:
+            return visitCastInst(inst, parent_bb);
+            break;
         default:
             // 其他指令类型
             throw std::runtime_error("Unsupported instruction: " +
@@ -367,6 +373,59 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
     parent_bb->addInstruction(std::move(instruction));
 
     return std::make_unique<RegisterOperand>(reg_num, is_virtual);
+}
+
+std::unique_ptr<MachineOperand> Visitor::visitCastInst(
+    const midend::Instruction* inst, BasicBlock* parent_bb) {
+    auto* cast_inst = midend::dyn_cast<midend::CastInst>(inst);
+    if (cast_inst == nullptr) {
+        throw std::runtime_error("Not a cast instruction: " + inst->toString());
+    }
+
+    switch (cast_inst->getCastOpcode()) {
+        case midend::CastInst::Trunc:
+        case midend::CastInst::SIToFP: {
+            auto* dest_type = cast_inst->getDestType();
+            auto* src_type = cast_inst->getSrcType();
+            if (dest_type == nullptr || src_type == nullptr) {
+                throw std::runtime_error("Invalid operands for trunc cast");
+            }
+            if (dest_type->isIntegerType()) {
+                // i32 -> i1
+                if (dest_type->getBitWidth() == 1 &&
+                    src_type->getBitWidth() > 1) {
+                    // use sltiu rd, rs1, imm
+                    auto new_reg = codeGen_->allocateReg();
+                    auto* new_reg_ptr = new_reg.get();
+                    auto src_operand =
+                        visit(cast_inst->getOperand(0), parent_bb);
+                    auto rs1 = immToReg(std::move(src_operand), parent_bb);
+                    auto instruction =
+                        std::make_unique<Instruction>(Opcode::SLTIU, parent_bb);
+                    instruction->addOperand(std::move(new_reg));  // rd
+                    instruction->addOperand(std::move(rs1));      // rs1
+                    instruction->addOperand(
+                        std::make_unique<ImmediateOperand>(1));  // imm
+
+                    parent_bb->addInstruction(std::move(instruction));
+                    return std::make_unique<RegisterOperand>(
+                        new_reg_ptr->getRegNum(), new_reg_ptr->isVirtual());
+                }
+
+                if (dest_type->getBitWidth() == 32 &&
+                    src_type->getBitWidth() == 1) {
+                    return immToReg(visit(cast_inst->getOperand(0), parent_bb),
+                                    parent_bb);
+                }
+            }
+            throw std::runtime_error("Unsupported trunc cast type: " +
+                                     dest_type->toString());
+        } break;
+
+        default:
+            throw std::runtime_error("Unsupported cast type: " +
+                                     cast_inst->toString());
+    }
 }
 
 // 修复 visitGEPInst 方法，支持全局变量作为基地址
@@ -2171,11 +2230,12 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         // 参数应该已经在函数开头被转移到虚拟寄存器了
         const auto foundReg = findRegForValue(value);
         if (foundReg.has_value()) {
-            return std::make_unique<RegisterOperand>(foundReg.value()->getRegNum(),
-                                                    foundReg.value()->isVirtual());
+            return std::make_unique<RegisterOperand>(
+                foundReg.value()->getRegNum(), foundReg.value()->isVirtual());
         }
-        throw std::runtime_error("Function argument not found in register mapping: " + 
-                                value->toString());
+        throw std::runtime_error(
+            "Function argument not found in register mapping: " +
+            value->toString());
     }
 
     // 检查是否是alloca指令，如果是则应该返回对应的FrameIndex
@@ -2316,13 +2376,15 @@ ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
         if (element_type->isArrayType()) {
             // 多维数组：需要展平处理
             std::vector<int32_t> flattened_values;
-            
+
             // Get the expected size of each sub-array
-            const auto* sub_array_type = static_cast<const midend::ArrayType*>(element_type);
+            const auto* sub_array_type =
+                static_cast<const midend::ArrayType*>(element_type);
             size_t sub_array_size = sub_array_type->getNumElements();
-            
+
             // Get the expected number of sub-arrays
-            const auto* outer_array_type = static_cast<const midend::ArrayType*>(type);
+            const auto* outer_array_type =
+                static_cast<const midend::ArrayType*>(type);
             size_t num_sub_arrays = outer_array_type->getNumElements();
 
             for (unsigned i = 0; i < num_sub_arrays; ++i) {
@@ -2332,35 +2394,41 @@ ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
                     std::cout << "Processing nested array element " << i << ": "
                               << element->toString() << std::endl;
 
-                    auto nested_init = convertLLVMInitializerToConstantInitializer(
-                        element, element_type);
+                    auto nested_init =
+                        convertLLVMInitializerToConstantInitializer(
+                            element, element_type);
 
                     // Track how many elements we've added for this sub-array
                     size_t sub_array_start = flattened_values.size();
-                    
+
                     // 将嵌套数组的值添加到展平数组中
                     std::visit(
                         [&flattened_values](const auto& value) {
                             using T = std::decay_t<decltype(value)>;
-                            if constexpr (std::is_same_v<T, std::vector<int32_t>>) {
+                            if constexpr (std::is_same_v<
+                                              T, std::vector<int32_t>>) {
                                 flattened_values.insert(flattened_values.end(),
-                                                        value.begin(), value.end());
+                                                        value.begin(),
+                                                        value.end());
                             } else if constexpr (std::is_same_v<T, int32_t>) {
                                 flattened_values.push_back(value);
                             }
                             // 对于其他类型，暂时忽略
                         },
                         nested_init);
-                    
+
                     // Pad with zeros if the sub-array is not fully initialized
-                    size_t elements_added = flattened_values.size() - sub_array_start;
+                    size_t elements_added =
+                        flattened_values.size() - sub_array_start;
                     if (elements_added < sub_array_size) {
-                        flattened_values.insert(flattened_values.end(), 
-                                              sub_array_size - elements_added, 0);
+                        flattened_values.insert(flattened_values.end(),
+                                                sub_array_size - elements_added,
+                                                0);
                     }
                 } else {
                     // No initializer for this sub-array, fill with zeros
-                    flattened_values.insert(flattened_values.end(), sub_array_size, 0);
+                    flattened_values.insert(flattened_values.end(),
+                                            sub_array_size, 0);
                 }
             }
 
@@ -2371,9 +2439,10 @@ ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
         } else if (element_type->isIntegerType()) {
             // 一维整数数组
             std::vector<int32_t> values;
-            
+
             // Get the expected array size from the type
-            const auto* array_type = static_cast<const midend::ArrayType*>(type);
+            const auto* array_type =
+                static_cast<const midend::ArrayType*>(type);
             size_t expected_size = array_type->getNumElements();
             values.reserve(expected_size);
 
@@ -2394,7 +2463,7 @@ ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
                     values.push_back(0);
                 }
             }
-            
+
             // Pad with zeros if the initializer is smaller than the array
             if (values.size() < expected_size) {
                 values.insert(values.end(), expected_size - values.size(), 0);
@@ -2407,9 +2476,10 @@ ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
         } else if (element_type->isFloatType()) {
             // 一维浮点数组
             std::vector<float> values;
-            
+
             // Get the expected array size from the type
-            const auto* array_type = static_cast<const midend::ArrayType*>(type);
+            const auto* array_type =
+                static_cast<const midend::ArrayType*>(type);
             size_t expected_size = array_type->getNumElements();
             values.reserve(expected_size);
 
@@ -2429,10 +2499,11 @@ ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
                     values.push_back(0.0F);
                 }
             }
-            
+
             // Pad with zeros if the initializer is smaller than the array
             if (values.size() < expected_size) {
-                values.insert(values.end(), expected_size - values.size(), 0.0F);
+                values.insert(values.end(), expected_size - values.size(),
+                              0.0F);
             }
 
             std::cout << "Created float array with " << values.size()
