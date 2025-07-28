@@ -384,7 +384,7 @@ std::vector<int> FrameIndexElimination::collectSavedIntegerRegisters() {
                     int regNum = regOp->getRegNum();
                     // s1-s11 对应寄存器号 9, 18-27
                     if (regOp->isIntegerRegister()) {
-                        if (regNum == 9 || (regNum >= 18 && regNum <= 27)) {
+                        if (ABI::isCalleeSaved(regNum, false)) {
                             usedSavedRegs.insert(regNum);
                         }
                     }
@@ -409,7 +409,7 @@ std::vector<int> FrameIndexElimination::collectSavedFloatRegisters() {
                     int regNum = regOp->getRegNum();
                     // fs0-fs11
                     if (regOp->isFloatRegister()) {
-                        if (ABI::isCalleeSaved(regNum)) {
+                        if (ABI::isCalleeSaved(regNum, true)) {
                             usedSavedRegs.insert(regNum);
                         }
                     }

@@ -403,7 +403,7 @@ bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
                     if (usedColors.find(color) == usedColors.end() &&
                         reservedPhysicalRegs.find(color) ==
                             reservedPhysicalRegs.end() &&
-                        !ABI::isReservedReg(color)) {
+                        !ABI::isReservedReg(color, assigningFloat)) {
                         selectedColor = color;
                         break;
                     }
@@ -515,7 +515,7 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
                 }
 
                 // 3. 最后更新原指令中的寄存器引用
-                updateRegisterInInstruction(inst, reg, dataReg);
+                updateRegisterInInstruction(inst, reg, dataReg, assigningFloat);
             }
 
             // 检查指令是否定义了溢出的寄存器
@@ -527,7 +527,7 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
                     spillChainManager->selectAvailablePhysicalDataReg(inst);
 
                 // 更新原指令中的寄存器引用
-                updateRegisterInInstruction(inst, reg, dataReg);
+                updateRegisterInInstruction(inst, reg, dataReg, assigningFloat);
                 ++it;
 
                 // 在指令后插入spill代码
@@ -569,10 +569,11 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
 // 更新指令中的寄存器引用
 void RegAllocChaitin::updateRegisterInInstruction(Instruction* inst,
                                                   unsigned oldReg,
-                                                  unsigned newReg) {
+                                                  unsigned newReg,
+                                                  bool isFloat) {
     const auto& operands = inst->getOperands();
     for (const auto& operand : operands) {
-        if (operand->isReg() && operand->isFloatRegister() == assigningFloat) {
+        if (operand->isReg() && operand->isFloatRegister() == isFloat) {
             RegisterOperand* regOp =
                 static_cast<RegisterOperand*>(operand.get());
             if (regOp->getRegNum() == oldReg) {
@@ -581,7 +582,7 @@ void RegAllocChaitin::updateRegisterInInstruction(Instruction* inst,
         } else if (operand->isMem()) {
             auto baseReg =
                 static_cast<MemoryOperand*>(operand.get())->getBaseReg();
-            if (baseReg->isFloatRegister() == assigningFloat &&
+            if (baseReg->isFloatRegister() == isFloat &&
                 baseReg->getRegNum() == oldReg) {
                 baseReg->setRegNum(newReg);
             }
@@ -678,6 +679,12 @@ void RegAllocChaitin::identifyCoalesceCandidates() {
                 const auto& operands = inst->getOperands();
                 if (operands.size() >= 2 && operands[0]->isReg() &&
                     operands[1]->isReg()) {
+                    if (operands[0]->isFloatRegister() != operands[0]->isFloatRegister()) {
+                        continue;  // 跳过两个不同类型寄存器的复制
+                    }
+                    if (operands[0]->isFloatRegister() != assigningFloat) {
+                        continue;  // 跳过并非当前处理类型寄存器的复制
+                    }
                     unsigned dst = operands[0]->getRegNum();
                     unsigned src = operands[1]->getRegNum();
 
@@ -685,6 +692,7 @@ void RegAllocChaitin::identifyCoalesceCandidates() {
                     if (isPhysicalReg(dst) && isPhysicalReg(src)) {
                         continue;  // 跳过两个物理寄存器的复制
                     }
+
 
                     // 确保合并方向正确
                     unsigned mergeTarget, mergeSource;
@@ -763,37 +771,37 @@ int RegAllocChaitin::calculateABIPriority(unsigned src, unsigned dst) const {
 
     // 如果目标是物理寄存器，根据ABI类型给予不同权重
     if (isPhysicalReg(dst)) {
-        if (ABI::isArgumentReg(dst)) {
+        if (ABI::isArgumentReg(dst, assigningFloat)) {
             priority += 20;  // 参数寄存器优先级高
-        } else if (ABI::isCalleeSaved(dst)) {
+        } else if (ABI::isCalleeSaved(dst, assigningFloat)) {
             priority += 15;  // 被调用者保存寄存器次之
-        } else if (ABI::isCallerSaved(dst)) {
+        } else if (ABI::isCallerSaved(dst, assigningFloat)) {
             priority += 10;  // 调用者保存寄存器再次之
         }
     } else if (isPhysicalReg(src)) {
-        if (ABI::isArgumentReg(src)) {
+        if (ABI::isArgumentReg(src, assigningFloat)) {
             priority += 18;
-        } else if (ABI::isCalleeSaved(src)) {
+        } else if (ABI::isCalleeSaved(src, assigningFloat)) {
             priority += 13;
-        } else if (ABI::isCallerSaved(src)) {
+        } else if (ABI::isCallerSaved(src, assigningFloat)) {
             priority += 8;
         }
     }
 
     // 如果两个寄存器都跨越函数调用，且目标是被调用者保存寄存器，增加权重
     if (crossesFunctionCall(src, dst)) {
-        if (isPhysicalReg(dst) && ABI::isCalleeSaved(dst)) {
+        if (isPhysicalReg(dst) && ABI::isCalleeSaved(dst, assigningFloat)) {
             priority += 25;
-        } else if (isPhysicalReg(src) && ABI::isCalleeSaved(src)) {
+        } else if (isPhysicalReg(src) && ABI::isCalleeSaved(src, assigningFloat)) {
             priority += 20;
         }
     }
 
     // 如果不跨越函数调用，且目标是调用者保存寄存器，增加权重
     if (!crossesFunctionCall(src, dst)) {
-        if (isPhysicalReg(dst) && ABI::isCallerSaved(dst)) {
+        if (isPhysicalReg(dst) && ABI::isCallerSaved(dst, assigningFloat)) {
             priority += 15;
-        } else if (isPhysicalReg(src) && ABI::isCallerSaved(src)) {
+        } else if (isPhysicalReg(src) && ABI::isCallerSaved(src, assigningFloat)) {
             priority += 12;
         }
     }
@@ -982,7 +990,7 @@ bool RegAllocChaitin::canCoalesce(unsigned src, unsigned dst) {
 
 bool RegAllocChaitin::canCoalesceWithABI(unsigned src, unsigned dst) const {
     // 不能合并保留寄存器
-    if (ABI::isReservedReg(src) || ABI::isReservedReg(dst)) {
+    if (ABI::isReservedReg(src, assigningFloat) || ABI::isReservedReg(dst, assigningFloat)) {
         return false;
     }
 
@@ -990,16 +998,16 @@ bool RegAllocChaitin::canCoalesceWithABI(unsigned src, unsigned dst) const {
     if (isPhysicalReg(src) || isPhysicalReg(dst)) {
         // 调用者保存和被调用者保存寄存器不能合并
         if (isPhysicalReg(src) && isPhysicalReg(dst)) {
-            if (ABI::isCallerSaved(src) && ABI::isCalleeSaved(dst))
+            if (ABI::isCallerSaved(src, assigningFloat) && ABI::isCalleeSaved(dst, assigningFloat))
                 return false;
-            if (ABI::isCalleeSaved(src) && ABI::isCallerSaved(dst))
+            if (ABI::isCalleeSaved(src, assigningFloat) && ABI::isCallerSaved(dst, assigningFloat))
                 return false;
         }
 
         // 检查函数调用边界
         if (crossesFunctionCall(src, dst)) {
             unsigned physReg = isPhysicalReg(src) ? src : dst;
-            if (ABI::isCallerSaved(physReg)) {
+            if (ABI::isCallerSaved(physReg, assigningFloat)) {
                 return false;  // 调用者保存寄存器不能跨函数调用合并
             }
         }
@@ -1184,7 +1192,11 @@ void RegAllocChaitin::removeRebundantCopies() {
 
 // 辅助函数实现
 bool RegAllocChaitin::isPhysicalReg(unsigned reg) const {
-    return reg < 32;  // RISC-V有32个物理寄存器 x0-x31/f0-f31
+    if (assigningFloat) {
+        return reg >= 32 && reg <= 63;  // 浮点寄存器 f0-f31 -> 32-63
+    } else {
+        return reg < 32;  // 整数寄存器 x0-x31 -> 0-31
+    }
 }
 
 std::vector<unsigned> RegAllocChaitin::getABIPreferredRegs(
@@ -1195,7 +1207,7 @@ std::vector<unsigned> RegAllocChaitin::getABIPreferredRegs(
     if (physicalConstraints.find(virtualReg) != physicalConstraints.end()) {
         const auto& constraints = physicalConstraints.at(virtualReg);
         for (unsigned physReg : constraints) {
-            if (!ABI::isReservedReg(physReg)) {
+            if (!ABI::isReservedReg(physReg, assigningFloat)) {
                 preferredRegs.push_back(physReg);
             }
         }
@@ -1204,10 +1216,19 @@ std::vector<unsigned> RegAllocChaitin::getABIPreferredRegs(
     // 根据使用模式推荐寄存器
     if (isUsedAsArgument(virtualReg)) {
         // 优先使用参数寄存器
-        for (unsigned reg = 10; reg <= 17; ++reg) {  // a0-a7 / fa0-fa7
-            if (std::find(preferredRegs.begin(), preferredRegs.end(), reg) ==
-                preferredRegs.end()) {
-                preferredRegs.push_back(reg);
+        if (assigningFloat) {
+            for (unsigned reg = 42; reg <= 49; ++reg) {  // fa0-fa7 -> 42-49
+                if (std::find(preferredRegs.begin(), preferredRegs.end(),
+                              reg) == preferredRegs.end()) {
+                    preferredRegs.push_back(reg);
+                }
+            }
+        } else {
+            for (unsigned reg = 10; reg <= 17; ++reg) {  // a0-a7
+                if (std::find(preferredRegs.begin(), preferredRegs.end(),
+                              reg) == preferredRegs.end()) {
+                    preferredRegs.push_back(reg);
+                }
             }
         }
     }
@@ -1215,15 +1236,14 @@ std::vector<unsigned> RegAllocChaitin::getABIPreferredRegs(
     if (isUsedAcrossCalls(virtualReg)) {
         // 优先使用被调用者保存寄存器
         if (assigningFloat) {
-            // fs0-fs11
-            for (unsigned reg = 8; reg <= 9; ++reg) {
+            // fs0-fs1 -> 40-41, fs2-fs11 -> 50-59
+            for (unsigned reg = 40; reg <= 41; ++reg) {
                 if (std::find(preferredRegs.begin(), preferredRegs.end(),
                               reg) == preferredRegs.end()) {
                     preferredRegs.push_back(reg);
                 }
             }
-
-            for (unsigned reg = 18; reg <= 27; ++reg) {  // fs2-fs11
+            for (unsigned reg = 50; reg <= 59; ++reg) {  // fs2-fs11
                 if (std::find(preferredRegs.begin(), preferredRegs.end(),
                               reg) == preferredRegs.end()) {
                     preferredRegs.push_back(reg);
@@ -1235,7 +1255,6 @@ std::vector<unsigned> RegAllocChaitin::getABIPreferredRegs(
                 preferredRegs.end()) {
                 preferredRegs.push_back(9);
             }
-
             for (unsigned reg = 18; reg <= 27; ++reg) {  // s2-s11
                 if (std::find(preferredRegs.begin(), preferredRegs.end(),
                               reg) == preferredRegs.end()) {
@@ -1243,17 +1262,17 @@ std::vector<unsigned> RegAllocChaitin::getABIPreferredRegs(
                 }
             }
         }
-
     } else {
         // 优先使用调用者保存寄存器
         if (assigningFloat) {
-            for (unsigned reg = 0; reg <= 7; ++reg) {  // ft0-ft7
+            // ft0-ft7 -> 32-39, ft8-ft11 -> 60-63
+            for (unsigned reg = 32; reg <= 39; ++reg) {  // ft0-ft7
                 if (std::find(preferredRegs.begin(), preferredRegs.end(),
                               reg) == preferredRegs.end()) {
                     preferredRegs.push_back(reg);
                 }
             }
-            for (unsigned reg = 28; reg <= 31; ++reg) {  // ft8-ft11
+            for (unsigned reg = 60; reg <= 63; ++reg) {  // ft8-ft11
                 if (std::find(preferredRegs.begin(), preferredRegs.end(),
                               reg) == preferredRegs.end()) {
                     preferredRegs.push_back(reg);
@@ -1317,26 +1336,23 @@ bool RegAllocChaitin::isUsedAcrossCalls(unsigned virtualReg) const {
 void RegAllocChaitin::initializeABIConstraints() {
     // 设置可用寄存器列表（排除保留寄存器）
     availableRegs.clear();
-
     if (assigningFloat) {
-        // 都能用
-        for (unsigned reg = 0; reg <= 31; ++reg) {
+        // 浮点寄存器使用32-63范围
+        for (unsigned reg = 32; reg <= 63; ++reg) {
             availableRegs.push_back(reg);
         }
     } else {
+        // 整数寄存器保持0-31范围，但排除保留寄存器
         // 添加调用者保存寄存器
         for (unsigned reg = 5; reg <= 7; ++reg) {  // t0-t2
             availableRegs.push_back(reg);
         }
-
         for (unsigned reg = 10; reg <= 17; ++reg) {  // a0-a7
             availableRegs.push_back(reg);
         }
-
         for (unsigned reg = 28; reg <= 31; ++reg) {  // t3-t6
             availableRegs.push_back(reg);
         }
-
         // 添加被调用者保存寄存器
         // s0作为fp不能分配
         availableRegs.push_back(9);                  // s1
@@ -1375,7 +1391,7 @@ void RegAllocChaitin::setParameterConstraints() {
         for (const auto& inst : *bb) {
             auto usedRegs = getUsedRegs(inst.get());
             for (unsigned reg : usedRegs) {
-                if (ABI::isArgumentReg(reg)) {
+                if (ABI::isArgumentReg(reg, assigningFloat)) {
                     usedParamRegs.insert(reg);
                 }
             }
@@ -1394,7 +1410,7 @@ void RegAllocChaitin::setParameterConstraints() {
                 unsigned dstReg = operands[0]->getRegNum();
                 unsigned srcReg = operands[1]->getRegNum();
 
-                if (ABI::isArgumentReg(srcReg) && !isPhysicalReg(dstReg)) {
+                if (ABI::isArgumentReg(srcReg, assigningFloat) && !isPhysicalReg(dstReg)) {
                     // 强制约束：参数虚拟寄存器必须分配到对应的参数物理寄存器
                     addStrongPhysicalConstraint(dstReg, srcReg);
                     paramToVirtual[srcReg] = dstReg;
@@ -1402,14 +1418,27 @@ void RegAllocChaitin::setParameterConstraints() {
             }
         }
         if (++paramIndex > 8) break;  // 只处理前8个参数
+        // TODO: maybe 16
+        // TODO: maybe useless code
     }
 
     // 确保未被虚拟寄存器接管的参数寄存器不被分配给其他虚拟寄存器
     // a0-a7 fa0-fa7
-    for (unsigned paramReg = 10; paramReg <= 17; ++paramReg) {
-        if (usedParamRegs.count(paramReg) && !paramToVirtual.count(paramReg)) {
-            // 这个参数寄存器被直接使用，需要保护
-            addReservedPhysicalReg(paramReg);
+    if (assigningFloat) {
+        // fa0-fa7 -> 42-49
+        for (unsigned paramReg = 42; paramReg <= 49; ++paramReg) {
+            if (usedParamRegs.count(paramReg) &&
+                !paramToVirtual.count(paramReg)) {
+                addReservedPhysicalReg(paramReg);
+            }
+        }
+    } else {
+        // a0-a7 -> 10-17
+        for (unsigned paramReg = 10; paramReg <= 17; ++paramReg) {
+            if (usedParamRegs.count(paramReg) &&
+                !paramToVirtual.count(paramReg)) {
+                addReservedPhysicalReg(paramReg);
+            }
         }
     }
 }
@@ -1435,7 +1464,7 @@ void RegAllocChaitin::setReturnValueConstraints() {
 
                     // 如果指令定义了a0或a1/ fa0fa1
                     for (unsigned reg : definedRegs) {
-                        if (ABI::isReturnReg(reg)) {
+                        if (ABI::isReturnReg(reg, assigningFloat)) {
                             // 查找产生返回值的虚拟寄存器
                             for (unsigned srcReg : usedRegs) {
                                 if (!isPhysicalReg(srcReg)) {
@@ -1461,7 +1490,7 @@ void RegAllocChaitin::setReturnValueConstraints() {
                             unsigned srcReg = operands[1]->getRegNum();
 
                             // 如果目标是a0或a1, fa0,fa1，源是虚拟寄存器
-                            if (ABI::isReturnReg(dstReg) &&
+                            if (ABI::isReturnReg(dstReg, assigningFloat) &&
                                 !isPhysicalReg(srcReg)) {
                                 addPhysicalConstraint(srcReg, dstReg);
                             }
@@ -1507,7 +1536,7 @@ void RegAllocChaitin::setPreCallConstraints(BasicBlock* bb,
 
         // 查找向参数寄存器赋值的指令
         for (unsigned reg : definedRegs) {
-            if (ABI::isArgumentReg(reg)) {
+            if (ABI::isArgumentReg(reg, assigningFloat)) {
                 auto usedRegs = getUsedRegs(inst);
                 for (unsigned srcReg : usedRegs) {
                     if (!isPhysicalReg(srcReg)) {
@@ -1544,7 +1573,7 @@ void RegAllocChaitin::setPostCallConstraints(BasicBlock* bb,
         auto definedRegs = getDefinedRegs(it->get());
 
         for (unsigned reg : usedRegs) {
-            if (ABI::isReturnReg(reg)) {
+            if (ABI::isReturnReg(reg, assigningFloat)) {
                 // 如果指令将返回值复制到虚拟寄存器
                 for (unsigned dstReg : definedRegs) {
                     if (!isPhysicalReg(dstReg)) {
@@ -1580,6 +1609,15 @@ std::vector<unsigned> RegAllocChaitin::getDefinedRegs(Instruction* inst) const {
 
 std::vector<unsigned> RegAllocChaitin::getUsedRegs(Instruction* inst) const {
     if (assigningFloat) {
+        // auto ufr = inst->getUsedFloatRegs();
+        // if (!ufr.empty()) {
+
+        //     std::cout<< inst->toString() << " uses ";
+        //     for (auto r: ufr) {
+        //         std::cout << r << " ";
+        //     }
+        //     std:: cout << "\n";
+        // }
         return inst->getUsedFloatRegs();
     } else {
         return inst->getUsedIntegerRegs();
