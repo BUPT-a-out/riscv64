@@ -43,7 +43,7 @@ std::string RegisterOperand::toString(bool use_abi) const {
     return "x" + std::to_string(regNum);
 }
 
-std::string ImmediateOperand::toString() const { 
+std::string ImmediateOperand::toString() const {
     if (type == RegisterType::Float) {
         return std::to_string(getFloatValue());
     }
@@ -227,7 +227,7 @@ std::string getInstructionName(Opcode opcode) {
         {Opcode::JR, "jr"},
         {Opcode::RET, "ret"},
         {Opcode::TAIL, "tail"},
-        {Opcode::FMOV_S, "fmov.s"},
+        {Opcode::FMOV_S, "fmv.s"},
         {Opcode::FABS_S, "fabs.s"},
         {Opcode::FNEG_S, "fneg.s"},
         {Opcode::FMOV_D, "fmov.d"},
@@ -345,7 +345,8 @@ std::string DataSegment::toString() const {
                     size_t i = 0;
                     while (i < value.size()) {
                         if (value[i] != 0) {
-                            result += "  .word " + std::to_string(value[i]) + "\n";
+                            result +=
+                                "  .word " + std::to_string(value[i]) + "\n";
                             i++;
                         } else {
                             // Count consecutive zeros
@@ -354,7 +355,8 @@ std::string DataSegment::toString() const {
                                 i++;
                             }
                             size_t zero_count = i - zero_start;
-                            result += "  .space " + std::to_string(zero_count * 4) + "\n";
+                            result += "  .space " +
+                                      std::to_string(zero_count * 4) + "\n";
                         }
                     }
                 } else if constexpr (std::is_same_v<T, std::vector<float>>) {
@@ -362,7 +364,8 @@ std::string DataSegment::toString() const {
                     size_t i = 0;
                     while (i < value.size()) {
                         if (value[i] != 0.0f) {
-                            result += "  .float " + std::to_string(value[i]) + "\n";
+                            result +=
+                                "  .float " + std::to_string(value[i]) + "\n";
                             i++;
                         } else {
                             // Count consecutive zeros
@@ -371,7 +374,8 @@ std::string DataSegment::toString() const {
                                 i++;
                             }
                             size_t zero_count = i - zero_start;
-                            result += "  .space " + std::to_string(zero_count * 4) + "\n";
+                            result += "  .space " +
+                                      std::to_string(zero_count * 4) + "\n";
                         }
                     }
                 }

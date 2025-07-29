@@ -23,6 +23,15 @@ void RegAllocChaitin::run() {
 }
 
 void RegAllocChaitin::allocateRegisters() {
+    // 检查递归深度，防止无限spill
+    if (spillDepth > MAX_SPILL_DEPTH) {
+        std::cerr << "ERROR: Maximum spill depth (" << MAX_SPILL_DEPTH
+                  << ") exceeded. Allocation failed." << std::endl;
+        // 清理状态并退出
+        spilledRegs.clear();
+        return;
+    }
+
     computeLiveness();
 
     buildInterferenceGraph();
@@ -38,9 +47,33 @@ void RegAllocChaitin::allocateRegisters() {
 
     // 如果着色失败，处理溢出
     if (!success) {
+        spillDepth++;  // 增加递归深度
+
+        // 检查是否有新的spill候选，避免重复spill同一个寄存器
+        std::vector<unsigned> newSpillCandidates;
+        for (unsigned reg : spilledRegs) {
+            if (alreadySpilled.find(reg) == alreadySpilled.end()) {
+                newSpillCandidates.push_back(reg);
+                alreadySpilled.insert(reg);
+            }
+        }
+
+        if (newSpillCandidates.empty()) {
+            std::cerr << "ERROR: No new spill candidates found. All registers "
+                         "already spilled."
+                      << std::endl;
+            spilledRegs.clear();
+            spillDepth--;
+            return;
+        }
+
+        std::cout << "Spill depth " << spillDepth << ", spilling "
+                  << newSpillCandidates.size() << " registers" << std::endl;
+
         handleSpills();
         // 重新尝试分配
         allocateRegisters();
+        spillDepth--;  // 递归返回时减少深度
         return;
     }
 
@@ -222,7 +255,57 @@ void RegAllocChaitin::buildInterferenceGraph() {
         std::cout << "\n";
     }
 
-    // 构建冲突边：逆序遍历
+    // 第一步：添加指令级别的冲突关系
+    for (auto& bb : *function) {
+        for (auto& inst : *bb) {
+            auto usedRegs = getUsedRegs(inst.get());
+            auto definedRegs = getDefinedRegs(inst.get());
+
+            // 同一条指令中定义的寄存器与使用的寄存器之间建立冲突
+            // （除了简单的移动指令）
+            bool isMoveType = (inst->getOpcode() == Opcode::FMOV_S ||
+                               inst->getOpcode() == Opcode::FMOV_D ||
+                               inst->getOpcode() == Opcode::MV);
+
+            if (!isMoveType) {
+                for (unsigned defReg : definedRegs) {
+                    for (unsigned useReg : usedRegs) {
+                        if (defReg != useReg && !isPhysicalReg(defReg) &&
+                            !isPhysicalReg(useReg)) {
+                            addInterference(defReg, useReg);
+                            if (assigningFloat) {
+                                std::cout
+                                    << "Adding instruction-level interference: "
+                                    << defReg << " <-> " << useReg << "\n";
+                            }
+                        }
+                    }
+                }
+
+                // 同一条指令中使用的多个寄存器之间也可能需要建立冲突
+                // （对于某些指令类型）
+                if (usedRegs.size() > 1) {
+                    for (size_t i = 0; i < usedRegs.size(); ++i) {
+                        for (size_t j = i + 1; j < usedRegs.size(); ++j) {
+                            unsigned reg1 = usedRegs[i];
+                            unsigned reg2 = usedRegs[j];
+                            if (!isPhysicalReg(reg1) && !isPhysicalReg(reg2)) {
+                                addInterference(reg1, reg2);
+                                if (assigningFloat) {
+                                    std::cout << "Adding same-instruction "
+                                                 "interference: "
+                                              << reg1 << " <-> " << reg2
+                                              << "\n";
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 第二步：构建基于活跃变量分析的冲突边
     for (auto& bb : *function) {
         const LivenessInfo& info = livenessInfo[bb.get()];
         std::unordered_set<unsigned> live = info.liveOut;
@@ -682,10 +765,24 @@ void RegAllocChaitin::rewriteOperand(MachineOperand* operand) {
             unsigned virtualReg = regOp->getRegNum();
             unsigned finalReg = getFinalCoalescedReg(virtualReg);
 
+            // 检查寄存器类型是否匹配当前分配器类型
+            bool regIsFloat = regOp->isFloatRegister();
+            if (regIsFloat != assigningFloat) {
+                // 如果寄存器类型不匹配当前分配器，跳过重写
+                return;
+            }
+
             if (virtualToPhysical.find(finalReg) != virtualToPhysical.end()) {
                 regOp->setPhysicalReg(virtualToPhysical[finalReg]);
             } else if (isPhysicalReg(finalReg)) {
                 regOp->setPhysicalReg(finalReg);
+            } else {
+                // 添加调试信息
+                std::cerr << "Warning: Virtual register " << virtualReg
+                          << " (type: " << (regIsFloat ? "float" : "int")
+                          << ") not allocated by "
+                          << (assigningFloat ? "float" : "int") << " allocator"
+                          << std::endl;
             }
         }
     } else if (operand->isMem()) {

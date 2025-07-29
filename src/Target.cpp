@@ -1,11 +1,11 @@
 #include "Target.h"
 
 #include "CodeGen.h"
-#include "IR/Function.h"
-#include "Visit.h"
-#include "FrameIndexPass.h"
 #include "FrameIndexElimination.h"
+#include "FrameIndexPass.h"
+#include "IR/Function.h"
 #include "RegAllocChaitin.h"
+#include "Visit.h"
 
 namespace riscv64 {
 
@@ -18,9 +18,9 @@ std::string RISCV64Target::compileToAssembly(const midend::Module& module) {
 
     // 执行完整的三阶段编译流程
     auto riscv_module = instructionSelectionPass(module);
-    initialFrameIndexPass(riscv_module);    // 第一阶段
-    registerAllocationPass(riscv_module);   // 第二阶段
-    frameIndexEliminationPass(riscv_module); // 第三阶段
+    initialFrameIndexPass(riscv_module);      // 第一阶段
+    registerAllocationPass(riscv_module);     // 第二阶段
+    frameIndexEliminationPass(riscv_module);  // 第三阶段
 
     return riscv_module.toString();
 }
@@ -34,16 +34,17 @@ Module RISCV64Target::instructionSelectionPass(const midend::Module& module) {
 }
 
 Module& RISCV64Target::initialFrameIndexPass(riscv64::Module& module) {
-    std::cout << "\n=== Phase 1.5: Initial Frame Index Creation ===" << std::endl;
-    
+    std::cout << "\n=== Phase 1.5: Initial Frame Index Creation ==="
+              << std::endl;
+
     // 第一阶段已经在指令选择中完成了alloca的Frame Index创建
     // 这里只需要确保所有alloca都有对应的抽象Frame Index
     for (auto& function : module) {
         if (function->empty()) continue;
-        
-        std::cout << "Verifying abstract Frame Indices for function: " 
+
+        std::cout << "Verifying abstract Frame Indices for function: "
                   << function->getName() << std::endl;
-        
+
         // 验证所有frameaddr指令都有有效的Frame Index
         for (auto& bb : *function) {
             for (auto& inst : *bb) {
@@ -52,8 +53,8 @@ Module& RISCV64Target::initialFrameIndexPass(riscv64::Module& module) {
                     if (operands.size() >= 2) {
                         if (auto* fi = dynamic_cast<FrameIndexOperand*>(
                                 operands[1].get())) {
-                            std::cout << "  Found abstract FI(" << fi->getIndex() 
-                                      << ")" << std::endl;
+                            std::cout << "  Found abstract FI("
+                                      << fi->getIndex() << ")" << std::endl;
                         }
                     }
                 }
@@ -62,19 +63,20 @@ Module& RISCV64Target::initialFrameIndexPass(riscv64::Module& module) {
     }
 
     std::cout << module.toString() << std::endl;
-    
+
     return module;
 }
 
 Module& RISCV64Target::registerAllocationPass(riscv64::Module& module) {
     std::cout << "\n=== Phase 2: Register Allocation ===" << std::endl;
-    
+
     for (auto& function : module) {
-        std::cout << "RegAlloc for float" << std::endl;
+        std::cout << "RegAlloc for all registers" << std::endl;
+        // 先分配浮点寄存器
         RegAllocChaitin allocatorFloat(function.get(), true);
         allocatorFloat.run();
 
-        std::cout << "RegAlloc for int" << std::endl;
+        // 然后分配整数寄存器，但不重写已经分配的浮点寄存器
         RegAllocChaitin allocatorInt(function.get(), false);
         allocatorInt.run();
     }
@@ -86,21 +88,23 @@ Module& RISCV64Target::registerAllocationPass(riscv64::Module& module) {
 
 Module& RISCV64Target::frameIndexEliminationPass(riscv64::Module& module) {
     std::cout << "\n=== Phase 3: Frame Index Elimination ===" << std::endl;
-    
+
     for (auto& function : module) {
         if (function->empty()) {
-            std::cout << "Skipping empty function: " << function->getName() << std::endl;
+            std::cout << "Skipping empty function: " << function->getName()
+                      << std::endl;
             continue;
         }
-        
-        std::cout << "Processing function: " << function->getName() << std::endl;
-        
+
+        std::cout << "Processing function: " << function->getName()
+                  << std::endl;
+
         FrameIndexElimination elimination(function.get());
         elimination.run();
     }
-    
+
     std::cout << "=== Frame Index Elimination Completed ===" << std::endl;
     return module;
 }
 
-}
+}  // namespace riscv64

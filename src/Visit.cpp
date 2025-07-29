@@ -415,6 +415,26 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
         if (imm_operand->isFloat()) {
             float float_value = imm_operand->getFloatValue();
 
+            // 特殊处理浮点零值
+            if (float_value == 0.0f) {
+                // 分配浮点寄存器
+                auto float_reg = codeGen_->allocateFloatReg();
+
+                // 使用 fcvt.s.w 指令将整数零转换为浮点零
+                auto fcvt_inst =
+                    std::make_unique<Instruction>(Opcode::FCVT_S_W, parent_bb);
+                fcvt_inst->addOperand(std::make_unique<RegisterOperand>(
+                    float_reg->getRegNum(), float_reg->isVirtual(),
+                    RegisterType::Float));  // rd (float)
+                fcvt_inst->addOperand(std::make_unique<RegisterOperand>(
+                    "zero"));  // rs1 (int zero)
+                parent_bb->addInstruction(std::move(fcvt_inst));
+
+                return std::make_unique<RegisterOperand>(float_reg->getRegNum(),
+                                                         float_reg->isVirtual(),
+                                                         RegisterType::Float);
+            }
+
             // 分配浮点寄存器
             auto float_reg = codeGen_->allocateFloatReg();
 
@@ -463,8 +483,11 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
         }
 
         // 处理整数立即数
-        if (imm_operand->getValue() == 0) {
-            // 如果立即数是 0，直接返回 zero
+        if (!imm_operand->isFloat() && imm_operand->getValue() == 0) {
+            // 检查当前指令是否需要浮点零（例如浮点比较指令）
+            // 注意：这是一个近似的判断，实际上应该根据指令类型更精确地判断
+
+            // 如果立即数是整数 0，直接返回 zero 寄存器
             return std::make_unique<RegisterOperand>("zero");
         }
 
@@ -483,6 +506,54 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
 
     throw std::runtime_error("Unsupported operand type in immToReg: " +
                              operand->toString());
+}
+
+// 确保操作数在浮点寄存器中，特殊处理零值
+std::unique_ptr<RegisterOperand> Visitor::ensureFloatReg(
+    std::unique_ptr<MachineOperand> operand, BasicBlock* parent_bb) {
+    // 如果已经是寄存器，确保是浮点寄存器类型
+    if (operand->isReg()) {
+        auto* reg_op = dynamic_cast<RegisterOperand*>(operand.get());
+        return std::make_unique<RegisterOperand>(
+            reg_op->getRegNum(), reg_op->isVirtual(), RegisterType::Float);
+    }
+
+    // 如果是立即数，检查是否为零值
+    if (operand->getType() == OperandType::Immediate) {
+        auto* imm_operand = dynamic_cast<ImmediateOperand*>(operand.get());
+
+        // 检查是否为零值（整数零或浮点零）
+        bool is_zero = false;
+        if (imm_operand->isFloat()) {
+            is_zero = (imm_operand->getFloatValue() == 0.0f);
+        } else {
+            is_zero = (imm_operand->getValue() == 0);
+        }
+
+        if (is_zero) {
+            // 分配浮点寄存器
+            auto float_reg = codeGen_->allocateFloatReg();
+
+            // 使用 fcvt.s.w 指令将整数零转换为浮点零
+            auto fcvt_inst =
+                std::make_unique<Instruction>(Opcode::FCVT_S_W, parent_bb);
+            fcvt_inst->addOperand(std::make_unique<RegisterOperand>(
+                float_reg->getRegNum(), float_reg->isVirtual(),
+                RegisterType::Float));  // rd (float)
+            fcvt_inst->addOperand(
+                std::make_unique<RegisterOperand>("zero"));  // rs1 (int zero)
+            parent_bb->addInstruction(std::move(fcvt_inst));
+
+            return std::make_unique<RegisterOperand>(float_reg->getRegNum(),
+                                                     float_reg->isVirtual(),
+                                                     RegisterType::Float);
+        }
+    }
+
+    // 对于其他情况，使用原有的 immToReg 逻辑但确保返回浮点寄存器类型
+    auto reg = immToReg(std::move(operand), parent_bb);
+    return std::make_unique<RegisterOperand>(reg->getRegNum(), reg->isVirtual(),
+                                             RegisterType::Float);
 }
 
 std::unique_ptr<MachineOperand> Visitor::visitCastInst(
@@ -1069,9 +1140,12 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
 
     const auto* store_inst = dynamic_cast<const midend::StoreInst*>(inst);
 
-    // 获取存储的值
+    // 获取存储的值，根据类型确保正确的寄存器类型
+    auto raw_value_operand = visit(store_inst->getValueOperand(), parent_bb);
     auto value_operand =
-        immToReg(visit(store_inst->getValueOperand(), parent_bb), parent_bb);
+        store_inst->getValueOperand()->getType()->isFloatType()
+            ? ensureFloatReg(std::move(raw_value_operand), parent_bb)
+            : immToReg(std::move(raw_value_operand), parent_bb);
 
     // 获取指针操作数
     auto* pointer_operand = store_inst->getPointerOperand();
@@ -1370,30 +1444,57 @@ std::unique_ptr<MachineOperand> Visitor::visitUnaryOp(
     if (inst->getOpcode() == midend::Opcode::USub) {
         auto operand = visit(inst->getOperand(0), parent_bb);
 
+        // 检查是否为浮点操作
+        bool is_float_op = inst->getType()->isFloatType();
+
         // If both are immediates, do constant folding
         if (operand->getType() == OperandType::Immediate) {
             auto* imm_operand = dynamic_cast<ImmediateOperand*>(operand.get());
-            return std::make_unique<ImmediateOperand>(-imm_operand->getValue());
+            if (is_float_op) {
+                return std::make_unique<ImmediateOperand>(
+                    -imm_operand->getFloatValue());
+            } else {
+                return std::make_unique<ImmediateOperand>(
+                    -imm_operand->getValue());
+            }
         }
 
         // Convert operand to register if needed
         auto operand_reg = immToReg(std::move(operand), parent_bb);
 
-        // Generate sub instruction: 0 - operand
-        auto new_reg = codeGen_->allocateReg();
-        auto instruction =
-            std::make_unique<Instruction>(Opcode::SUB, parent_bb);
-        instruction->addOperand(std::make_unique<RegisterOperand>(
-            new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-        instruction->addOperand(
-            std::make_unique<RegisterOperand>("zero"));   // rs1 (zero register)
-        instruction->addOperand(std::move(operand_reg));  // rs2
-        parent_bb->addInstruction(std::move(instruction));
+        if (is_float_op) {
+            // 浮点数取负：使用 fneg.s 指令
+            auto new_reg = codeGen_->allocateFloatReg();
+            auto instruction =
+                std::make_unique<Instruction>(Opcode::FNEG_S, parent_bb);
+            instruction->addOperand(std::make_unique<RegisterOperand>(
+                new_reg->getRegNum(), new_reg->isVirtual(),
+                RegisterType::Float));                        // rd
+            instruction->addOperand(std::move(operand_reg));  // rs1
+            parent_bb->addInstruction(std::move(instruction));
 
-        codeGen_->mapValueToReg(inst, new_reg->getRegNum(),
-                                new_reg->isVirtual());
-        return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
-                                                 new_reg->isVirtual());
+            codeGen_->mapValueToReg(inst, new_reg->getRegNum(),
+                                    new_reg->isVirtual());
+            return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                                     new_reg->isVirtual(),
+                                                     RegisterType::Float);
+        } else {
+            // 整数取负：使用 sub 指令: 0 - operand
+            auto new_reg = codeGen_->allocateReg();
+            auto instruction =
+                std::make_unique<Instruction>(Opcode::SUB, parent_bb);
+            instruction->addOperand(std::make_unique<RegisterOperand>(
+                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+            instruction->addOperand(std::make_unique<RegisterOperand>(
+                "zero"));  // rs1 (zero register)
+            instruction->addOperand(std::move(operand_reg));  // rs2
+            parent_bb->addInstruction(std::move(instruction));
+
+            codeGen_->mapValueToReg(inst, new_reg->getRegNum(),
+                                    new_reg->isVirtual());
+            return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
+                                                     new_reg->isVirtual());
+        }
     }
 
     // Handle Not: !operand
@@ -1615,6 +1716,12 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
         }
 
         case midend::Opcode::Mul: {
+            // 检查是否为浮点乘法
+            if (is_float_op) {
+                // 重定向到浮点乘法函数
+                return visitFloatBinaryOp(inst, parent_bb);
+            }
+
             // 先判断是否是两个立即数
             if ((lhs->getType() == OperandType::Immediate) &&
                 (rhs->getType() == OperandType::Immediate)) {
@@ -1640,6 +1747,12 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
         }
 
         case midend::Opcode::Div: {
+            // 检查是否为浮点除法
+            if (is_float_op) {
+                // 重定向到浮点除法函数
+                return visitFloatBinaryOp(inst, parent_bb);
+            }
+
             // 处理有符号除法
             if ((lhs->getType() == OperandType::Immediate) &&
                 (rhs->getType() == OperandType::Immediate)) {
@@ -2122,6 +2235,13 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
         }
 
         case midend::Opcode::ICmpSLT: {
+            // 检查是否为浮点比较
+            bool is_float_cmp = inst->getOperand(0)->getType()->isFloatType();
+            if (is_float_cmp) {
+                // 浮点小于比较，重定向到浮点比较函数
+                return visitFloatBinaryOp(inst, parent_bb);
+            }
+
             // 处理有符号小于比较
             if ((lhs->getType() == OperandType::Immediate) &&
                 (rhs->getType() == OperandType::Immediate)) {
@@ -2399,15 +2519,19 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
                                                                            : 0);
             }
 
+            // 确保操作数都在浮点寄存器中
+            auto lhs_reg = ensureFloatReg(std::move(lhs), parent_bb);
+            auto rhs_reg = ensureFloatReg(std::move(rhs), parent_bb);
+
             // 使用 feq.s 指令
             new_reg = codeGen_->allocateReg();  // 比较结果是整数
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FEQ_S, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual(),
-                RegisterType::Integer));              // rd
-            instruction->addOperand(std::move(lhs));  // rs1
-            instruction->addOperand(std::move(rhs));  // rs2
+                RegisterType::Integer));                  // rd
+            instruction->addOperand(std::move(lhs_reg));  // rs1
+            instruction->addOperand(std::move(rhs_reg));  // rs2
             parent_bb->addInstruction(std::move(instruction));
 
             break;
@@ -2424,15 +2548,19 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
                                                                            : 0);
             }
 
+            // 确保操作数都在浮点寄存器中
+            auto lhs_reg = ensureFloatReg(std::move(lhs), parent_bb);
+            auto rhs_reg = ensureFloatReg(std::move(rhs), parent_bb);
+
             // 先使用 feq.s 指令得到相等结果，然后取反
             new_reg = codeGen_->allocateReg();
             auto feq_inst =
                 std::make_unique<Instruction>(Opcode::FEQ_S, parent_bb);
             feq_inst->addOperand(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual(),
-                RegisterType::Integer));           // rd
-            feq_inst->addOperand(std::move(lhs));  // rs1
-            feq_inst->addOperand(std::move(rhs));  // rs2
+                RegisterType::Integer));               // rd
+            feq_inst->addOperand(std::move(lhs_reg));  // rs1
+            feq_inst->addOperand(std::move(rhs_reg));  // rs2
             parent_bb->addInstruction(std::move(feq_inst));
 
             // 使用 seqz 指令取反（如果相等结果为0，则设置为1；否则设置为0）
@@ -2463,15 +2591,19 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
                                                                           : 0);
             }
 
+            // 确保操作数都在浮点寄存器中
+            auto lhs_reg = ensureFloatReg(std::move(lhs), parent_bb);
+            auto rhs_reg = ensureFloatReg(std::move(rhs), parent_bb);
+
             // 使用 flt.s 指令
             new_reg = codeGen_->allocateReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FLT_S, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual(),
-                RegisterType::Integer));              // rd
-            instruction->addOperand(std::move(lhs));  // rs1
-            instruction->addOperand(std::move(rhs));  // rs2
+                RegisterType::Integer));                  // rd
+            instruction->addOperand(std::move(lhs_reg));  // rs1
+            instruction->addOperand(std::move(rhs_reg));  // rs2
             parent_bb->addInstruction(std::move(instruction));
 
             break;
@@ -2488,15 +2620,19 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
                                                                            : 0);
             }
 
+            // 确保操作数都在浮点寄存器中
+            auto lhs_reg = ensureFloatReg(std::move(lhs), parent_bb);
+            auto rhs_reg = ensureFloatReg(std::move(rhs), parent_bb);
+
             // 使用 fle.s 指令
             new_reg = codeGen_->allocateReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FLE_S, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual(),
-                RegisterType::Integer));              // rd
-            instruction->addOperand(std::move(lhs));  // rs1
-            instruction->addOperand(std::move(rhs));  // rs2
+                RegisterType::Integer));                  // rd
+            instruction->addOperand(std::move(lhs_reg));  // rs1
+            instruction->addOperand(std::move(rhs_reg));  // rs2
             parent_bb->addInstruction(std::move(instruction));
 
             break;
@@ -2513,15 +2649,20 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
                                                                           : 0);
             }
 
+            // 确保操作数都在浮点寄存器中
+            auto lhs_reg = ensureFloatReg(std::move(lhs), parent_bb);
+            auto rhs_reg = ensureFloatReg(std::move(rhs), parent_bb);
+
             // RISC-V 没有直接的 fgt.s 指令，使用 flt.s 但交换操作数
             new_reg = codeGen_->allocateReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FLT_S, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual(),
-                RegisterType::Integer));              // rd
-            instruction->addOperand(std::move(rhs));  // rs1 (交换：rhs < lhs)
-            instruction->addOperand(std::move(lhs));  // rs2
+                RegisterType::Integer));  // rd
+            instruction->addOperand(
+                std::move(rhs_reg));  // rs1 (交换：rhs < lhs)
+            instruction->addOperand(std::move(lhs_reg));  // rs2
             parent_bb->addInstruction(std::move(instruction));
 
             break;
@@ -2538,15 +2679,20 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
                                                                            : 0);
             }
 
+            // 确保操作数都在浮点寄存器中
+            auto lhs_reg = ensureFloatReg(std::move(lhs), parent_bb);
+            auto rhs_reg = ensureFloatReg(std::move(rhs), parent_bb);
+
             // RISC-V 没有直接的 fge.s 指令，使用 fle.s 但交换操作数
             new_reg = codeGen_->allocateReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FLE_S, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual(),
-                RegisterType::Integer));              // rd
-            instruction->addOperand(std::move(rhs));  // rs1 (交换：rhs <= lhs)
-            instruction->addOperand(std::move(lhs));  // rs2
+                RegisterType::Integer));  // rd
+            instruction->addOperand(
+                std::move(rhs_reg));  // rs1 (交换：rhs <= lhs)
+            instruction->addOperand(std::move(lhs_reg));  // rs2
             parent_bb->addInstruction(std::move(instruction));
 
             break;
@@ -2563,18 +2709,125 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
                                                                           : 0);
             }
 
+            // 确保操作数都在浮点寄存器中
+            auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+            auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
             // 使用 flt.s 但交换操作数来实现大于比较
             new_reg = codeGen_->allocateReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FLT_S, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual(),
-                RegisterType::Integer));              // rd
-            instruction->addOperand(std::move(rhs));  // rs1 (交换：rhs < lhs)
-            instruction->addOperand(std::move(lhs));  // rs2
+                RegisterType::Integer));  // rd
+            instruction->addOperand(
+                std::move(rhs_reg));  // rs1 (交换：rhs < lhs)
+            instruction->addOperand(std::move(lhs_reg));  // rs2
             parent_bb->addInstruction(std::move(instruction));
 
             break;
+        }
+
+        case midend::Opcode::ICmpSLT: {
+            // 处理来自整数比较重定向的浮点小于比较
+            if ((lhs->getType() == OperandType::Immediate) &&
+                (rhs->getType() == OperandType::Immediate)) {
+                auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
+                auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                return std::make_unique<ImmediateOperand>(
+                    (lhs_imm->getFloatValue() < rhs_imm->getFloatValue()) ? 1
+                                                                          : 0);
+            }
+
+            // 确保操作数都在浮点寄存器中
+            auto lhs_reg = ensureFloatReg(std::move(lhs), parent_bb);
+            auto rhs_reg = ensureFloatReg(std::move(rhs), parent_bb);
+
+            // 使用 flt.s 指令实现小于比较
+            new_reg = codeGen_->allocateReg();
+            auto instruction =
+                std::make_unique<Instruction>(Opcode::FLT_S, parent_bb);
+            instruction->addOperand(std::make_unique<RegisterOperand>(
+                new_reg->getRegNum(), new_reg->isVirtual(),
+                RegisterType::Integer));                  // rd
+            instruction->addOperand(std::move(lhs_reg));  // rs1
+            instruction->addOperand(std::move(rhs_reg));  // rs2
+            parent_bb->addInstruction(std::move(instruction));
+
+            break;
+        }
+
+        // 兼容性处理：将一般的 Mul 操作重定向到 FMul
+        case midend::Opcode::Mul: {
+            // 如果是浮点类型，处理为 FMul
+            if (inst->getType()->isFloatType()) {
+                // 先判断是否是两个立即数
+                if ((lhs->getType() == OperandType::Immediate) &&
+                    (rhs->getType() == OperandType::Immediate)) {
+                    auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
+                    auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                    return std::make_unique<ImmediateOperand>(
+                        lhs_imm->getFloatValue() * rhs_imm->getFloatValue());
+                }
+
+                // 确保操作数都在浮点寄存器中
+                auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+                auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+                // 使用 fmul 指令
+                new_reg = codeGen_->allocateFloatReg();
+                auto instruction =
+                    std::make_unique<Instruction>(Opcode::FMUL_S, parent_bb);
+                instruction->addOperand(std::make_unique<RegisterOperand>(
+                    new_reg->getRegNum(), new_reg->isVirtual(),
+                    RegisterType::Float));                    // rd
+                instruction->addOperand(std::move(lhs_reg));  // rs1
+                instruction->addOperand(std::move(rhs_reg));  // rs2
+                parent_bb->addInstruction(std::move(instruction));
+
+                break;
+            }
+            // 如果不是浮点类型，抛出错误（不应该到这里）
+            throw std::runtime_error(
+                "Integer Mul operation in float context: " + inst->toString());
+        }
+
+        // 兼容性处理：将一般的 Div 操作重定向到 FDiv
+        case midend::Opcode::Div: {
+            // 如果是浮点类型，处理为 FDiv
+            if (inst->getType()->isFloatType()) {
+                // 先判断是否是两个立即数
+                if ((lhs->getType() == OperandType::Immediate) &&
+                    (rhs->getType() == OperandType::Immediate)) {
+                    auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
+                    auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                    if (rhs_imm->getFloatValue() == 0.0f) {
+                        throw std::runtime_error("Division by zero");
+                    }
+                    return std::make_unique<ImmediateOperand>(
+                        lhs_imm->getFloatValue() / rhs_imm->getFloatValue());
+                }
+
+                // 确保操作数都在浮点寄存器中
+                auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+                auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+                // 使用 fdiv 指令
+                new_reg = codeGen_->allocateFloatReg();
+                auto instruction =
+                    std::make_unique<Instruction>(Opcode::FDIV_S, parent_bb);
+                instruction->addOperand(std::make_unique<RegisterOperand>(
+                    new_reg->getRegNum(), new_reg->isVirtual(),
+                    RegisterType::Float));                    // rd
+                instruction->addOperand(std::move(lhs_reg));  // rs1
+                instruction->addOperand(std::move(rhs_reg));  // rs2
+                parent_bb->addInstruction(std::move(instruction));
+
+                break;
+            }
+            // 如果不是浮点类型，抛出错误（不应该到这里）
+            throw std::runtime_error(
+                "Integer Div operation in float context: " + inst->toString());
         }
 
         // 其他二元运算...
@@ -2944,6 +3197,29 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
     if (midend::isa<midend::ConstantFP>(value)) {
         auto* float_const = midend::cast<midend::ConstantFP>(value);
         float float_value = float_const->getValue();
+
+        // 特殊处理浮点零值
+        if (float_value == 0.0f) {
+            // 分配浮点寄存器
+            auto float_reg = codeGen_->allocateFloatReg();
+            codeGen_->mapValueToReg(value, float_reg->getRegNum(),
+                                    float_reg->isVirtual());
+
+            // 使用 fcvt.s.w 指令将整数零转换为浮点零
+            auto fcvt_inst =
+                std::make_unique<Instruction>(Opcode::FCVT_S_W, parent_bb);
+            fcvt_inst->addOperand(std::make_unique<RegisterOperand>(
+                float_reg->getRegNum(), float_reg->isVirtual(),
+                RegisterType::Float));  // rd (float)
+            fcvt_inst->addOperand(
+                std::make_unique<RegisterOperand>("zero"));  // rs1 (int zero)
+            parent_bb->addInstruction(std::move(fcvt_inst));
+
+            // 返回浮点寄存器操作数
+            return std::make_unique<RegisterOperand>(float_reg->getRegNum(),
+                                                     float_reg->isVirtual(),
+                                                     RegisterType::Float);
+        }
 
         // 获取浮点数的32位二进制表示
         union {
