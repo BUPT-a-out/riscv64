@@ -1,6 +1,7 @@
 #include "RegAllocChaitin.h"
 
 #include <algorithm>
+#include <climits>
 #include <iostream>
 #include <map>
 #include <queue>
@@ -25,6 +26,11 @@ void RegAllocChaitin::allocateRegisters() {
     computeLiveness();
 
     buildInterferenceGraph();
+
+    // 添加调试信息：打印干涉图
+    if (assigningFloat) {
+        printInterferenceGraph();
+    }
 
     performCoalescing();
 
@@ -205,10 +211,32 @@ void RegAllocChaitin::buildInterferenceGraph() {
         }
     }
 
+    // 添加调试信息：打印所有虚拟寄存器
+    if (assigningFloat) {
+        std::cout << "Float virtual registers found: ";
+        for (const auto& [regNum, node] : interferenceGraph) {
+            if (!node->isPrecolored) {
+                std::cout << regNum << " ";
+            }
+        }
+        std::cout << "\n";
+    }
+
     // 构建冲突边：逆序遍历
     for (auto& bb : *function) {
         const LivenessInfo& info = livenessInfo[bb.get()];
         std::unordered_set<unsigned> live = info.liveOut;
+
+        // 添加调试信息：打印基本块的活跃性信息
+        if (assigningFloat && !live.empty()) {
+            std::cout << "BB liveOut: ";
+            for (unsigned reg : live) {
+                if (!isPhysicalReg(reg)) {
+                    std::cout << reg << " ";
+                }
+            }
+            std::cout << "\n";
+        }
 
         // 逆序遍历指令
         for (auto it = bb->rbegin(); it != bb->rend(); ++it) {
@@ -239,6 +267,11 @@ void RegAllocChaitin::buildInterferenceGraph() {
                 for (unsigned liveReg : live) {
                     if (defReg != liveReg && !isPhysicalReg(liveReg)) {
                         addInterference(defReg, liveReg);
+                        // 添加调试信息
+                        if (assigningFloat && !isPhysicalReg(defReg)) {
+                            std::cout << "Adding interference: " << defReg
+                                      << " <-> " << liveReg << "\n";
+                        }
                     }
                 }
                 live.erase(defReg);
@@ -372,6 +405,17 @@ bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
             }
         }
 
+        // 添加调试信息
+        if (assigningFloat) {
+            std::cout << "Coloring virtual register " << regNum
+                      << ", neighbors: " << node->neighbors.size()
+                      << ", used colors: ";
+            for (int color : usedColors) {
+                std::cout << color << " ";
+            }
+            std::cout << "\n";
+        }
+
         int selectedColor = -1;
 
         // 首先检查强约束
@@ -399,14 +443,33 @@ bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
             }
 
             if (selectedColor == -1) {
+                // 修复：使用更好的颜色选择策略，避免总是选择第一个
+                // 统计每种颜色的使用次数，优先选择使用较少的颜色
+                std::unordered_map<unsigned, int> colorUsage;
+                for (const auto& [vReg, pReg] : virtualToPhysical) {
+                    if (!isPhysicalReg(vReg)) {
+                        colorUsage[pReg]++;
+                    }
+                }
+
+                unsigned bestColor = static_cast<unsigned>(-1);
+                int minUsage = INT_MAX;
+
                 for (unsigned color : availableRegs) {
                     if (usedColors.find(color) == usedColors.end() &&
                         reservedPhysicalRegs.find(color) ==
                             reservedPhysicalRegs.end() &&
                         !ABI::isReservedReg(color, assigningFloat)) {
-                        selectedColor = color;
-                        break;
+                        int usage = colorUsage[color];
+                        if (usage < minUsage) {
+                            minUsage = usage;
+                            bestColor = color;
+                        }
                     }
+                }
+
+                if (bestColor != static_cast<unsigned>(-1)) {
+                    selectedColor = bestColor;
                 }
             }
         }
@@ -414,6 +477,12 @@ bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
         if (selectedColor == -1) {
             spilledRegs.insert(regNum);
             return false;
+        }
+
+        if (assigningFloat) {
+            std::cout << "Assigned virtual register " << regNum
+                      << " to physical register " << selectedColor << " ("
+                      << ABI::getABINameFromRegNum(selectedColor) << ")\n";
         }
 
         node->color = selectedColor;
@@ -1633,14 +1702,19 @@ std::vector<unsigned> RegAllocChaitin::getUsedRegs(Instruction* inst) const {
 
 /// Print
 void RegAllocChaitin::printInterferenceGraph() const {
-    std::cout << "Interference Graph:\n";
+    std::cout << "Interference Graph (Virtual Registers Only):\n";
     for (const auto& [regNum, node] : interferenceGraph) {
-        std::cout << "Register " << regNum << " conflicts with: ";
-        for (unsigned neighbor : node->neighbors) {
-            std::cout << neighbor << " ";
+        if (!node->isPrecolored) {  // 只打印虚拟寄存器
+            std::cout << "Virtual register " << regNum << " conflicts with: ";
+            for (unsigned neighbor : node->neighbors) {
+                if (!isPhysicalReg(neighbor)) {  // 只显示与其他虚拟寄存器的冲突
+                    std::cout << neighbor << " ";
+                }
+            }
+            std::cout << "\n";
         }
-        std::cout << "\n";
     }
+    std::cout << "\n";
 }
 
 void RegAllocChaitin::printAllocationResult() const {
@@ -1659,6 +1733,31 @@ void RegAllocChaitin::printAllocationResult() const {
             std::cout << reg << " ";
         }
         std::cout << "\n";
+    }
+
+    // 添加调试信息：检查是否多个虚拟寄存器分配到同一个物理寄存器
+    std::unordered_map<unsigned, std::vector<unsigned>> physToVirtuals;
+    for (const auto& [virtualReg, physicalReg] : virtualToPhysical) {
+        if (!isPhysicalReg(virtualReg)) {
+            physToVirtuals[physicalReg].push_back(virtualReg);
+        }
+    }
+
+    std::cout << "\nPhysical register usage summary:\n";
+    for (const auto& [physReg, virtuals] : physToVirtuals) {
+        std::cout << "Physical register " << physReg << " ("
+                  << ABI::getABINameFromRegNum(physReg) << ") allocated to "
+                  << virtuals.size() << " virtual registers: ";
+        for (unsigned vReg : virtuals) {
+            std::cout << vReg << " ";
+        }
+        std::cout << "\n";
+
+        // 如果一个物理寄存器分配给多个虚拟寄存器，这可能表明有问题
+        if (virtuals.size() > 1) {
+            std::cout << "WARNING: Physical register " << physReg
+                      << " is allocated to multiple virtual registers!\n";
+        }
     }
 }
 
