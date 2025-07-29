@@ -519,10 +519,25 @@ std::unique_ptr<RegisterOperand> Visitor::ensureFloatReg(
             return std::make_unique<RegisterOperand>(
                 reg_op->getRegNum(), reg_op->isVirtual(), RegisterType::Float);
         }
-        // 如果是整数寄存器，但含有浮点值（比如通过LI+FMV_W_X生成的），
-        // 需要检查是否已经存在对应的浮点寄存器映射
-        return std::make_unique<RegisterOperand>(
-            reg_op->getRegNum(), reg_op->isVirtual(), RegisterType::Float);
+
+        // 如果是整数寄存器，需要通过FMV_W_X转换到浮点寄存器
+        // 分配新的浮点寄存器
+        auto float_reg = codeGen_->allocateFloatReg();
+
+        // 生成 FMV_W_X 指令：将整数寄存器的位模式移动到浮点寄存器
+        auto fmv_inst =
+            std::make_unique<Instruction>(Opcode::FMV_W_X, parent_bb);
+        fmv_inst->addOperand(std::make_unique<RegisterOperand>(
+            float_reg->getRegNum(), float_reg->isVirtual(),
+            RegisterType::Float));  // rd (浮点目标寄存器)
+        fmv_inst->addOperand(std::make_unique<RegisterOperand>(
+            reg_op->getRegNum(), reg_op->isVirtual(),
+            RegisterType::Integer));  // rs1 (整数源寄存器)
+        parent_bb->addInstruction(std::move(fmv_inst));
+
+        return std::make_unique<RegisterOperand>(float_reg->getRegNum(),
+                                                 float_reg->isVirtual(),
+                                                 RegisterType::Float);
     }
 
     // 如果是立即数，检查是否为零值
@@ -609,7 +624,7 @@ std::unique_ptr<MachineOperand> Visitor::visitCastInst(
                 }
 
                 if (src_type->isFloatType()) {
-                    // f32 -> int
+                    // f32 -> int (truncate towards zero)
                     auto new_reg = codeGen_->allocateReg();
                     auto* new_reg_ptr = new_reg.get();
                     auto src_operand =
@@ -622,6 +637,8 @@ std::unique_ptr<MachineOperand> Visitor::visitCastInst(
                         RegisterType::Integer));  // rd (integer)
                     instruction->addOperand(
                         std::move(src_operand));  // rs1 (float)
+                    instruction->addOperand(std::make_unique<LabelOperand>(
+                        "rtz"));  // rtz, 截断到零
                     parent_bb->addInstruction(std::move(instruction));
                     return std::make_unique<RegisterOperand>(
                         new_reg_ptr->getRegNum(), new_reg_ptr->isVirtual(),
@@ -3156,7 +3173,14 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
 
     // 检查是否是全局变量
     if (auto* global_var = midend::dyn_cast<midend::GlobalVariable>(value)) {
-        // 对于全局变量，生成LA指令来获取其地址
+        std::cout << "DEBUG: Found global variable reference: "
+                  << global_var->getName()
+                  << ", isConstant: " << global_var->isConstant()
+                  << ", hasInitializer: " << global_var->hasInitializer()
+                  << std::endl;
+
+        // 强制所有全局变量都从内存加载，避免寄存器复用问题
+        // 1. 生成LA指令来获取地址
         auto global_addr_reg = codeGen_->allocateReg();
         auto global_addr_inst =
             std::make_unique<Instruction>(Opcode::LA, parent_bb);
@@ -3166,20 +3190,37 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
             global_var->getName()));  // global symbol
         parent_bb->addInstruction(std::move(global_addr_inst));
 
-        // 建立全局变量到寄存器的映射
-        codeGen_->mapValueToReg(value, global_addr_reg->getRegNum(),
-                                global_addr_reg->isVirtual());
+        // 2. 生成加载指令来获取值
+        bool is_float_value = global_var->getValueType()->isFloatType();
+        auto value_reg = is_float_value ? codeGen_->allocateFloatReg()
+                                        : codeGen_->allocateReg();
+        Opcode load_opcode = is_float_value ? Opcode::FLW : Opcode::LW;
 
-        return std::make_unique<RegisterOperand>(global_addr_reg->getRegNum(),
-                                                 global_addr_reg->isVirtual());
+        auto load_inst = std::make_unique<Instruction>(load_opcode, parent_bb);
+        load_inst->addOperand(std::make_unique<RegisterOperand>(
+            value_reg->getRegNum(), value_reg->isVirtual(),
+            is_float_value ? RegisterType::Float : RegisterType::Integer));
+        load_inst->addOperand(std::make_unique<MemoryOperand>(
+            std::make_unique<RegisterOperand>(global_addr_reg->getRegNum(),
+                                              global_addr_reg->isVirtual()),
+            std::make_unique<ImmediateOperand>(0)));
+        parent_bb->addInstruction(std::move(load_inst));
+
+        // 不建立映射！这是修复的关键 - 每次引用都是独立的
+        // codeGen_->mapValueToReg(value, value_reg->getRegNum(),
+        //                         value_reg->isVirtual());
+
+        return std::make_unique<RegisterOperand>(
+            value_reg->getRegNum(), value_reg->isVirtual(),
+            is_float_value ? RegisterType::Float : RegisterType::Integer);
     }
 
     // 检查是否是常量
     if (midend::isa<midend::ConstantInt>(value)) {
         // 如果值的类型是浮点类型，即使它是ConstantInt，也应该作为浮点处理
         if (value->getType()->isFloatType()) {
-            // 这是一个浮点常量，但被错误地创建为ConstantInt
             auto* int_const = midend::cast<midend::ConstantInt>(value);
+            // 这是一个浮点常量，但被错误地创建为ConstantInt
             int32_t int_value = int_const->getSignedValue();
 
             // 将整数位模式重新解释为浮点数
@@ -3237,12 +3278,16 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
 
         // 正常的整数常量处理
         // 判断范围，是否在 [-2048, 2047] 之间
-        auto value_int =
-            midend::cast<midend::ConstantInt>(value)->getSignedValue();
+        auto* int_const = midend::cast<midend::ConstantInt>(value);
+        auto value_int = int_const->getSignedValue();
+        std::cout << "DEBUG: Processing integer constant: " << value_int
+                  << std::endl;
         constexpr int64_t IMM_MIN = -2048;
         constexpr int64_t IMM_MAX = 2047;
         auto signed_value = static_cast<int64_t>(value_int);
         if (signed_value >= IMM_MIN && signed_value <= IMM_MAX) {
+            std::cout << "DEBUG: Returning immediate operand: " << value_int
+                      << std::endl;
             return std::make_unique<ImmediateOperand>(value_int);
         }
         // 如果不在范围内，分配一个新的寄存器
@@ -3269,8 +3314,9 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         if (float_value == 0.0f) {
             // 分配浮点寄存器
             auto float_reg = codeGen_->allocateFloatReg();
-            codeGen_->mapValueToReg(value, float_reg->getRegNum(),
-                                    float_reg->isVirtual());
+            // 不建立映射，避免寄存器复用问题
+            // codeGen_->mapValueToReg(value, float_reg->getRegNum(),
+            //                         float_reg->isVirtual());
 
             // 使用 fcvt.s.w 指令将整数零转换为浮点零
             auto fcvt_inst =
@@ -3306,8 +3352,9 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
 
         // 2. 分配浮点寄存器
         auto float_reg = codeGen_->allocateFloatReg();
-        codeGen_->mapValueToReg(value, float_reg->getRegNum(),
-                                float_reg->isVirtual());
+        // 不建立映射，避免寄存器复用问题
+        // codeGen_->mapValueToReg(value, float_reg->getRegNum(),
+        //                         float_reg->isVirtual());
 
         // 3. 生成fmv.w.x指令：将位模式从整数寄存器移动到浮点寄存器
         auto fmv_inst =
