@@ -70,14 +70,20 @@ class RegisterOperand : public MachineOperand {
         : MachineOperand(OperandType::Register),
           regNum(reg_num),
           is_virtual(is_virtual),
-          regType(RegisterType::Integer) {}
+          regType(is_virtual
+                      ? RegisterType::Integer  // 虚拟寄存器默认为整数类型
+                  : (reg_num >= 32 && reg_num <= 63) ? RegisterType::Float
+                                                     : RegisterType::Integer) {}
 
     // 支持字符串构造函数
     explicit RegisterOperand(const std::string& reg_name)
         : MachineOperand(OperandType::Register),
           regNum(ABI::getRegNumFromABIName(reg_name)),  // 解析寄存器名称
           is_virtual(false),
-          regType(RegisterType::Integer) {}
+          regType((ABI::getRegNumFromABIName(reg_name) >= 32 &&
+                   ABI::getRegNumFromABIName(reg_name) <= 63)
+                      ? RegisterType::Float
+                      : RegisterType::Integer) {}
 
     explicit RegisterOperand(unsigned reg_num, bool is_virtual,
                              RegisterType type)
@@ -101,6 +107,10 @@ class RegisterOperand : public MachineOperand {
                "Cannot set physical register for non-virtual register");
         regNum = new_reg_num;
         is_virtual = false;
+        // 根据物理寄存器编号更新类型：32-63为浮点寄存器，0-31为整数寄存器
+        regType = (new_reg_num >= 32 && new_reg_num <= 63)
+                      ? RegisterType::Float
+                      : RegisterType::Integer;
     }
 
    private:
