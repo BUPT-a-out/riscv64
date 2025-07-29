@@ -835,8 +835,8 @@ std::unique_ptr<MachineOperand> Visitor::visitCallInst(
             }
 
             // 根据参数类型选择存储指令和大小
-            Opcode store_opcode = is_float ? Opcode::FSD : Opcode::SW;
-            int arg_size = is_float ? 8 : 4;  // 浮点8字节，整数4字节
+            Opcode store_opcode = is_float ? Opcode::FSW : Opcode::SW;
+            int arg_size = 4;
 
             generateMemoryInstruction(store_opcode, std::move(source_reg),
                                       std::make_unique<RegisterOperand>("sp"),
