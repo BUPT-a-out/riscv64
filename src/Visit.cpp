@@ -935,9 +935,24 @@ std::unique_ptr<MachineOperand> Visitor::visitCallInst(
                 source_reg = immToReg(std::move(source_value), parent_bb);
             }
 
+            // 获取参数的真实类型来决定指令和大小
+            auto* dest_arg = called_func->getArg(arg_i);
+            bool is_pointer = dest_arg->getType()->isPointerType();
+
             // 根据参数类型选择存储指令和大小
-            Opcode store_opcode = is_float ? Opcode::FSW : Opcode::SW;
-            int arg_size = 4;
+            Opcode store_opcode;
+            int arg_size;
+
+            if (is_float) {
+                store_opcode = Opcode::FSW;
+                arg_size = 4;  // 单精度浮点，32位
+            } else if (is_pointer) {
+                store_opcode = Opcode::SD;
+                arg_size = 8;  // 指针，64位
+            } else {
+                store_opcode = Opcode::SW;
+                arg_size = 4;  // 整数，32位
+            }
 
             generateMemoryInstruction(store_opcode, std::move(source_reg),
                                       std::make_unique<RegisterOperand>("sp"),
@@ -3067,14 +3082,53 @@ std::unique_ptr<MachineOperand> Visitor::funcArgToReg(
             "BasicBlock context");
     }
 
-    // 计算栈上的偏移量：按参数在函数签名中的总体顺序计算
-    int arg_offset = (current_arg_index - 8) *
-                     (is_current_float ? 8 : 4);  // 浮点8字节，整数4字节
+    // 获取当前参数的真实类型信息
+    bool is_current_pointer = argument->getType()->isPointerType();
+
+    // 计算栈上的偏移量：需要累计所有之前栈参数的实际大小
+    int arg_offset = 0;
+
+    // 遍历前面的所有栈参数（第9个参数开始）
+    for (auto arg_iter = function->arg_begin(); arg_iter != function->arg_end();
+         ++arg_iter) {
+        const auto* arg = arg_iter->get();
+
+        // 计算当前参数在总参数中的索引
+        int total_index = 0;
+        for (auto check_iter = function->arg_begin(); check_iter != arg_iter;
+             ++check_iter) {
+            total_index++;
+        }
+
+        if (arg == argument) {
+            break;  // 找到当前参数，停止计算
+        }
+
+        // 只计算栈参数（第9个参数开始，索引≥8）的偏移
+        if (total_index >= 8) {
+            int this_arg_size;
+            if (arg->getType()->isFloatType()) {
+                this_arg_size = 8;  // 浮点参数，8字节
+            } else if (arg->getType()->isPointerType()) {
+                this_arg_size = 8;  // 指针参数，64位，8字节
+            } else {
+                this_arg_size = 4;  // 普通整数参数，32位，4字节
+            }
+            arg_offset += this_arg_size;
+        }
+    }
 
     auto arg_reg = codeGen_->allocateReg();
 
     // 根据参数类型选择加载指令
-    Opcode load_opcode = is_current_float ? Opcode::FLD : Opcode::LW;
+    Opcode load_opcode;
+    if (is_current_float) {
+        load_opcode = Opcode::FLD;
+    } else if (is_current_pointer) {
+        load_opcode = Opcode::LD;  // 指针使用64位加载
+    } else {
+        load_opcode = Opcode::LW;  // 普通整数使用32位加载
+    }
 
     // 使用新的辅助函数生成加载指令
     generateMemoryInstruction(
