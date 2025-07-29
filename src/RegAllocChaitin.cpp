@@ -582,7 +582,8 @@ void RegAllocChaitin::updateRegisterInInstruction(Instruction* inst,
         } else if (operand->isMem()) {
             auto baseReg =
                 static_cast<MemoryOperand*>(operand.get())->getBaseReg();
-            if (baseReg->isFloatRegister() == isFloat &&
+            if (baseReg && baseReg->isReg() &&
+                baseReg->isFloatRegister() == isFloat &&
                 baseReg->getRegNum() == oldReg) {
                 baseReg->setRegNum(newReg);
             }
@@ -679,7 +680,8 @@ void RegAllocChaitin::identifyCoalesceCandidates() {
                 const auto& operands = inst->getOperands();
                 if (operands.size() >= 2 && operands[0]->isReg() &&
                     operands[1]->isReg()) {
-                    if (operands[0]->isFloatRegister() != operands[0]->isFloatRegister()) {
+                    if (operands[0]->isFloatRegister() !=
+                        operands[0]->isFloatRegister()) {
                         continue;  // 跳过两个不同类型寄存器的复制
                     }
                     if (operands[0]->isFloatRegister() != assigningFloat) {
@@ -692,7 +694,6 @@ void RegAllocChaitin::identifyCoalesceCandidates() {
                     if (isPhysicalReg(dst) && isPhysicalReg(src)) {
                         continue;  // 跳过两个物理寄存器的复制
                     }
-
 
                     // 确保合并方向正确
                     unsigned mergeTarget, mergeSource;
@@ -792,7 +793,8 @@ int RegAllocChaitin::calculateABIPriority(unsigned src, unsigned dst) const {
     if (crossesFunctionCall(src, dst)) {
         if (isPhysicalReg(dst) && ABI::isCalleeSaved(dst, assigningFloat)) {
             priority += 25;
-        } else if (isPhysicalReg(src) && ABI::isCalleeSaved(src, assigningFloat)) {
+        } else if (isPhysicalReg(src) &&
+                   ABI::isCalleeSaved(src, assigningFloat)) {
             priority += 20;
         }
     }
@@ -801,7 +803,8 @@ int RegAllocChaitin::calculateABIPriority(unsigned src, unsigned dst) const {
     if (!crossesFunctionCall(src, dst)) {
         if (isPhysicalReg(dst) && ABI::isCallerSaved(dst, assigningFloat)) {
             priority += 15;
-        } else if (isPhysicalReg(src) && ABI::isCallerSaved(src, assigningFloat)) {
+        } else if (isPhysicalReg(src) &&
+                   ABI::isCallerSaved(src, assigningFloat)) {
             priority += 12;
         }
     }
@@ -990,7 +993,8 @@ bool RegAllocChaitin::canCoalesce(unsigned src, unsigned dst) {
 
 bool RegAllocChaitin::canCoalesceWithABI(unsigned src, unsigned dst) const {
     // 不能合并保留寄存器
-    if (ABI::isReservedReg(src, assigningFloat) || ABI::isReservedReg(dst, assigningFloat)) {
+    if (ABI::isReservedReg(src, assigningFloat) ||
+        ABI::isReservedReg(dst, assigningFloat)) {
         return false;
     }
 
@@ -998,9 +1002,11 @@ bool RegAllocChaitin::canCoalesceWithABI(unsigned src, unsigned dst) const {
     if (isPhysicalReg(src) || isPhysicalReg(dst)) {
         // 调用者保存和被调用者保存寄存器不能合并
         if (isPhysicalReg(src) && isPhysicalReg(dst)) {
-            if (ABI::isCallerSaved(src, assigningFloat) && ABI::isCalleeSaved(dst, assigningFloat))
+            if (ABI::isCallerSaved(src, assigningFloat) &&
+                ABI::isCalleeSaved(dst, assigningFloat))
                 return false;
-            if (ABI::isCalleeSaved(src, assigningFloat) && ABI::isCallerSaved(dst, assigningFloat))
+            if (ABI::isCalleeSaved(src, assigningFloat) &&
+                ABI::isCallerSaved(dst, assigningFloat))
                 return false;
         }
 
@@ -1407,10 +1413,11 @@ void RegAllocChaitin::setParameterConstraints() {
             const auto& operands = inst->getOperands();
             if (operands.size() >= 2 && operands[0]->isReg() &&
                 operands[1]->isReg()) {
-                unsigned dstReg = operands[0]->getRegNum();
                 unsigned srcReg = operands[1]->getRegNum();
+                unsigned dstReg = operands[0]->getRegNum();
 
-                if (ABI::isArgumentReg(srcReg, assigningFloat) && !isPhysicalReg(dstReg)) {
+                if (ABI::isArgumentReg(srcReg, assigningFloat) &&
+                    !isPhysicalReg(dstReg)) {
                     // 强制约束：参数虚拟寄存器必须分配到对应的参数物理寄存器
                     addStrongPhysicalConstraint(dstReg, srcReg);
                     paramToVirtual[srcReg] = dstReg;

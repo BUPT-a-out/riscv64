@@ -35,4 +35,25 @@ std::unique_ptr<RegisterOperand> CodeGenerator::allocateFloatReg() {
                                              RegisterType::Float);
 }
 
+RegisterOperand* CodeGenerator::getOrAllocateFloatReg(
+    const midend::Value* val) {
+    auto it = valueToReg_.find(val);
+    if (it != valueToReg_.end()) {
+        return it->second.get();
+    }
+
+    // 检查是否是浮点常量
+    if (auto* constant = dynamic_cast<const midend::Constant*>(val)) {
+        auto reg = allocateFloatReg();
+        auto* regPtr = reg.get();
+        valueToReg_[val] = std::move(reg);
+        return regPtr;
+    }
+
+    auto reg = allocateFloatReg();
+    auto* regPtr = reg.get();
+    valueToReg_[val] = std::move(reg);
+    return regPtr;
+}
+
 }  // namespace riscv64
