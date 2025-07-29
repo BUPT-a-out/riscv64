@@ -3,7 +3,7 @@
 #include <memory>
 #include <optional>
 
-#include "IR/Module.h"
+#include "../../midend/include/IR/Module.h"
 #include "Instructions/All.h"
 #include "Segment.h"
 
