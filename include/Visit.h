@@ -36,6 +36,8 @@ class Visitor {
         const midend::Instruction* inst, BasicBlock* parent_bb);
     std::unique_ptr<MachineOperand> visitBinaryOp(
         const midend::Instruction* inst, BasicBlock* parent_bb);
+    std::unique_ptr<MachineOperand> visitFloatBinaryOp(
+        const midend::Instruction* inst, BasicBlock* parent_bb);
     std::unique_ptr<MachineOperand> visitAllocaInst(
         const midend::Instruction* inst, BasicBlock* parent_bb);
     std::unique_ptr<MachineOperand> visitLoadInst(
