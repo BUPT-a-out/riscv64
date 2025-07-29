@@ -18,8 +18,9 @@ SpillChainManager::SpillChainManager(unsigned tempRegCounter, bool isFloat)
     // t0 固定作为地址寄存器, 先避开
 
     // 浮点优先使用临时寄存器 ft0-ft7
-    std::vector<unsigned> tempFloatPriority = {0, 1, 2, 3,
-                                               4, 5, 6, 7};  // ft0-ft7
+    std::vector<unsigned> tempFloatPriority = {32, 33, 34, 35,
+                                               36, 37, 38,39, 
+                                               60, 61, 62, 63};  // ft0-ft7 ft8-ft11
 
     auto tempPriority = isFloat ? tempFloatPriority : tempIntegerPriority;
 
