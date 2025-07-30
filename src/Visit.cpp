@@ -1265,11 +1265,13 @@ void Visitor::processDeferredPhiNode(const midend::Instruction* inst,
             }
         }
 
-        // 简单启发式规则：对于可能干扰条件判断的PHI，使用更安全的策略
-        if (should_skip_phi || (is_constant_phi && found_conditional)) {
-            // 如果检测到潜在干扰，暂时跳过这个PHI赋值
-            // 这是一个临时解决方案，确保基本逻辑正确
+        // 修复：只有在确实会干扰条件判断时才跳过PHI赋值
+        // should_skip_phi 已经包含了精确的干扰检测逻辑
+        if (should_skip_phi) {
+            // 如果检测到真正的干扰（目标寄存器与条件寄存器冲突），跳过PHI赋值
+            // 这是必要的，以避免覆盖条件跳转使用的寄存器
         } else {
+            // 对于所有其他情况（包括常量PHI），正常执行赋值
             storeOperandToReg(std::move(value_operand), std::move(dest_reg),
                               incoming_bb, insert_pos);
         }
@@ -3135,7 +3137,7 @@ std::unique_ptr<MachineOperand> Visitor::visitLogicalOp(
     // 为最终结果分配寄存器
     auto result_reg = codeGen_->allocateReg();
 
-    // 获取左操作数并转换为布尔值
+    // 先计算左操作数并转换为布尔值
     auto lhs = visit(inst->getOperand(0), parent_bb);
     auto lhs_reg = immToReg(std::move(lhs), parent_bb);
 
@@ -3147,20 +3149,42 @@ std::unique_ptr<MachineOperand> Visitor::visitLogicalOp(
     lhs_snez_inst->addOperand(std::move(lhs_reg));
     parent_bb->addInstruction(std::move(lhs_snez_inst));
 
-    // 获取右操作数并转换为布尔值
-    auto rhs = visit(inst->getOperand(1), parent_bb);
-    auto rhs_reg = immToReg(std::move(rhs), parent_bb);
-
-    auto rhs_bool_reg = codeGen_->allocateReg();
-    auto rhs_snez_inst = std::make_unique<Instruction>(Opcode::SNEZ, parent_bb);
-    rhs_snez_inst->addOperand(std::make_unique<RegisterOperand>(
-        rhs_bool_reg->getRegNum(), rhs_bool_reg->isVirtual()));
-    rhs_snez_inst->addOperand(std::move(rhs_reg));
-    parent_bb->addInstruction(std::move(rhs_snez_inst));
+    // 临时存储左操作数结果到result_reg
+    auto mv_left_inst = std::make_unique<Instruction>(Opcode::MV, parent_bb);
+    mv_left_inst->addOperand(std::make_unique<RegisterOperand>(
+        result_reg->getRegNum(), result_reg->isVirtual()));
+    mv_left_inst->addOperand(std::make_unique<RegisterOperand>(
+        lhs_bool_reg->getRegNum(), lhs_bool_reg->isVirtual()));
+    parent_bb->addInstruction(std::move(mv_left_inst));
 
     if (inst->getOpcode() == midend::Opcode::LAnd) {
-        // 逻辑与：result = lhs_bool && rhs_bool
-        // 使用按位与实现：两个操作数都是0或1，所以按位与等于逻辑与
+        // 逻辑与的短路求值：只有左操作数为真时才计算右操作数
+        // 如果左操作数为假，结果已经是0，跳过右操作数
+
+        // 生成唯一标签
+        auto skip_label =
+            "logical_and_skip_" + std::to_string(codeGen_->getNextLabelNum());
+
+        // 如果左操作数为假（0），跳过右操作数的计算
+        auto beqz_inst = std::make_unique<Instruction>(Opcode::BEQZ, parent_bb);
+        beqz_inst->addOperand(std::make_unique<RegisterOperand>(
+            lhs_bool_reg->getRegNum(), lhs_bool_reg->isVirtual()));
+        beqz_inst->addOperand(std::make_unique<LabelOperand>(skip_label));
+        parent_bb->addInstruction(std::move(beqz_inst));
+
+        // 左操作数为真，计算右操作数
+        auto rhs = visit(inst->getOperand(1), parent_bb);
+        auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+        auto rhs_bool_reg = codeGen_->allocateReg();
+        auto rhs_snez_inst =
+            std::make_unique<Instruction>(Opcode::SNEZ, parent_bb);
+        rhs_snez_inst->addOperand(std::make_unique<RegisterOperand>(
+            rhs_bool_reg->getRegNum(), rhs_bool_reg->isVirtual()));
+        rhs_snez_inst->addOperand(std::move(rhs_reg));
+        parent_bb->addInstruction(std::move(rhs_snez_inst));
+
+        // 结果 = lhs_bool && rhs_bool（都是0或1，用按位与实现）
         auto and_inst = std::make_unique<Instruction>(Opcode::AND, parent_bb);
         and_inst->addOperand(std::make_unique<RegisterOperand>(
             result_reg->getRegNum(), result_reg->isVirtual()));
@@ -3169,26 +3193,48 @@ std::unique_ptr<MachineOperand> Visitor::visitLogicalOp(
         and_inst->addOperand(std::make_unique<RegisterOperand>(
             rhs_bool_reg->getRegNum(), rhs_bool_reg->isVirtual()));
         parent_bb->addInstruction(std::move(and_inst));
-    } else {  // LOr
-        // 逻辑或：result = lhs_bool || rhs_bool
-        // 实现：result = lhs_bool + rhs_bool, 然后如果result != 0则设为1
-        auto add_reg = codeGen_->allocateReg();
-        auto add_inst = std::make_unique<Instruction>(Opcode::ADD, parent_bb);
-        add_inst->addOperand(std::make_unique<RegisterOperand>(
-            add_reg->getRegNum(), add_reg->isVirtual()));
-        add_inst->addOperand(std::make_unique<RegisterOperand>(
-            lhs_bool_reg->getRegNum(), lhs_bool_reg->isVirtual()));
-        add_inst->addOperand(std::make_unique<RegisterOperand>(
-            rhs_bool_reg->getRegNum(), rhs_bool_reg->isVirtual()));
-        parent_bb->addInstruction(std::move(add_inst));
 
-        // 将和转换为布尔值（如果和非零则为1，否则为0）
-        auto snez_inst = std::make_unique<Instruction>(Opcode::SNEZ, parent_bb);
-        snez_inst->addOperand(std::make_unique<RegisterOperand>(
+        // skip_label位置使用NOP占位
+        auto nop_inst = std::make_unique<Instruction>(Opcode::NOP, parent_bb);
+        parent_bb->addInstruction(std::move(nop_inst));
+
+    } else {  // LOr
+        // 逻辑或的短路求值：只有左操作数为假时才计算右操作数
+        // 如果左操作数为真，结果已经是1，跳过右操作数
+
+        auto skip_label =
+            "logical_or_skip_" + std::to_string(codeGen_->getNextLabelNum());
+
+        // 如果左操作数为真（非0），跳过右操作数的计算
+        auto bnez_inst = std::make_unique<Instruction>(Opcode::BNEZ, parent_bb);
+        bnez_inst->addOperand(std::make_unique<RegisterOperand>(
+            lhs_bool_reg->getRegNum(), lhs_bool_reg->isVirtual()));
+        bnez_inst->addOperand(std::make_unique<LabelOperand>(skip_label));
+        parent_bb->addInstruction(std::move(bnez_inst));
+
+        // 左操作数为假，计算右操作数
+        auto rhs = visit(inst->getOperand(1), parent_bb);
+        auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+        auto rhs_bool_reg = codeGen_->allocateReg();
+        auto rhs_snez_inst =
+            std::make_unique<Instruction>(Opcode::SNEZ, parent_bb);
+        rhs_snez_inst->addOperand(std::make_unique<RegisterOperand>(
+            rhs_bool_reg->getRegNum(), rhs_bool_reg->isVirtual()));
+        rhs_snez_inst->addOperand(std::move(rhs_reg));
+        parent_bb->addInstruction(std::move(rhs_snez_inst));
+
+        // 结果 = 右操作数的布尔值（因为左操作数为假）
+        auto mv_rhs_inst = std::make_unique<Instruction>(Opcode::MV, parent_bb);
+        mv_rhs_inst->addOperand(std::make_unique<RegisterOperand>(
             result_reg->getRegNum(), result_reg->isVirtual()));
-        snez_inst->addOperand(std::make_unique<RegisterOperand>(
-            add_reg->getRegNum(), add_reg->isVirtual()));
-        parent_bb->addInstruction(std::move(snez_inst));
+        mv_rhs_inst->addOperand(std::make_unique<RegisterOperand>(
+            rhs_bool_reg->getRegNum(), rhs_bool_reg->isVirtual()));
+        parent_bb->addInstruction(std::move(mv_rhs_inst));
+
+        // skip_label位置使用NOP占位
+        auto nop_inst = std::make_unique<Instruction>(Opcode::NOP, parent_bb);
+        parent_bb->addInstruction(std::move(nop_inst));
     }
 
     // 建立指令结果值到寄存器的映射
