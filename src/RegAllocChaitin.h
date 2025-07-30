@@ -45,11 +45,6 @@ class RegAllocChaitin {
    private:
     int assigningFloat = false;
 
-    // 递归深度控制，防止无限spill
-    int spillDepth = 0;
-    static const int MAX_SPILL_DEPTH = 5;         // 最大spill深度
-    std::unordered_set<unsigned> alreadySpilled;  // 已经spill过的寄存器
-
     // 可用于分配的寄存器 (排除保留寄存器)
     std::vector<unsigned> availableRegs;
 

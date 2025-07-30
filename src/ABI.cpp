@@ -174,33 +174,32 @@ std::string getABINameFromRegNum(unsigned num) {
 }
 
 bool isCallerSaved(unsigned physreg, bool isFloat) {
-    // 浮点Caller-saved寄存器: ft0-ft7 (32-39), ft8-ft11 (60-63), fa0-fa7
-    // (42-49)
-    return (physreg >= 32 && physreg <= 39) ||  // ft0-ft7
-           (physreg >= 42 && physreg <= 49) ||  // fa0-fa7
-           (physreg >= 60 && physreg <= 63)     // ft8-ft11
-
-           // 整数Caller-saved寄存器: t0-t2 (5-7), t3-t6 (28-31), a0-a7 (10-17),
-           // ra (1)
-           || (physreg >= 5 && physreg <= 7) ||  // t0-t2
-           (physreg >= 10 && physreg <= 17) ||   // a0-a7
-           (physreg >= 28 && physreg <= 31) ||   // t3-t6
-           (physreg == 1);                       // ra
+    if (isFloat) {
+        // 浮点Caller-saved寄存器: ft0-ft7 (32-39), ft8-ft11 (60-63), fa0-fa7
+        // (42-49)
+        return (physreg >= 32 && physreg <= 39) ||  // ft0-ft7
+               (physreg >= 42 && physreg <= 49) ||  // fa0-fa7
+               (physreg >= 60 && physreg <= 63);    // ft8-ft11
+    } else {
+        // 整数Caller-saved寄存器: t0-t2 (5-7), t3-t6 (28-31), a0-a7 (10-17),
+        // ra (1)
+        return (physreg >= 5 && physreg <= 7) ||    // t0-t2
+               (physreg >= 10 && physreg <= 17) ||  // a0-a7
+               (physreg >= 28 && physreg <= 31) ||  // t3-t6
+               (physreg == 1);                      // ra
+    }
 }
 
 bool isCalleeSaved(unsigned physreg, bool isFloat) {
     if (isFloat) {
-
-        
         // 浮点Callee-saved寄存器: fs0-fs1 (40-41), fs2-fs11 (50-59)
         return (physreg >= 40 && physreg <= 41) ||  // fs0-fs1
-        (physreg >= 50 && physreg <= 59);     // fs2-fs11
+               (physreg >= 50 && physreg <= 59);    // fs2-fs11
     } else {
-        
         // 整数Callee-saved寄存器: s0-s1 (8-9), s2-s11 (18-27), sp (2)
-        return (physreg >= 8 && physreg <= 9) ||  // s0-s1
-        (physreg >= 18 && physreg <= 27) ||   // s2-s11
-        (physreg == 2);                       // sp
+        return (physreg >= 8 && physreg <= 9) ||    // s0-s1
+               (physreg >= 18 && physreg <= 27) ||  // s2-s11
+               (physreg == 2);                      // sp
     }
 }
 
@@ -210,7 +209,6 @@ bool isArgumentReg(unsigned physreg, bool isFloat) {
         return (physreg >= 42 && physreg <= 49);
 
     } else {
-
         // 整数参数寄存器: a0-a7 (10-17)
         return (physreg >= 10 && physreg <= 17);
     }
@@ -220,9 +218,7 @@ bool isReturnReg(unsigned physreg, bool isFloat) {
     if (isFloat) {
         // 浮点返回值寄存器: fa0-fa1 (42-43)
         return (physreg >= 42 && physreg <= 43);
-    }
-    else {
-
+    } else {
         // 整数返回值寄存器: a0-a1 (10-11)
         return (physreg >= 10 && physreg <= 11);
     }
