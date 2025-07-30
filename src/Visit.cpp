@@ -3233,7 +3233,6 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
                   << ", hasInitializer: " << global_var->hasInitializer()
                   << std::endl;
 
-        // 强制所有全局变量都从内存加载，避免寄存器复用问题
         // 1. 生成LA指令来获取地址
         auto global_addr_reg = codeGen_->allocateReg();
         auto global_addr_inst =
@@ -3244,29 +3243,35 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
             global_var->getName()));  // global symbol
         parent_bb->addInstruction(std::move(global_addr_inst));
 
-        // 2. 生成加载指令来获取值
-        bool is_float_value = global_var->getValueType()->isFloatType();
-        auto value_reg = is_float_value ? codeGen_->allocateFloatReg()
-                                        : codeGen_->allocateReg();
-        Opcode load_opcode = is_float_value ? Opcode::FLW : Opcode::LW;
+        // 2. 检查是否是数组类型 - 如果是数组，只返回地址，不加载值
+        if (global_var->getValueType()->isArrayType()) {
+            // 对于数组类型的全局变量，返回基地址用于后续的GEP计算
+            std::cout << "DEBUG: Global array " << global_var->getName()
+                      << " - returning base address for GEP" << std::endl;
+            return std::make_unique<RegisterOperand>(
+                global_addr_reg->getRegNum(), global_addr_reg->isVirtual());
+        } else {
+            // 对于标量类型的全局变量，生成加载指令来获取值
+            bool is_float_value = global_var->getValueType()->isFloatType();
+            auto value_reg = is_float_value ? codeGen_->allocateFloatReg()
+                                            : codeGen_->allocateReg();
+            Opcode load_opcode = is_float_value ? Opcode::FLW : Opcode::LW;
 
-        auto load_inst = std::make_unique<Instruction>(load_opcode, parent_bb);
-        load_inst->addOperand(std::make_unique<RegisterOperand>(
-            value_reg->getRegNum(), value_reg->isVirtual(),
-            is_float_value ? RegisterType::Float : RegisterType::Integer));
-        load_inst->addOperand(std::make_unique<MemoryOperand>(
-            std::make_unique<RegisterOperand>(global_addr_reg->getRegNum(),
-                                              global_addr_reg->isVirtual()),
-            std::make_unique<ImmediateOperand>(0)));
-        parent_bb->addInstruction(std::move(load_inst));
+            auto load_inst =
+                std::make_unique<Instruction>(load_opcode, parent_bb);
+            load_inst->addOperand(std::make_unique<RegisterOperand>(
+                value_reg->getRegNum(), value_reg->isVirtual(),
+                is_float_value ? RegisterType::Float : RegisterType::Integer));
+            load_inst->addOperand(std::make_unique<MemoryOperand>(
+                std::make_unique<RegisterOperand>(global_addr_reg->getRegNum(),
+                                                  global_addr_reg->isVirtual()),
+                std::make_unique<ImmediateOperand>(0)));
+            parent_bb->addInstruction(std::move(load_inst));
 
-        // 不建立映射！这是修复的关键 - 每次引用都是独立的
-        // codeGen_->mapValueToReg(value, value_reg->getRegNum(),
-        //                         value_reg->isVirtual());
-
-        return std::make_unique<RegisterOperand>(
-            value_reg->getRegNum(), value_reg->isVirtual(),
-            is_float_value ? RegisterType::Float : RegisterType::Integer);
+            return std::make_unique<RegisterOperand>(
+                value_reg->getRegNum(), value_reg->isVirtual(),
+                is_float_value ? RegisterType::Float : RegisterType::Integer);
+        }
     }
 
     // 检查是否是常量

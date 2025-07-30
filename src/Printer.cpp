@@ -341,7 +341,8 @@ std::string DataSegment::toString() const {
                     // print the value.
                     result += "  .float " + std::to_string(value) + "\n";
                 } else if constexpr (std::is_same_v<T, std::vector<int32_t>>) {
-                    // Optimize consecutive zeros with .space directive
+                    // Optimize consecutive zeros with .space directive (only
+                    // for 2+ consecutive zeros)
                     size_t i = 0;
                     while (i < value.size()) {
                         if (value[i] != 0) {
@@ -355,12 +356,21 @@ std::string DataSegment::toString() const {
                                 i++;
                             }
                             size_t zero_count = i - zero_start;
-                            result += "  .space " +
-                                      std::to_string(zero_count * 4) + "\n";
+
+                            // Only use .space for 2+ consecutive zeros,
+                            // otherwise use .word 0
+                            if (zero_count >= 2) {
+                                result += "  .space " +
+                                          std::to_string(zero_count * 4) + "\n";
+                            } else {
+                                // Single zero, use .word 0 for clarity
+                                result += "  .word 0\n";
+                            }
                         }
                     }
                 } else if constexpr (std::is_same_v<T, std::vector<float>>) {
-                    // Optimize consecutive zeros with .space directive
+                    // Optimize consecutive zeros with .space directive (only
+                    // for 2+ consecutive zeros)
                     size_t i = 0;
                     while (i < value.size()) {
                         if (value[i] != 0.0f) {
@@ -374,8 +384,16 @@ std::string DataSegment::toString() const {
                                 i++;
                             }
                             size_t zero_count = i - zero_start;
-                            result += "  .space " +
-                                      std::to_string(zero_count * 4) + "\n";
+
+                            // Only use .space for 2+ consecutive zeros,
+                            // otherwise use .float 0.0
+                            if (zero_count >= 2) {
+                                result += "  .space " +
+                                          std::to_string(zero_count * 4) + "\n";
+                            } else {
+                                // Single zero, use .float 0.0 for clarity
+                                result += "  .float 0.0\n";
+                            }
                         }
                     }
                 }
