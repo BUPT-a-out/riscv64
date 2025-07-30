@@ -1265,13 +1265,46 @@ void Visitor::processDeferredPhiNode(const midend::Instruction* inst,
             }
         }
 
-        // 修复：只有在确实会干扰条件判断时才跳过PHI赋值
-        // should_skip_phi 已经包含了精确的干扰检测逻辑
+        // 修复：当检测到寄存器冲突时，使用更安全的策略
         if (should_skip_phi) {
-            // 如果检测到真正的干扰（目标寄存器与条件寄存器冲突），跳过PHI赋值
-            // 这是必要的，以避免覆盖条件跳转使用的寄存器
+            // 检测到寄存器冲突，需要特殊处理
+            // 对于常量PHI值，我们可以在条件跳转之前的安全位置插入
+            if (is_constant_phi) {
+                // 找到更早的插入位置，在条件计算之前
+                auto early_pos = incoming_bb->begin();
+                auto safe_early_pos = early_pos;
+
+                // 寻找条件计算指令之前的位置
+                for (auto it = incoming_bb->begin();
+                     it != insert_pos && it != incoming_bb->end(); ++it) {
+                    auto* current_inst = it->get();
+                    if (current_inst->getOpcode() != Opcode::SEQZ &&
+                        current_inst->getOpcode() != Opcode::SNEZ &&
+                        current_inst->getOpcode() != Opcode::SLT &&
+                        current_inst->getOpcode() != Opcode::SGT) {
+                        safe_early_pos = it;
+                        ++safe_early_pos;  // 插入到这个指令之后
+                    }
+                }
+
+                // 在安全的早期位置插入PHI赋值
+                if (safe_early_pos != incoming_bb->end()) {
+                    storeOperandToReg(std::move(value_operand),
+                                      std::move(dest_reg), incoming_bb,
+                                      safe_early_pos);
+                } else {
+                    // 如果找不到安全位置，在基本块开始处插入
+                    storeOperandToReg(std::move(value_operand),
+                                      std::move(dest_reg), incoming_bb,
+                                      incoming_bb->begin());
+                }
+            } else {
+                // 对于非常量PHI值，使用原策略
+                storeOperandToReg(std::move(value_operand), std::move(dest_reg),
+                                  incoming_bb, insert_pos);
+            }
         } else {
-            // 对于所有其他情况（包括常量PHI），正常执行赋值
+            // 没有冲突，正常执行赋值
             storeOperandToReg(std::move(value_operand), std::move(dest_reg),
                               incoming_bb, insert_pos);
         }
@@ -1326,9 +1359,22 @@ void Visitor::visitBranchInst(const midend::Instruction* inst,
         }
 
         // 生成条件跳转指令
+        // 为了避免PHI节点处理时覆盖条件寄存器，我们保存条件值到临时寄存器
+        auto condition_reg = immToReg(std::move(condition), parent_bb);
+        auto temp_condition_reg = codeGen_->allocateReg();
+
+        // 保存条件值到临时寄存器
+        auto mv_inst = std::make_unique<Instruction>(Opcode::MV, parent_bb);
+        mv_inst->addOperand(std::make_unique<RegisterOperand>(
+            temp_condition_reg->getRegNum(), temp_condition_reg->isVirtual()));
+        mv_inst->addOperand(std::move(condition_reg));
+        parent_bb->addInstruction(std::move(mv_inst));
+
+        // 使用临时寄存器进行条件跳转
         auto instruction =
             std::make_unique<Instruction>(Opcode::BNEZ, parent_bb);
-        instruction->addOperand(std::move(condition));  // 条件
+        instruction->addOperand(std::make_unique<RegisterOperand>(
+            temp_condition_reg->getRegNum(), temp_condition_reg->isVirtual()));
         instruction->addOperand(
             std::make_unique<LabelOperand>(true_bb));  // 真分支标签
         parent_bb->addInstruction(std::move(instruction));
