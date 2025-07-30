@@ -424,17 +424,7 @@ bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
 
         int selectedColor = -1;
 
-        // 首先检查强约束
-        if (strongConstraints.find(regNum) != strongConstraints.end()) {
-            unsigned requiredColor = strongConstraints[regNum];
-            if (usedColors.find(requiredColor) == usedColors.end()) {
-                selectedColor = requiredColor;
-            } else {
-                // 强约束冲突，必须溢出
-                spilledRegs.insert(regNum);
-                return false;
-            }
-        } else {
+        
             // 正常着色流程，但要避开保留寄存器
             auto preferredRegs = getABIPreferredRegs(regNum);
             for (unsigned color : preferredRegs) {
@@ -459,7 +449,7 @@ bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
                     }
                 }
             }
-        }
+        
 
         if (selectedColor == -1) {
             spilledRegs.insert(regNum);
@@ -1489,7 +1479,7 @@ void RegAllocChaitin::setParameterConstraints() {
                 if (ABI::isArgumentReg(srcReg, assigningFloat) &&
                     !isPhysicalReg(dstReg)) {
                     // 强制约束：参数虚拟寄存器必须分配到对应的参数物理寄存器
-                    addStrongPhysicalConstraint(dstReg, srcReg);
+                    // addStrongPhysicalConstraint(dstReg, srcReg);
                     paramToVirtual[srcReg] = dstReg;
                 }
             }

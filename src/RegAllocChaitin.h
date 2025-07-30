@@ -59,8 +59,6 @@ class RegAllocChaitin {
         physicalConstraints;
     void addPhysicalConstraint(unsigned virtualReg, unsigned physicalReg);
 
-    // 强约束：必须分配到指定的物理寄存器
-    std::unordered_map<unsigned, unsigned> strongConstraints;
     // 保留的物理寄存器：不能分配给任何虚拟寄存器
     std::unordered_set<unsigned> reservedPhysicalRegs;
 
@@ -151,11 +149,6 @@ class RegAllocChaitin {
     void setCallSiteConstraints();
     void setPreCallConstraints(BasicBlock* bb, Instruction* callInst);
     void setPostCallConstraints(BasicBlock* bb, Instruction* callInst);
-
-    void addStrongPhysicalConstraint(unsigned virtualReg,
-                                     unsigned physicalReg) {
-        strongConstraints[virtualReg] = physicalReg;
-    }
 
     void addReservedPhysicalReg(unsigned physicalReg) {
         reservedPhysicalRegs.insert(physicalReg);
