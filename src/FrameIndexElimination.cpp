@@ -56,8 +56,11 @@ void FrameIndexElimination::assignFinalOffsets() {
     // 这个计算很令人迷惑.
     int callArgSize = calculateMaxCallArgSize();
 
-    // 计算总栈帧大小：基础保存寄存器 + 局部变量 + 溢出寄存器 + 调用参数
-    int totalSize = savedRegSize + localVarSize + spillSize + callArgSize;
+    // 计算总栈帧大小：基础保存寄存器 + 局部变量 + 溢出寄存器 + 调用参数 +
+    // 安全空间 重要修复：增加安全空间到总栈帧大小计算中
+    int safetySpace = 16;  // 额外的安全空间，确保所有栈对象都在栈帧范围内
+    int totalSize =
+        savedRegSize + localVarSize + spillSize + callArgSize + safetySpace;
     layout.totalFrameSize = alignTo(totalSize, 16);  // 16字节对齐
 
     // 计算各区域偏移
@@ -74,8 +77,13 @@ void FrameIndexElimination::assignFinalOffsets() {
     // layout.spillAreaOffset = -localVarSize;
 
     // 为每个Frame Index分配具体偏移 (相对于s0)
-    int currentLocalOffset = -savedRegSize;
-    int currentSpillOffset = currentLocalOffset - localVarSize;
+    // 重要修复：确保所有栈对象都在安全的内存区域
+    // s0 指向栈帧顶部，所有栈对象都应该在 s0 以下的位置
+
+    // 保存寄存器区域在栈帧顶部附近，预留空间给保存的寄存器
+    int currentLocalOffset = -savedRegSize - 8;  // 额外预留8字节安全空间
+    int currentSpillOffset =
+        currentLocalOffset - localVarSize - 8;  // 额外预留8字节安全空间
 
     // TODO: 写个方法分别获取不同类型对象
     for (const auto& obj : stackManager->getAllStackObjects()) {
