@@ -3910,8 +3910,8 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         }
         // 如果不在范围内，分配一个新的寄存器
         auto new_reg = codeGen_->allocateReg();
-        codeGen_->mapValueToReg(value, new_reg->getRegNum(),
-                                new_reg->isVirtual());
+        // codeGen_->mapValueToReg(value, new_reg->getRegNum(),
+        //                         new_reg->isVirtual());
         auto inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
         inst->addOperand(
             std::make_unique<RegisterOperand>(new_reg->getRegNum(),
