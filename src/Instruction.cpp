@@ -287,7 +287,19 @@ std::vector<unsigned> Instruction::getUsedIntegerRegs() const {
         case SRL:
         case SRA:
         case SLT:
-        case SLTU: {
+        case SLTU:
+        case REM:
+        case REMU:
+        case DIVW:
+        case DIVUW:
+        case REMW:
+        case REMUW:
+        case ADDW:
+        case SUBW:
+        case MULW:
+        case SLLW:
+        case SRLW:
+        case SRAW: {
             if (operands.size() >= 3) {
                 if (operands[1]->isReg() && operands[1]->isIntegerRegister()) {
                     usedRegs.push_back(operands[1]->getRegNum());
@@ -308,7 +320,11 @@ std::vector<unsigned> Instruction::getUsedIntegerRegs() const {
         case ANDI:
         case SLLI:
         case SRLI:
-        case SRAI: {
+        case SRAI:
+        case ADDIW:
+        case SLLIW:
+        case SRLIW:
+        case SRAIW: {
             if (operands.size() >= 2 && operands[1]->isReg() &&
                 operands[1]->isIntegerRegister()) {
                 usedRegs.push_back(operands[1]->getRegNum());
@@ -364,6 +380,23 @@ std::vector<unsigned> Instruction::getUsedIntegerRegs() const {
             break;
         }
 
+            // 浮点-整数移动指令
+        case FMV_X_W:
+        case FMV_X_D: {
+            // 这些指令使用浮点寄存器作为源，在浮点寄存器方法中处理
+            break;
+        }
+
+        case FMV_W_X:
+        case FMV_D_X: {
+            // 这些指令使用整数寄存器作为源
+            if (operands.size() >= 2 && operands[1]->isReg() &&
+                operands[1]->isIntegerRegister()) {
+                usedRegs.push_back(operands[1]->getRegNum());
+            }
+            break;
+        }
+
         // 分支指令：BEQ rs1, rs2, label - 使用rs1和rs2进行比较
         case BEQ:
         case BNE:
@@ -380,6 +413,14 @@ std::vector<unsigned> Instruction::getUsedIntegerRegs() const {
                 }
             }
             break;
+        }
+
+        case BNEZ: {
+            if (operands.size() >= 2) {
+                if (operands[0]->isReg() && operands[0]->isIntegerRegister()) {
+                    usedRegs.push_back(operands[0]->getRegNum());
+                }
+            }
         }
 
         case JALR: {
@@ -459,7 +500,17 @@ std::vector<unsigned> Instruction::getUsedFloatRegs() const {
         case FADD_D:
         case FSUB_D:
         case FMUL_D:
-        case FDIV_D: {
+        case FDIV_D:
+        case FMIN_S:
+        case FMIN_D:
+        case FMAX_S:
+        case FMAX_D:
+        case FSGNJ_S:
+        case FSGNJ_D:
+        case FSGNJN_S:
+        case FSGNJN_D:
+        case FSGNJX_S:
+        case FSGNJX_D: {
             if (operands.size() >= 3) {
                 if (operands[1]->isReg() && operands[1]->isFloatRegister()) {
                     usedRegs.push_back(operands[1]->getRegNum());
@@ -467,6 +518,18 @@ std::vector<unsigned> Instruction::getUsedFloatRegs() const {
                 if (operands[2]->isReg() && operands[2]->isFloatRegister()) {
                     usedRegs.push_back(operands[2]->getRegNum());
                 }
+            }
+            break;
+        }
+
+            // 单操作数浮点指令
+        case FSQRT_S:
+        case FSQRT_D:
+        case FCLASS_S:
+        case FCLASS_D: {
+            if (operands.size() >= 2 && operands[1]->isReg() &&
+                operands[1]->isFloatRegister()) {
+                usedRegs.push_back(operands[1]->getRegNum());
             }
             break;
         }
@@ -519,11 +582,33 @@ std::vector<unsigned> Instruction::getUsedFloatRegs() const {
         case FCVT_W_S:
         case FCVT_L_S:
         case FCVT_WU_S:
-        case FCVT_LU_S: {
+        case FCVT_LU_S:
+        case FCVT_W_D:
+        case FCVT_L_D:
+        case FCVT_WU_D:
+        case FCVT_LU_D:
+        case FCVT_S_D:
+        case FCVT_D_S: {
             if (operands.size() >= 2 && operands[1]->isReg() &&
                 operands[1]->isFloatRegister()) {
                 usedRegs.push_back(operands[1]->getRegNum());
             }
+            break;
+        }
+
+            // 浮点-整数移动指令
+        case FMV_X_W:
+        case FMV_X_D: {
+            if (operands.size() >= 2 && operands[1]->isReg() &&
+                operands[1]->isFloatRegister()) {
+                usedRegs.push_back(operands[1]->getRegNum());
+            }
+            break;
+        }
+
+        case FMV_W_X:
+        case FMV_D_X: {
+            // 这些指令使用整数寄存器作为源，不使用浮点寄存器
             break;
         }
 
@@ -585,7 +670,56 @@ std::vector<unsigned> Instruction::getDefinedIntegerRegs() const {
         case AUIPC:
         case MV:
         case LA:
-        case FRAMEADDR: {
+        case FRAMEADDR:
+        case REM:
+        case REMU:
+        case DIVW:
+        case DIVUW:
+        case REMW:
+        case REMUW:
+        case ADDW:
+        case SUBW:
+        case MULW:
+        case SLLW:
+        case SRLW:
+        case SRAW:
+        case ADDIW:
+        case SLLIW:
+        case SRLIW:
+        case SRAIW: {
+            if (operands[0]->isReg() && operands[0]->isIntegerRegister()) {
+                definedRegs.push_back(operands[0]->getRegNum());
+            }
+            break;
+        }
+
+            // 浮点转换到整数指令定义整数寄存器
+        case FCVT_W_S:
+        case FCVT_L_S:
+        case FCVT_WU_S:
+        case FCVT_LU_S:
+        case FCVT_W_D:
+        case FCVT_L_D:
+        case FCVT_WU_D:
+        case FCVT_LU_D: {
+            if (operands[0]->isReg() && operands[0]->isIntegerRegister()) {
+                definedRegs.push_back(operands[0]->getRegNum());
+            }
+            break;
+        }
+
+        // 浮点分类指令定义整数寄存器
+        case FCLASS_S:
+        case FCLASS_D: {
+            if (operands[0]->isReg() && operands[0]->isIntegerRegister()) {
+                definedRegs.push_back(operands[0]->getRegNum());
+            }
+            break;
+        }
+
+        // 浮点到整数移动指令定义整数寄存器
+        case FMV_X_W:
+        case FMV_X_D: {
             if (operands[0]->isReg() && operands[0]->isIntegerRegister()) {
                 definedRegs.push_back(operands[0]->getRegNum());
             }
@@ -663,7 +797,52 @@ std::vector<unsigned> Instruction::getDefinedFloatRegs() const {
         case FMUL_D:
         case FDIV_D:
         case FMOV_S:
-        case FMOV_D: {
+        case FMOV_D:
+        case FSQRT_S:
+        case FSQRT_D:
+        case FMIN_S:
+        case FMIN_D:
+        case FMAX_S:
+        case FMAX_D:
+        case FSGNJ_S:
+        case FSGNJ_D:
+        case FSGNJN_S:
+        case FSGNJN_D:
+        case FSGNJX_S:
+        case FSGNJX_D: {
+            if (operands[0]->isReg() && operands[0]->isFloatRegister()) {
+                definedRegs.push_back(operands[0]->getRegNum());
+            }
+            break;
+        }
+
+            // 整数到浮点转换指令 - 定义浮点寄存器
+        case FCVT_S_W:
+        case FCVT_S_L:
+        case FCVT_S_WU:
+        case FCVT_S_LU:
+        case FCVT_D_W:
+        case FCVT_D_L:
+        case FCVT_D_WU:
+        case FCVT_D_LU: {
+            if (operands[0]->isReg() && operands[0]->isFloatRegister()) {
+                definedRegs.push_back(operands[0]->getRegNum());
+            }
+            break;
+        }
+
+        // 浮点转换指令（浮点之间）
+        case FCVT_S_D:
+        case FCVT_D_S: {
+            if (operands[0]->isReg() && operands[0]->isFloatRegister()) {
+                definedRegs.push_back(operands[0]->getRegNum());
+            }
+            break;
+        }
+
+        // 整数到浮点移动指令定义浮点寄存器
+        case FMV_W_X:
+        case FMV_D_X: {
             if (operands[0]->isReg() && operands[0]->isFloatRegister()) {
                 definedRegs.push_back(operands[0]->getRegNum());
             }
@@ -695,14 +874,27 @@ std::vector<unsigned> Instruction::getDefinedFloatRegs() const {
             break;
         }
 
-        // 整数到浮点转换指令 - 定义浮点寄存器
-        case FCVT_S_W:
-        case FCVT_S_L:
-        case FCVT_S_WU:
-        case FCVT_S_LU: {
-            if (operands[0]->isReg() && operands[0]->isFloatRegister()) {
-                definedRegs.push_back(operands[0]->getRegNum());
-            }
+            // 浮点分类指令不定义浮点寄存器（定义整数寄存器）
+        case FCLASS_S:
+        case FCLASS_D: {
+            break;
+        }
+
+        // 浮点到整数转换指令不定义浮点寄存器
+        case FCVT_W_S:
+        case FCVT_L_S:
+        case FCVT_WU_S:
+        case FCVT_LU_S:
+        case FCVT_W_D:
+        case FCVT_L_D:
+        case FCVT_WU_D:
+        case FCVT_LU_D: {
+            break;
+        }
+
+        // 浮点到整数移动指令不定义浮点寄存器
+        case FMV_X_W:
+        case FMV_X_D: {
             break;
         }
 

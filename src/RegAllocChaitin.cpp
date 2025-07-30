@@ -31,8 +31,11 @@ void RegAllocChaitin::allocateRegisters() {
     if (assigningFloat) {
         printInterferenceGraph();
     }
+        printInterferenceGraph();
 
     performCoalescing();
+        printInterferenceGraph();
+
 
     bool success = colorGraph();
 
