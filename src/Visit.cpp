@@ -1497,7 +1497,16 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
         // 根据原始IR中存储值的类型选择存储指令
         bool is_float_store =
             store_inst->getValueOperand()->getType()->isFloatType();
+        std::cout << "DEBUG: Store instruction type check - is_float: "
+                  << is_float_store << ", value type: "
+                  << store_inst->getValueOperand()->getType()->toString()
+                  << std::endl;
         Opcode store_opcode = is_float_store ? Opcode::FSW : Opcode::SW;
+        std::cout << "DEBUG: Selected store opcode: "
+                  << (store_opcode == Opcode::SW
+                          ? "SW"
+                          : (store_opcode == Opcode::FSW ? "FSW" : "OTHER"))
+                  << std::endl;
         auto store_inst_new =
             std::make_unique<Instruction>(store_opcode, parent_bb);
         store_inst_new->addOperand(
@@ -1525,8 +1534,17 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
         // 根据原始IR中存储值的类型选择存储指令
         bool is_float_store =
             store_inst->getValueOperand()->getType()->isFloatType();
+        std::cout << "DEBUG: Store to GEP - is_float: " << is_float_store
+                  << ", value type: "
+                  << store_inst->getValueOperand()->getType()->toString()
+                  << std::endl;
 
         Opcode store_opcode = is_float_store ? Opcode::FSW : Opcode::SW;
+        std::cout << "DEBUG: Selected store opcode for GEP: "
+                  << (store_opcode == Opcode::SW
+                          ? "SW"
+                          : (store_opcode == Opcode::FSW ? "FSW" : "OTHER"))
+                  << std::endl;
         auto store_inst_new =
             std::make_unique<Instruction>(store_opcode, parent_bb);
         store_inst_new->addOperand(
@@ -1553,8 +1571,17 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
         // 根据原始IR中存储值的类型选择存储指令
         bool is_float_store =
             store_inst->getValueOperand()->getType()->isFloatType();
+        std::cout << "DEBUG: Store to Global - is_float: " << is_float_store
+                  << ", value type: "
+                  << store_inst->getValueOperand()->getType()->toString()
+                  << std::endl;
 
         Opcode store_opcode = is_float_store ? Opcode::FSW : Opcode::SW;
+        std::cout << "DEBUG: Selected store opcode for Global: "
+                  << (store_opcode == Opcode::SW
+                          ? "SW"
+                          : (store_opcode == Opcode::FSW ? "FSW" : "OTHER"))
+                  << std::endl;
         auto store_inst_new =
             std::make_unique<Instruction>(store_opcode, parent_bb);
         store_inst_new->addOperand(
@@ -3697,8 +3724,7 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
             // 特殊处理浮点零值
             if (float_value == 0.0f) {
                 auto float_reg = codeGen_->allocateFloatReg();
-                codeGen_->mapValueToReg(value, float_reg->getRegNum(),
-                                        float_reg->isVirtual());
+                // 不进行全局映射，避免跨基本块依赖
                 auto fcvt_inst =
                     std::make_unique<Instruction>(Opcode::FCVT_S_W, parent_bb);
                 fcvt_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -3721,8 +3747,7 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
             parent_bb->addInstruction(std::move(li_inst));
 
             auto float_reg = codeGen_->allocateFloatReg();
-            codeGen_->mapValueToReg(value, float_reg->getRegNum(),
-                                    float_reg->isVirtual());
+            // 不进行全局映射，避免跨基本块依赖
 
             auto fmv_inst =
                 std::make_unique<Instruction>(Opcode::FMV_W_X, parent_bb);
@@ -4034,9 +4059,9 @@ ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
                                 using T = std::decay_t<decltype(value)>;
                                 if constexpr (std::is_same_v<
                                                   T, std::vector<int32_t>>) {
-                                    flattened_values.insert(
-                                        flattened_values.end(), value.begin(),
-                                        value.end());
+                                    for (const auto& v : value) {
+                                        flattened_values.push_back(v);
+                                    }
                                 } else if constexpr (std::is_same_v<T,
                                                                     int32_t>) {
                                     flattened_values.push_back(value);
@@ -4091,9 +4116,9 @@ ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
                                 using T = std::decay_t<decltype(value)>;
                                 if constexpr (std::is_same_v<
                                                   T, std::vector<float>>) {
-                                    flattened_values.insert(
-                                        flattened_values.end(), value.begin(),
-                                        value.end());
+                                    for (const auto& v : value) {
+                                        flattened_values.push_back(v);
+                                    }
                                 } else if constexpr (std::is_same_v<T, float>) {
                                     flattened_values.push_back(value);
                                 }
