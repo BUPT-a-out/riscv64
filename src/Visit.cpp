@@ -748,23 +748,37 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
         throw std::runtime_error("Strides size mismatch with indices count");
     }
 
-    // 初始化总偏移量为0
-    auto total_offset_reg = codeGen_->allocateReg();
-    auto li_zero_inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
-    li_zero_inst->addOperand(std::make_unique<RegisterOperand>(
-        total_offset_reg->getRegNum(), total_offset_reg->isVirtual()));
-    li_zero_inst->addOperand(std::make_unique<ImmediateOperand>(0));
-    parent_bb->addInstruction(std::move(li_zero_inst));
+    // 检查是否所有索引都为常量0，如果是则直接返回基地址
+    bool all_indices_zero = true;
+    for (unsigned i = 0; i < gep_inst->getNumIndices(); ++i) {
+        auto* index_value = gep_inst->getIndex(i);
+        if (auto* const_int =
+                midend::dyn_cast<midend::ConstantInt>(index_value)) {
+            if (const_int->getSignedValue() != 0) {
+                all_indices_zero = false;
+                break;
+            }
+        } else {
+            all_indices_zero = false;
+            break;
+        }
+    }
+
+    if (all_indices_zero) {
+        // 所有索引都为0，直接返回基地址
+        codeGen_->mapValueToReg(inst, base_addr_reg->getRegNum(),
+                                base_addr_reg->isVirtual());
+        return std::make_unique<RegisterOperand>(base_addr_reg->getRegNum(),
+                                                 base_addr_reg->isVirtual());
+    }
+
+    // 计算总偏移量，采用更直接的策略
+    std::unique_ptr<RegisterOperand> total_offset_reg = nullptr;
 
     // 遍历所有索引，计算 index[i] * stride[i] 并累加
     for (unsigned i = 0; i < gep_inst->getNumIndices(); ++i) {
         auto* index_value = gep_inst->getIndex(i);
-        auto index_operand = visit(index_value, parent_bb);
         auto stride = strides[i];
-
-        std::cout << "Processing index " << i
-                  << ": value = " << index_value->toString()
-                  << ", stride = " << stride << std::endl;
 
         // 检查索引是否为常量0，如果是则跳过
         if (auto* const_int =
@@ -774,17 +788,19 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
             }
         }
 
-        // 将索引转换为寄存器
+        if (stride == 0) {
+            // stride为0，跳过
+            continue;
+        }
+
+        auto index_operand = visit(index_value, parent_bb);
         auto index_reg = immToReg(std::move(index_operand), parent_bb);
 
         // 计算 index * stride
         std::unique_ptr<RegisterOperand> offset_reg;
 
-        if (stride == 0) {
-            // stride为0，跳过
-            continue;
-        } else if (stride == 1) {
-            // stride为1，直接使用索引
+        if (stride == 1) {
+            // stride为1，直接使用索引作为偏移量
             offset_reg = std::move(index_reg);
         } else if ((stride & (stride - 1)) == 0) {
             // stride是2的幂，使用左移优化
@@ -825,18 +841,32 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
             parent_bb->addInstruction(std::move(mul_inst));
         }
 
-        // 累加到总偏移量：total_offset += index * stride
-        auto new_total_offset_reg = codeGen_->allocateReg();
-        auto add_inst = std::make_unique<Instruction>(Opcode::ADD, parent_bb);
-        add_inst->addOperand(std::make_unique<RegisterOperand>(
-            new_total_offset_reg->getRegNum(),
-            new_total_offset_reg->isVirtual()));
-        add_inst->addOperand(std::make_unique<RegisterOperand>(
-            total_offset_reg->getRegNum(), total_offset_reg->isVirtual()));
-        add_inst->addOperand(std::move(offset_reg));
-        parent_bb->addInstruction(std::move(add_inst));
+        // 累加到总偏移量
+        if (total_offset_reg == nullptr) {
+            // 第一个非零偏移量，直接使用
+            total_offset_reg = std::move(offset_reg);
+        } else {
+            // 累加：total_offset += offset
+            auto new_total_offset_reg = codeGen_->allocateReg();
+            auto add_inst =
+                std::make_unique<Instruction>(Opcode::ADD, parent_bb);
+            add_inst->addOperand(std::make_unique<RegisterOperand>(
+                new_total_offset_reg->getRegNum(),
+                new_total_offset_reg->isVirtual()));
+            add_inst->addOperand(std::make_unique<RegisterOperand>(
+                total_offset_reg->getRegNum(), total_offset_reg->isVirtual()));
+            add_inst->addOperand(std::move(offset_reg));
+            parent_bb->addInstruction(std::move(add_inst));
+            total_offset_reg = std::move(new_total_offset_reg);
+        }
+    }
 
-        total_offset_reg = std::move(new_total_offset_reg);
+    // 如果没有任何偏移量，直接返回基地址
+    if (total_offset_reg == nullptr) {
+        codeGen_->mapValueToReg(inst, base_addr_reg->getRegNum(),
+                                base_addr_reg->isVirtual());
+        return std::make_unique<RegisterOperand>(base_addr_reg->getRegNum(),
+                                                 base_addr_reg->isVirtual());
     }
 
     // 计算最终地址：基地址 + 总偏移量
