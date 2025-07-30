@@ -1077,14 +1077,6 @@ std::unique_ptr<MachineOperand> Visitor::visitPhiInst(
             throw std::runtime_error("Incoming block not found for PHI");
         }
 
-        // 立即处理，但使用更可靠的插入策略
-        // 访问输入值（在前驱块上下文）
-        auto value_operand = visit(incoming_value, incoming_bb);
-
-        // 创建赋值指令
-        auto dest_reg = std::make_unique<RegisterOperand>(phi_reg->getRegNum(),
-                                                          phi_reg->isVirtual());
-
         // 改进的插入策略：查找真正的跳转指令并在其前插入
         auto insert_pos = incoming_bb->end();
 
@@ -1113,6 +1105,40 @@ std::unique_ptr<MachineOperand> Visitor::visitPhiInst(
         if (!found_jump) {
             insert_pos = incoming_bb->end();
         }
+
+        // 特殊处理常量值：直接生成指令而不调用visit，避免指令顺序问题
+        std::unique_ptr<MachineOperand> value_operand;
+        if (auto* const_int =
+                midend::dyn_cast<midend::ConstantInt>(incoming_value)) {
+            auto value_int = const_int->getSignedValue();
+            constexpr int64_t IMM_MIN = -2048;
+            constexpr int64_t IMM_MAX = 2047;
+            auto signed_value = static_cast<int64_t>(value_int);
+
+            if (signed_value >= IMM_MIN && signed_value <= IMM_MAX) {
+                value_operand = std::make_unique<ImmediateOperand>(value_int);
+            } else {
+                // 创建寄存器并在指定位置生成li指令
+                auto temp_reg = codeGen_->allocateReg();
+                auto li_inst =
+                    std::make_unique<Instruction>(Opcode::LI, incoming_bb);
+                li_inst->addOperand(std::make_unique<RegisterOperand>(
+                    temp_reg->getRegNum(), temp_reg->isVirtual()));
+                li_inst->addOperand(
+                    std::make_unique<ImmediateOperand>(value_int));
+                incoming_bb->insert(insert_pos, std::move(li_inst));
+
+                value_operand = std::make_unique<RegisterOperand>(
+                    temp_reg->getRegNum(), temp_reg->isVirtual());
+            }
+        } else {
+            // 对于非常量值，使用原有逻辑但在临时BB中处理
+            value_operand = visit(incoming_value, incoming_bb);
+        }
+
+        // 创建赋值指令
+        auto dest_reg = std::make_unique<RegisterOperand>(phi_reg->getRegNum(),
+                                                          phi_reg->isVirtual());
 
         storeOperandToReg(std::move(value_operand), std::move(dest_reg),
                           incoming_bb, insert_pos);
@@ -1150,19 +1176,33 @@ void Visitor::processDeferredPhiNode(const midend::Instruction* inst,
             throw std::runtime_error("Incoming block not found for PHI");
         }
 
-        // 访问输入值
-        auto value_operand = visit(incoming_value, incoming_bb);
+        // 特殊处理常量值：直接生成指令而不调用visit，避免指令顺序问题
+        std::unique_ptr<MachineOperand> value_operand;
+        bool is_constant_phi = false;
+
+        if (auto* const_int =
+                midend::dyn_cast<midend::ConstantInt>(incoming_value)) {
+            is_constant_phi = true;
+            auto value_int = const_int->getSignedValue();
+            constexpr int64_t IMM_MIN = -2048;
+            constexpr int64_t IMM_MAX = 2047;
+            auto signed_value = static_cast<int64_t>(value_int);
+
+            if (signed_value >= IMM_MIN && signed_value <= IMM_MAX) {
+                value_operand = std::make_unique<ImmediateOperand>(value_int);
+            } else {
+                // 对于大常量，需要等到确定插入位置后才生成li指令
+                // 暂时使用特殊标记
+                value_operand = std::make_unique<ImmediateOperand>(value_int);
+            }
+        } else {
+            // 对于非常量值，使用原有逻辑
+            value_operand = visit(incoming_value, incoming_bb);
+        }
 
         // 创建赋值指令 - 但要注意避免干扰条件判断
         auto dest_reg =
             std::make_unique<RegisterOperand>(phi_reg_num, phi_is_virtual);
-
-        // 检查是否为常量值，如果是，我们需要特殊处理以避免干扰条件判断
-        bool is_constant_phi = false;
-        if (auto* imm_operand =
-                dynamic_cast<ImmediateOperand*>(value_operand.get())) {
-            is_constant_phi = true;
-        }
 
         // 查找跳转指令并在其前插入
         auto insert_pos = incoming_bb->end();
@@ -1287,6 +1327,37 @@ void Visitor::processDeferredPhiNode(const midend::Instruction* inst,
                     }
                 }
 
+                // 对于大常量，先生成li指令，再生成mv指令
+                if (auto* imm_op =
+                        dynamic_cast<ImmediateOperand*>(value_operand.get())) {
+                    auto value_int = imm_op->getValue();
+                    constexpr int64_t IMM_MIN = -2048;
+                    constexpr int64_t IMM_MAX = 2047;
+                    if (value_int < IMM_MIN || value_int > IMM_MAX) {
+                        // 生成临时寄存器和li指令
+                        auto temp_reg = codeGen_->allocateReg();
+                        auto li_inst = std::make_unique<Instruction>(
+                            Opcode::LI, incoming_bb);
+                        li_inst->addOperand(std::make_unique<RegisterOperand>(
+                            temp_reg->getRegNum(), temp_reg->isVirtual()));
+                        li_inst->addOperand(
+                            std::make_unique<ImmediateOperand>(value_int));
+
+                        // 在安全位置插入li指令
+                        if (safe_early_pos != incoming_bb->end()) {
+                            incoming_bb->insert(safe_early_pos,
+                                                std::move(li_inst));
+                        } else {
+                            incoming_bb->insert(incoming_bb->begin(),
+                                                std::move(li_inst));
+                        }
+
+                        // 更新value_operand为临时寄存器
+                        value_operand = std::make_unique<RegisterOperand>(
+                            temp_reg->getRegNum(), temp_reg->isVirtual());
+                    }
+                }
+
                 // 在安全的早期位置插入PHI赋值
                 if (safe_early_pos != incoming_bb->end()) {
                     storeOperandToReg(std::move(value_operand),
@@ -1304,7 +1375,32 @@ void Visitor::processDeferredPhiNode(const midend::Instruction* inst,
                                   incoming_bb, insert_pos);
             }
         } else {
-            // 没有冲突，正常执行赋值
+            // 没有冲突，但还要处理大常量的情况
+            if (auto* imm_op =
+                    dynamic_cast<ImmediateOperand*>(value_operand.get())) {
+                auto value_int = imm_op->getValue();
+                constexpr int64_t IMM_MIN = -2048;
+                constexpr int64_t IMM_MAX = 2047;
+                if (value_int < IMM_MIN || value_int > IMM_MAX) {
+                    // 生成临时寄存器和li指令
+                    auto temp_reg = codeGen_->allocateReg();
+                    auto li_inst =
+                        std::make_unique<Instruction>(Opcode::LI, incoming_bb);
+                    li_inst->addOperand(std::make_unique<RegisterOperand>(
+                        temp_reg->getRegNum(), temp_reg->isVirtual()));
+                    li_inst->addOperand(
+                        std::make_unique<ImmediateOperand>(value_int));
+
+                    // 在正确位置插入li指令
+                    incoming_bb->insert(insert_pos, std::move(li_inst));
+
+                    // 更新value_operand为临时寄存器
+                    value_operand = std::make_unique<RegisterOperand>(
+                        temp_reg->getRegNum(), temp_reg->isVirtual());
+                }
+            }
+
+            // 正常执行赋值
             storeOperandToReg(std::move(value_operand), std::move(dest_reg),
                               incoming_bb, insert_pos);
         }
@@ -1456,6 +1552,21 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
 
     const auto* store_inst = dynamic_cast<const midend::StoreInst*>(inst);
 
+    // 获取指针操作数
+    auto* pointer_operand = store_inst->getPointerOperand();
+
+    // 先处理指针操作数，确保alloca指令被优先处理
+    if (auto* alloca_inst =
+            midend::dyn_cast<midend::AllocaInst>(pointer_operand)) {
+        auto* sfm = parent_bb->getParent()->getStackFrameManager();
+        int frame_id = sfm->getAllocaStackSlotId(alloca_inst);
+
+        if (frame_id == -1) {
+            // 如果还没有为这个alloca分配FI，现在分配
+            visitAllocaInst(alloca_inst, parent_bb);
+        }
+    }
+
     // 获取存储的值，根据类型确保正确的寄存器类型
     auto raw_value_operand = visit(store_inst->getValueOperand(), parent_bb);
     auto value_operand =
@@ -1463,21 +1574,12 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
             ? ensureFloatReg(std::move(raw_value_operand), parent_bb)
             : immToReg(std::move(raw_value_operand), parent_bb);
 
-    // 获取指针操作数
-    auto* pointer_operand = store_inst->getPointerOperand();
-
     // 处理指针操作数 - 可能是 alloca 指令、GEP 指令或全局变量
     if (auto* alloca_inst =
             midend::dyn_cast<midend::AllocaInst>(pointer_operand)) {
         // 直接是 alloca 指令
         auto* sfm = parent_bb->getParent()->getStackFrameManager();
         int frame_id = sfm->getAllocaStackSlotId(alloca_inst);
-
-        if (frame_id == -1) {
-            // 如果还没有为这个alloca分配FI，现在分配
-            visitAllocaInst(alloca_inst, parent_bb);
-            frame_id = sfm->getAllocaStackSlotId(alloca_inst);
-        }
 
         if (frame_id == -1) {
             throw std::runtime_error(
