@@ -3651,12 +3651,18 @@ std::unique_ptr<MachineOperand> Visitor::funcArgToReg(
         }
     }
 
-    auto arg_reg = codeGen_->allocateReg();
+    // 根据参数类型分配正确的寄存器类型
+    std::unique_ptr<RegisterOperand> arg_reg;
+    if (is_current_float) {
+        arg_reg = codeGen_->allocateFloatReg();
+    } else {
+        arg_reg = codeGen_->allocateReg();
+    }
 
     // 根据参数类型选择加载指令
     Opcode load_opcode;
     if (is_current_float) {
-        load_opcode = Opcode::FLD;
+        load_opcode = Opcode::FLW;
     } else if (is_current_pointer) {
         load_opcode = Opcode::LD;  // 指针使用64位加载
     } else {
@@ -3666,13 +3672,15 @@ std::unique_ptr<MachineOperand> Visitor::funcArgToReg(
     // 使用新的辅助函数生成加载指令
     generateMemoryInstruction(
         load_opcode,
-        std::make_unique<RegisterOperand>(arg_reg->getRegNum(),
-                                          arg_reg->isVirtual()),
+        std::make_unique<RegisterOperand>(
+            arg_reg->getRegNum(), arg_reg->isVirtual(),
+            is_current_float ? RegisterType::Float : RegisterType::Integer),
         std::make_unique<RegisterOperand>("s0"),  // 使用帧指针
         arg_offset, parent_bb);
 
-    return std::make_unique<RegisterOperand>(arg_reg->getRegNum(),
-                                             arg_reg->isVirtual());
+    return std::make_unique<RegisterOperand>(
+        arg_reg->getRegNum(), arg_reg->isVirtual(),
+        is_current_float ? RegisterType::Float : RegisterType::Integer);
 }
 
 // 检查偏移量是否在有效的立即数范围内（-2048 到 +2047）
