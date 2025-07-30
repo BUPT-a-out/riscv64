@@ -44,7 +44,6 @@ class StackFrameManager {
     Function* function;
 
     std::vector<std::unique_ptr<StackObject>> stackObjects;
-    // TODO: spill float elsewhere
 
     std::unordered_map<const midend::Value*, int> allocaToStackSlot;
 
@@ -112,7 +111,6 @@ class StackFrameManager {
         return fi_id;
     }
 
-    // TODO: float
     int createSpillObject(unsigned reg) {
         int fi_id = getNewStackObjectIdentifier();
         auto spill_obj =

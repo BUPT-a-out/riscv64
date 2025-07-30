@@ -24,8 +24,8 @@ struct LivenessInfo {
 struct InterferenceNode {
     unsigned regNum;
     std::unordered_set<unsigned> neighbors;  // 邻接节点
-    int color = -1;                          // 分配的颜色（物理寄存器）
-    bool isPrecolored = false;               // 是否已经预着色（物理寄存器）
+    int color = -1;             // 分配的颜色（物理寄存器）
+    bool isPrecolored = false;  // 是否已经预着色（物理寄存器）
 
     unsigned coalesceParent;  // 合并的代表元
 
@@ -44,6 +44,11 @@ struct CoalesceInfo {
 class RegAllocChaitin {
    private:
     int assigningFloat = false;
+
+    // 递归深度控制，防止无限spill
+    int spillDepth = 0;
+    static const int MAX_SPILL_DEPTH = 5;         // 最大spill深度
+    std::unordered_set<unsigned> alreadySpilled;  // 已经spill过的寄存器
 
     // 可用于分配的寄存器 (排除保留寄存器)
     std::vector<unsigned> availableRegs;

@@ -6,8 +6,8 @@
 #include <stdexcept>
 #include <string>
 
-#include "ABI.h"
-#include "IR/BasicBlock.h"
+#include "../../../midend/include/IR/BasicBlock.h"
+#include "../ABI.h"
 // #include "Function.h"
 
 namespace riscv64 {

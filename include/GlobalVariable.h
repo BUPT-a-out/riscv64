@@ -33,4 +33,7 @@ struct GlobalVariable {
           initializer(std::move(i)) {}
 };
 
+// 声明检查零初始化的函数
+bool checkIfZeroInitializer(const ConstantInitializer& init);
+
 }  // namespace riscv64
