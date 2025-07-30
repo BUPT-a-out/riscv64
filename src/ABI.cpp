@@ -196,10 +196,10 @@ bool isCalleeSaved(unsigned physreg, bool isFloat) {
         return (physreg >= 40 && physreg <= 41) ||  // fs0-fs1
                (physreg >= 50 && physreg <= 59);    // fs2-fs11
     } else {
-        // 整数Callee-saved寄存器: s0-s1 (8-9), s2-s11 (18-27), sp (2)
-        return (physreg >= 8 && physreg <= 9) ||    // s0-s1
-               (physreg >= 18 && physreg <= 27) ||  // s2-s11
-               (physreg == 2);                      // sp
+        // 整数Callee-saved寄存器: s0-s1 (8-9), s2-s11 (18-27)
+        // 注意：sp(2)不应该被保存，它由序言和尾声管理
+        return (physreg >= 8 && physreg <= 9) ||  // s0-s1
+               (physreg >= 18 && physreg <= 27);  // s2-s11
     }
 }
 

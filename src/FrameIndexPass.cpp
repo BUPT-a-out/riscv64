@@ -155,31 +155,7 @@ void FrameIndexPass::generatePrologue() {
     // 创建所有指令，然后按正确顺序插入
     std::vector<std::unique_ptr<Instruction>> prologueInsts;
 
-    // 1. 设置新的帧指针: addi s0, sp, frameSize
-    auto setFp = std::make_unique<Instruction>(Opcode::ADDI);
-    setFp->addOperand(std::make_unique<RegisterOperand>(8, false));  // s0/fp
-    setFp->addOperand(std::make_unique<RegisterOperand>(2, false));  // sp
-    setFp->addOperand(
-        std::make_unique<ImmediateOperand>(layout.totalFrameSize));
-    prologueInsts.push_back(std::move(setFp));
-
-    // 2. 保存帧指针: sd s0, offset(sp)
-    auto saveFp = std::make_unique<Instruction>(Opcode::SD);
-    saveFp->addOperand(std::make_unique<RegisterOperand>(8, false));  // s0/fp
-    saveFp->addOperand(std::make_unique<MemoryOperand>(
-        std::make_unique<RegisterOperand>(2, false),  // sp
-        std::make_unique<ImmediateOperand>(layout.framePointerOffset)));
-    prologueInsts.push_back(std::move(saveFp));
-
-    // 3. 保存返回地址: sd ra, offset(sp)
-    auto saveRa = std::make_unique<Instruction>(Opcode::SD);
-    saveRa->addOperand(std::make_unique<RegisterOperand>(1, false));  // ra
-    saveRa->addOperand(std::make_unique<MemoryOperand>(
-        std::make_unique<RegisterOperand>(2, false),  // sp
-        std::make_unique<ImmediateOperand>(layout.returnAddressOffset)));
-    prologueInsts.push_back(std::move(saveRa));
-
-    // 4. 调整栈指针: addi sp, sp, -frameSize （这个必须最先执行）
+    // 1. 调整栈指针: addi sp, sp, -frameSize （这个必须最先执行）
     auto stackAdjust = std::make_unique<Instruction>(Opcode::ADDI);
     stackAdjust->addOperand(std::make_unique<RegisterOperand>(2, false));  // sp
     stackAdjust->addOperand(std::make_unique<RegisterOperand>(2, false));  // sp
@@ -187,9 +163,33 @@ void FrameIndexPass::generatePrologue() {
         std::make_unique<ImmediateOperand>(-layout.totalFrameSize));
     prologueInsts.push_back(std::move(stackAdjust));
 
-    // 按正确顺序插入指令（从后往前插入，所以最后插入的是第一个执行的）
-    for (auto& inst : prologueInsts) {
-        insertInstructionAtBeginning(entryBlock, std::move(inst));
+    // 2. 保存返回地址: sd ra, offset(sp)
+    auto saveRa = std::make_unique<Instruction>(Opcode::SD);
+    saveRa->addOperand(std::make_unique<RegisterOperand>(1, false));  // ra
+    saveRa->addOperand(std::make_unique<MemoryOperand>(
+        std::make_unique<RegisterOperand>(2, false),  // sp
+        std::make_unique<ImmediateOperand>(layout.returnAddressOffset)));
+    prologueInsts.push_back(std::move(saveRa));
+
+    // 3. 保存旧的帧指针: sd s0, offset(sp) - 在修改s0之前保存
+    auto saveFp = std::make_unique<Instruction>(Opcode::SD);
+    saveFp->addOperand(std::make_unique<RegisterOperand>(8, false));  // s0/fp
+    saveFp->addOperand(std::make_unique<MemoryOperand>(
+        std::make_unique<RegisterOperand>(2, false),  // sp
+        std::make_unique<ImmediateOperand>(layout.framePointerOffset)));
+    prologueInsts.push_back(std::move(saveFp));
+
+    // 4. 设置新的帧指针: addi s0, sp, frameSize - 最后设置新的s0
+    auto setFp = std::make_unique<Instruction>(Opcode::ADDI);
+    setFp->addOperand(std::make_unique<RegisterOperand>(8, false));  // s0/fp
+    setFp->addOperand(std::make_unique<RegisterOperand>(2, false));  // sp
+    setFp->addOperand(
+        std::make_unique<ImmediateOperand>(layout.totalFrameSize));
+    prologueInsts.push_back(std::move(setFp));
+
+    // 按相反顺序插入指令，因为insertInstructionAtBeginning会逆序插入
+    for (auto it = prologueInsts.rbegin(); it != prologueInsts.rend(); ++it) {
+        insertInstructionAtBeginning(entryBlock, std::move(*it));
     }
 }
 
@@ -205,17 +205,7 @@ void FrameIndexPass::generateEpilogue() {
                 std::cout << "Generating epilogue for basic block: "
                           << bb->getLabel() << std::endl;
 
-                // 1. 恢复帧指针: ld s0, offset(sp)
-                auto restoreFp = std::make_unique<Instruction>(Opcode::LD);
-                restoreFp->addOperand(
-                    std::make_unique<RegisterOperand>(8, false));  // s0/fp
-                restoreFp->addOperand(std::make_unique<MemoryOperand>(
-                    std::make_unique<RegisterOperand>(2, false),  // sp
-                    std::make_unique<ImmediateOperand>(
-                        layout.framePointerOffset)));
-                insertInstructionBeforeRet(bb.get(), std::move(restoreFp));
-
-                // 2. 恢复返回地址: ld ra, offset(sp)
+                // 1. 恢复返回地址: ld ra, offset(sp)
                 auto restoreRa = std::make_unique<Instruction>(Opcode::LD);
                 restoreRa->addOperand(
                     std::make_unique<RegisterOperand>(1, false));  // ra
@@ -224,6 +214,16 @@ void FrameIndexPass::generateEpilogue() {
                     std::make_unique<ImmediateOperand>(
                         layout.returnAddressOffset)));
                 insertInstructionBeforeRet(bb.get(), std::move(restoreRa));
+
+                // 2. 恢复帧指针: ld s0, offset(sp)
+                auto restoreFp = std::make_unique<Instruction>(Opcode::LD);
+                restoreFp->addOperand(
+                    std::make_unique<RegisterOperand>(8, false));  // s0/fp
+                restoreFp->addOperand(std::make_unique<MemoryOperand>(
+                    std::make_unique<RegisterOperand>(2, false),  // sp
+                    std::make_unique<ImmediateOperand>(
+                        layout.framePointerOffset)));
+                insertInstructionBeforeRet(bb.get(), std::move(restoreFp));
 
                 // 3. 恢复栈指针: addi sp, sp, frameSize
                 auto restoreSp = std::make_unique<Instruction>(Opcode::ADDI);

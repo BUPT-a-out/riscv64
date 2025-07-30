@@ -3666,9 +3666,11 @@ std::unique_ptr<MachineOperand> Visitor::funcArgToReg(
         current_arg_position - 8;  // 在栈参数中的索引（0-based）
 
     // 栈参数位置：调用方分配的栈空间在被调用方栈帧上方
-    // 被调用方栈帧布局：sp -> 栈帧(352) -> 保存的s0(8) -> 保存的ra(8) ->
-    // 调用方栈参数(144) s0指向栈帧顶部，所以栈参数在 s0 + 16 开始
-    int64_t base_offset = 16;  // 跳过保存的ra(8字节) + 保存的s0(8字节)
+    // 被调用方栈帧布局：
+    // 高地址: 栈参数区域 <- s0+0开始
+    // s0: 栈帧顶部(原sp位置，call指令推入返回地址后)
+    // 低地址: 被调用函数栈帧
+    int64_t base_offset = 0;  // 第一个栈参数(第九个参数)在s0+0
     int64_t arg_offset = base_offset + stack_arg_index * 8;
 
     // 根据参数类型分配正确的寄存器类型
