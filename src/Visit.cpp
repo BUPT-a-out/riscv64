@@ -906,16 +906,29 @@ std::unique_ptr<MachineOperand> Visitor::visitCallInst(
                                  inst->toString());
     }
 
-    // 处理参数传递 - 根据RISC-V ABI，整数和浮点参数使用独立的寄存器组
+    // 处理参数传递 - 根据RISC-V ABI，前8个参数位置使用寄存器，其余用栈
     size_t num_args = called_func->getNumArgs();
 
-    // 独立维护整数和浮点参数的寄存器计数
-    int int_reg_count = 0;
-    int float_reg_count = 0;
+    // 按照RISC-V ABI规范：前8个参数位置使用寄存器，其余参数使用栈
     std::vector<std::pair<size_t, bool>>
         stack_args;  // 记录需要通过栈传递的参数 (索引, 是否浮点)
 
-    // 第一遍：处理寄存器参数，记录栈参数
+    // 使用标准RISC-V ABI：一次性分配栈空间，按正序放置参数
+    size_t stack_args_count = (num_args > 8) ? (num_args - 8) : 0;
+    size_t stack_space = stack_args_count * 8;  // 每个栈参数8字节对齐
+
+    // 一次性分配栈空间
+    if (stack_space > 0) {
+        auto stack_alloc_inst =
+            std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
+        stack_alloc_inst->addOperand(std::make_unique<RegisterOperand>("sp"));
+        stack_alloc_inst->addOperand(std::make_unique<RegisterOperand>("sp"));
+        stack_alloc_inst->addOperand(std::make_unique<ImmediateOperand>(
+            -static_cast<int64_t>(stack_space)));
+        parent_bb->addInstruction(std::move(stack_alloc_inst));
+    }
+
+    // 处理所有参数
     for (size_t arg_i = 0; arg_i < num_args; ++arg_i) {
         auto* dest_arg = called_func->getArg(arg_i);
         if (dest_arg == nullptr) {
@@ -932,52 +945,26 @@ std::unique_ptr<MachineOperand> Visitor::visitCallInst(
         }
 
         bool is_float_arg = dest_arg->getType()->isFloatType();
-        bool use_register = false;
 
-        if (is_float_arg) {
-            if (float_reg_count < 8) {
-                use_register = true;
-                float_reg_count++;
-            }
-        } else if (dest_arg->getType()->isIntegerType() ||
-                   dest_arg->getType()->isPointerType()) {
-            if (int_reg_count < 8) {
-                use_register = true;
-                int_reg_count++;
-            }
-        }
-
-        if (use_register) {
-            // 通过寄存器传递参数
-            auto dest_arg_operand = funcArgToReg(dest_arg, parent_bb);
-
-            auto* reg_operand =
-                dynamic_cast<RegisterOperand*>(dest_arg_operand.get());
-            if (reg_operand == nullptr) {
-                throw std::runtime_error(
-                    "Function argument must be a register operand");
+        if (arg_i < 8) {
+            // 前8个参数使用寄存器
+            std::string reg_name;
+            if (is_float_arg) {
+                reg_name = "fa" + std::to_string(arg_i);
+            } else {
+                reg_name = "a" + std::to_string(arg_i);
             }
 
             auto dest_reg = std::make_unique<RegisterOperand>(
-                reg_operand->getRegNum(), reg_operand->isVirtual(),
+                ABI::getRegNumFromABIName(reg_name), false,
                 is_float_arg ? RegisterType::Float : RegisterType::Integer);
 
             // 获取源操作数并移动到目标寄存器
             auto source_value = visit(source_operand, parent_bb);
             storeOperandToReg(std::move(source_value), std::move(dest_reg),
                               parent_bb);
-
         } else {
-            // 记录需要通过栈传递的参数
-            stack_args.emplace_back(arg_i, is_float_arg);
-        }
-    }
-
-    // 第二遍：处理栈参数
-    if (!stack_args.empty()) {
-        int stack_offset = 0;
-        for (const auto& [arg_i, is_float] : stack_args) {
-            auto* source_operand = call_inst->getArgOperand(arg_i);
+            // 超过8个的参数使用栈传递，按正序放置
             auto source_value = visit(source_operand, parent_bb);
 
             std::unique_ptr<RegisterOperand> source_reg;
@@ -987,29 +974,23 @@ std::unique_ptr<MachineOperand> Visitor::visitCallInst(
                 source_reg = immToReg(std::move(source_value), parent_bb);
             }
 
-            // 获取参数的真实类型来决定指令和大小
-            auto* dest_arg = called_func->getArg(arg_i);
-            bool is_pointer = dest_arg->getType()->isPointerType();
+            // 计算栈偏移：第一个栈参数在偏移0，第二个在偏移8，以此类推
+            int64_t stack_offset = (arg_i - 8) * 8;
 
-            // 根据参数类型选择存储指令和大小
+            // 根据参数类型选择存储指令
             Opcode store_opcode;
-            int arg_size;
-
-            if (is_float) {
+            if (is_float_arg) {
                 store_opcode = Opcode::FSW;
-                arg_size = 4;  // 单精度浮点，32位
-            } else if (is_pointer) {
+            } else if (dest_arg->getType()->isPointerType()) {
                 store_opcode = Opcode::SD;
-                arg_size = 8;  // 指针，64位
             } else {
                 store_opcode = Opcode::SW;
-                arg_size = 4;  // 整数，32位
             }
 
+            // 将参数存储在对应的栈位置
             generateMemoryInstruction(store_opcode, std::move(source_reg),
                                       std::make_unique<RegisterOperand>("sp"),
                                       stack_offset, parent_bb);
-            stack_offset += arg_size;
         }
     }
 
@@ -1019,6 +1000,17 @@ std::unique_ptr<MachineOperand> Visitor::visitCallInst(
     riscv_call_inst->addOperand(
         std::make_unique<LabelOperand>(called_func->getName()));  // 函数名
     parent_bb->addInstruction(std::move(riscv_call_inst));
+
+    // 调用后清理栈空间
+    if (stack_space > 0) {
+        auto stack_restore_inst =
+            std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
+        stack_restore_inst->addOperand(std::make_unique<RegisterOperand>("sp"));
+        stack_restore_inst->addOperand(std::make_unique<RegisterOperand>("sp"));
+        stack_restore_inst->addOperand(std::make_unique<ImmediateOperand>(
+            static_cast<int64_t>(stack_space)));
+        parent_bb->addInstruction(std::move(stack_restore_inst));
+    }
 
     // 如果被调用函数有返回值，则从相应的返回寄存器获取值并保存到新寄存器
     if (!called_func->getReturnType()->isVoidType()) {
@@ -3559,56 +3551,43 @@ std::optional<RegisterOperand*> Visitor::findRegForValue(
 std::unique_ptr<MachineOperand> Visitor::funcArgToReg(
     const midend::Argument* argument, BasicBlock* parent_bb) {
     // 获取函数参数对应的物理寄存器或者栈帧
-    // 需要根据参数类型和在同类型参数中的位置来确定寄存器
+    // 根据RISC-V ABI：前8个参数位置使用寄存器，其余使用栈
 
-    // 遍历函数参数，分别计算整数和浮点参数的索引
+    // 遍历函数参数，计算当前参数的位置索引
     auto* function = argument->getParent();
-    int int_arg_index = 0;
-    int float_arg_index = 0;
-    int current_arg_index = -1;
-    bool is_current_float = false;
+    int current_arg_position = -1;
+    bool is_current_float = argument->getType()->isFloatType();
 
     for (auto arg_iter = function->arg_begin(); arg_iter != function->arg_end();
          ++arg_iter) {
         const auto* arg = arg_iter->get();
-        if (arg == argument) {
-            current_arg_index = int_arg_index + float_arg_index;
-            is_current_float = arg->getType()->isFloatType();
-            break;
-        }
+        current_arg_position++;
 
-        if (arg->getType()->isFloatType()) {
-            float_arg_index++;
-        } else if (arg->getType()->isIntegerType() ||
-                   arg->getType()->isPointerType()) {
-            int_arg_index++;
+        if (arg == argument) {
+            break;  // 找到当前参数
         }
     }
 
-    if (current_arg_index == -1) {
+    if (current_arg_position == -1) {
         throw std::runtime_error("Argument not found in function signature");
     }
 
-    // 根据参数类型选择寄存器
-    if (is_current_float) {
-        // 浮点参数：fa0-fa7
-        if (float_arg_index < 8) {
-            std::string reg_name = "fa" + std::to_string(float_arg_index);
-            unsigned reg_num = ABI::getRegNumFromABIName(reg_name);
-            return std::make_unique<RegisterOperand>(reg_num, false,
-                                                     RegisterType::Float);
+    // 前8个参数位置使用寄存器
+    if (current_arg_position < 8) {
+        std::string reg_name;
+        if (is_current_float) {
+            reg_name = "fa" + std::to_string(current_arg_position);
+        } else {
+            reg_name = "a" + std::to_string(current_arg_position);
         }
-    } else {
-        // 整数/指针参数：a0-a7
-        if (int_arg_index < 8) {
-            std::string reg_name = "a" + std::to_string(int_arg_index);
-            unsigned reg_num = ABI::getRegNumFromABIName(reg_name);
-            return std::make_unique<RegisterOperand>(reg_num, false,
-                                                     RegisterType::Integer);
-        }
+
+        unsigned reg_num = ABI::getRegNumFromABIName(reg_name);
+        return std::make_unique<RegisterOperand>(
+            reg_num, false,
+            is_current_float ? RegisterType::Float : RegisterType::Integer);
     }
 
-    // 对于超过8个的参数（无论整数还是浮点），需要从栈上读取
+    // 对于超过8个位置的参数，需要从栈上读取
     if (parent_bb == nullptr) {
         throw std::runtime_error(
             "Cannot generate load instruction for stack argument without "
@@ -3618,38 +3597,33 @@ std::unique_ptr<MachineOperand> Visitor::funcArgToReg(
     // 获取当前参数的真实类型信息
     bool is_current_pointer = argument->getType()->isPointerType();
 
-    // 计算栈上的偏移量：需要累计所有之前栈参数的实际大小
-    int arg_offset = 0;
+    // 计算栈上的偏移量：栈参数在调用者推入的栈空间中
+    // 新的栈布局（从高地址到低地址）：
+    // - 调用者的栈参数（最后推入的参数在高地址）
+    // - 返回地址 (ra)  ← s0 + 8
+    // - 保存的帧指针   ← s0
+    // - 被调用函数的局部变量和其他数据  ← sp
+    //
+    // 栈参数从最后一个开始，按倒序排列
+    // 第arg_position个栈参数位于：s0 + 8 + (total_stack_args - (arg_position -
+    // 8)) * 8
 
-    // 遍历前面的所有栈参数（第9个参数开始）
+    // 计算总的栈参数数量（仅包括当前函数的栈参数）
+    size_t total_args = 0;
     for (auto arg_iter = function->arg_begin(); arg_iter != function->arg_end();
          ++arg_iter) {
-        const auto* arg = arg_iter->get();
-
-        // 计算当前参数在总参数中的索引
-        int total_index = 0;
-        for (auto check_iter = function->arg_begin(); check_iter != arg_iter;
-             ++check_iter) {
-            total_index++;
-        }
-
-        if (arg == argument) {
-            break;  // 找到当前参数，停止计算
-        }
-
-        // 只计算栈参数（第9个参数开始，索引≥8）的偏移
-        if (total_index >= 8) {
-            int this_arg_size;
-            if (arg->getType()->isFloatType()) {
-                this_arg_size = 8;  // 浮点参数，8字节
-            } else if (arg->getType()->isPointerType()) {
-                this_arg_size = 8;  // 指针参数，64位，8字节
-            } else {
-                this_arg_size = 4;  // 普通整数参数，32位，4字节
-            }
-            arg_offset += this_arg_size;
-        }
+        total_args++;
     }
+
+    size_t total_stack_args = (total_args > 8) ? (total_args - 8) : 0;
+    size_t stack_arg_index =
+        current_arg_position - 8;  // 在栈参数中的索引（0-based）
+
+    // 栈参数位置：调用方分配的栈空间在被调用方栈帧上方
+    // 被调用方栈帧布局：sp -> 栈帧(352) -> 保存的s0(8) -> 保存的ra(8) ->
+    // 调用方栈参数(144) s0指向栈帧顶部，所以栈参数在 s0 + 16 开始
+    int64_t base_offset = 16;  // 跳过保存的ra(8字节) + 保存的s0(8字节)
+    int64_t arg_offset = base_offset + stack_arg_index * 8;
 
     // 根据参数类型分配正确的寄存器类型
     std::unique_ptr<RegisterOperand> arg_reg;
