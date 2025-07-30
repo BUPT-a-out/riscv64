@@ -38,6 +38,8 @@ class Visitor {
         const midend::Instruction* inst, BasicBlock* parent_bb);
     std::unique_ptr<MachineOperand> visitFloatBinaryOp(
         const midend::Instruction* inst, BasicBlock* parent_bb);
+    std::unique_ptr<MachineOperand> visitLogicalOp(
+        const midend::Instruction* inst, BasicBlock* parent_bb);
     std::unique_ptr<MachineOperand> visitAllocaInst(
         const midend::Instruction* inst, BasicBlock* parent_bb);
     std::unique_ptr<MachineOperand> visitLoadInst(
@@ -45,6 +47,9 @@ class Visitor {
     void visitStoreInst(const midend::Instruction* inst, BasicBlock* parent_bb);
     std::unique_ptr<MachineOperand> visitPhiInst(
         const midend::Instruction* inst, BasicBlock* parent_bb);
+    void processDeferredPhiNode(const midend::Instruction* inst,
+                                const midend::BasicBlock* bb_midend,
+                                Function* parent_func);
     void visitBranchInst(const midend::Instruction* inst,
                          BasicBlock* parent_bb);
     std::unique_ptr<RegisterOperand> immToReg(
