@@ -1561,10 +1561,58 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
 
     // 获取存储的值，根据类型确保正确的寄存器类型
     auto raw_value_operand = visit(store_inst->getValueOperand(), parent_bb);
-    auto value_operand =
-        store_inst->getValueOperand()->getType()->isFloatType()
-            ? ensureFloatReg(std::move(raw_value_operand), parent_bb)
-            : immToReg(std::move(raw_value_operand), parent_bb);
+
+    // 检查目标指针类型
+    auto* dest_type = store_inst->getPointerOperand()->getType();
+    bool is_int_dest = false;
+    if (auto* ptr_type = midend::dyn_cast<midend::PointerType>(dest_type)) {
+        if (auto* element_type = ptr_type->getElementType()) {
+            is_int_dest = element_type->isIntegerType();
+        }
+    }
+
+    auto* value_to_store = store_inst->getValueOperand();
+    bool should_use_float_reg =
+        !is_int_dest && value_to_store->getType()->isFloatType();
+
+    std::cout << "DEBUG: Store analysis - value type: "
+              << value_to_store->getType()->toString()
+              << ", dest is int: " << is_int_dest
+              << ", will use float reg: " << should_use_float_reg << std::endl;
+
+    // 特殊处理：如果目标是整数但值是浮点，寻找最近的fcvt.w.s指令结果
+    std::unique_ptr<MachineOperand> value_operand;
+    if (is_int_dest && value_to_store->getType()->isFloatType()) {
+        // 查找最近的fcvt.w.s指令，使用其整数结果
+        std::unique_ptr<RegisterOperand> conversion_result;
+
+        for (auto it = parent_bb->rbegin(); it != parent_bb->rend(); ++it) {
+            if ((*it)->getOpcode() == Opcode::FCVT_W_S) {
+                if (!(*it)->getOperands().empty()) {
+                    auto* target_operand = dynamic_cast<RegisterOperand*>(
+                        (*it)->getOperands()[0].get());
+                    if (target_operand) {
+                        conversion_result = std::make_unique<RegisterOperand>(
+                            target_operand->getRegNum(),
+                            target_operand->isVirtual(), RegisterType::Integer);
+                        std::cout << "DEBUG: Found fcvt.w.s result, using "
+                                     "integer register"
+                                  << std::endl;
+                        break;
+                    }
+                }
+            }
+        }
+
+        value_operand = conversion_result
+                            ? std::move(conversion_result)
+                            : immToReg(std::move(raw_value_operand), parent_bb);
+    } else {
+        value_operand =
+            should_use_float_reg
+                ? ensureFloatReg(std::move(raw_value_operand), parent_bb)
+                : immToReg(std::move(raw_value_operand), parent_bb);
+    }
 
     // 处理指针操作数 - 可能是 alloca 指令、GEP 指令或全局变量
     if (auto* alloca_inst =
@@ -1588,9 +1636,8 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
             std::make_unique<FrameIndexOperand>(frame_id));  // FI
         parent_bb->addInstruction(std::move(store_frame_addr_inst));
 
-        // 根据原始IR中存储值的类型选择存储指令
-        bool is_float_store =
-            store_inst->getValueOperand()->getType()->isFloatType();
+        // 根据存储值的实际类型选择存储指令（与前面的类型检查保持一致）
+        bool is_float_store = should_use_float_reg;
         std::cout << "DEBUG: Store instruction type check - is_float: "
                   << is_float_store << ", value type: "
                   << store_inst->getValueOperand()->getType()->toString()
@@ -1625,9 +1672,8 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
                 "GEP instruction should return a register operand");
         }
 
-        // 根据原始IR中存储值的类型选择存储指令
-        bool is_float_store =
-            store_inst->getValueOperand()->getType()->isFloatType();
+        // 根据存储值的实际类型选择存储指令（与前面的类型检查保持一致）
+        bool is_float_store = should_use_float_reg;
         std::cout << "DEBUG: Store to GEP - is_float: " << is_float_store
                   << ", value type: "
                   << store_inst->getValueOperand()->getType()->toString()
