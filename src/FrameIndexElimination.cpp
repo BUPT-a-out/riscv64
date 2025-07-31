@@ -105,12 +105,12 @@ void FrameIndexElimination::assignFinalOffsets() {
     }
 }
 
-// TODO: float
 int FrameIndexElimination::calculateSavedRegisterSize() {
     // 分析函数中使用的callee-saved寄存器
-    auto usedSavedRegs = collectSavedIntegerRegisters();
+    auto usedSavedIntegerRegs = collectSavedIntegerRegisters();
+    auto usedSavedFloatRegs = collectSavedFloatRegisters();
 
-    return usedSavedRegs.size() * 8;  // 每个寄存器8字节
+    return usedSavedIntegerRegs.size() * 8 + usedSavedFloatRegs.size() * 4;  // 每个整数寄存器8字节，单精浮点4字节
 }
 
 int FrameIndexElimination::calculateMaxCallArgSize() {
@@ -172,8 +172,8 @@ void FrameIndexElimination::generateFinalPrologueEpilogue() {
               << layout.totalFrameSize << std::endl;
 
     // 收集需要保存的寄存器
-    // TODO: float
-    std::vector<int> savedRegs = collectSavedIntegerRegisters();
+    std::vector<int> savedIntRegs = collectSavedIntegerRegisters();
+    auto savedFloatRegs = collectSavedFloatRegisters();
 
     // 生成序言 (插入到函数开头)
     // TODO(rikka): use getEntryBlock
@@ -217,8 +217,9 @@ void FrameIndexElimination::generateFinalPrologueEpilogue() {
         }
 
         // 2. 保存所有需要保存的寄存器
-        int offset = layout.totalFrameSize - 8;  // 从栈顶开始
-        for (int regNum : savedRegs) {
+        int offset = layout.totalFrameSize;  // 从栈顶开始
+        for (int regNum : savedIntRegs) {
+            offset -= 8;
             auto saveReg = std::make_unique<Instruction>(Opcode::SD);
             saveReg->addOperand(
                 std::make_unique<RegisterOperand>(regNum, false));
@@ -251,7 +252,42 @@ void FrameIndexElimination::generateFinalPrologueEpilogue() {
             }
 
             prologueInsts.push_back(std::move(saveReg));
-            offset -= 8;
+        }
+        
+        for (int regNum : savedFloatRegs) {
+            offset -= 4;
+            auto saveReg = std::make_unique<Instruction>(Opcode::FSW);
+            saveReg->addOperand(
+                std::make_unique<RegisterOperand>(regNum, false));
+
+            if (isValidImmediateOffset(offset)) {
+                saveReg->addOperand(std::make_unique<MemoryOperand>(
+                    std::make_unique<RegisterOperand>(2, false),  // sp
+                    std::make_unique<ImmediateOperand>(offset)));
+            } else {
+                // 偏移量超出范围，先计算地址
+                auto liOffsetInst = std::make_unique<Instruction>(Opcode::LI);
+                liOffsetInst->addOperand(
+                    std::make_unique<RegisterOperand>(5, false));  // t0
+                liOffsetInst->addOperand(
+                    std::make_unique<ImmediateOperand>(offset));
+                prologueInsts.push_back(std::move(liOffsetInst));
+
+                auto addAddrInst = std::make_unique<Instruction>(Opcode::ADD);
+                addAddrInst->addOperand(
+                    std::make_unique<RegisterOperand>(5, false));  // t0
+                addAddrInst->addOperand(
+                    std::make_unique<RegisterOperand>(2, false));  // sp
+                addAddrInst->addOperand(
+                    std::make_unique<RegisterOperand>(5, false));  // t0
+                prologueInsts.push_back(std::move(addAddrInst));
+
+                saveReg->addOperand(std::make_unique<MemoryOperand>(
+                    std::make_unique<RegisterOperand>(5, false),  // t0
+                    std::make_unique<ImmediateOperand>(0)));
+            }
+
+            prologueInsts.push_back(std::move(saveReg));
         }
 
         // 3. 设置帧指针: 处理大的栈帧大小
@@ -297,9 +333,50 @@ void FrameIndexElimination::generateFinalPrologueEpilogue() {
             if ((*it)->getOpcode() == Opcode::RET) {
                 // 恢复所有保存的寄存器
                 int offset = layout.totalFrameSize;
-                for (int regNum : savedRegs) {
+                for (int regNum : savedIntRegs) {
                     offset -= 8;
                     auto restoreReg = std::make_unique<Instruction>(Opcode::LD);
+                    restoreReg->addOperand(
+                        std::make_unique<RegisterOperand>(regNum, false));
+
+                    if (isValidImmediateOffset(offset)) {
+                        restoreReg->addOperand(std::make_unique<MemoryOperand>(
+                            std::make_unique<RegisterOperand>(2, false),  // sp
+                            std::make_unique<ImmediateOperand>(offset)));
+                    } else {
+                        // 偏移量超出范围，先计算地址
+                        auto liOffsetInst =
+                            std::make_unique<Instruction>(Opcode::LI);
+                        liOffsetInst->addOperand(
+                            std::make_unique<RegisterOperand>(5, false));  // t0
+                        liOffsetInst->addOperand(
+                            std::make_unique<ImmediateOperand>(offset));
+                        it = bb->insert(it, std::move(liOffsetInst));
+                        ++it;
+
+                        auto addAddrInst =
+                            std::make_unique<Instruction>(Opcode::ADD);
+                        addAddrInst->addOperand(
+                            std::make_unique<RegisterOperand>(5, false));  // t0
+                        addAddrInst->addOperand(
+                            std::make_unique<RegisterOperand>(2, false));  // sp
+                        addAddrInst->addOperand(
+                            std::make_unique<RegisterOperand>(5, false));  // t0
+                        it = bb->insert(it, std::move(addAddrInst));
+                        ++it;
+
+                        restoreReg->addOperand(std::make_unique<MemoryOperand>(
+                            std::make_unique<RegisterOperand>(5, false),  // t0
+                            std::make_unique<ImmediateOperand>(0)));
+                    }
+
+                    it = bb->insert(it, std::move(restoreReg));
+                    ++it;
+                }
+
+                for (int regNum : savedFloatRegs) {
+                    offset -= 4;
+                    auto restoreReg = std::make_unique<Instruction>(Opcode::FLW);
                     restoreReg->addOperand(
                         std::make_unique<RegisterOperand>(regNum, false));
 
