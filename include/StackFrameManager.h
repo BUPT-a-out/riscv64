@@ -107,7 +107,8 @@ class StackFrameManager {
         mapAllocaToStackSlot(inst, fi_id);
 
         std::cout << "Created abstract Frame Index FI(" << fi_id
-                << ") for alloca, size: " << typeSize << " bytes" << std::endl;
+                  << ") for alloca, size: " << typeSize << " bytes"
+                  << std::endl;
         return fi_id;
     }
 
@@ -115,23 +116,23 @@ class StackFrameManager {
         int fi_id = getNewStackObjectIdentifier();
         auto spill_obj =
             std::make_unique<StackObject>(StackObjectType::SpilledRegister,
-                                        8,   // 寄存器大小固定为8字节
-                                        8,   // 8字节对齐
-                                        reg  // 记录原始寄存器编号
+                                          8,  // 寄存器大小固定为8字节
+                                          8,  // 8字节对齐
+                                          reg  // 记录原始寄存器编号
             );
         spill_obj->identifier = fi_id;
         addStackObject(std::move(spill_obj));
 
-        std::cout << "Created spill Frame Index FI(" << fi_id << ") for register "
-                << reg << std::endl;
+        std::cout << "Created spill Frame Index FI(" << fi_id
+                  << ") for register " << reg
+                  << " [nextId: " << nextFrameIndexId << "]" << std::endl;
         return fi_id;
     }
 
-    private:
-        int getNewStackObjectIdentifier() {
-            static int nextId = 0;
-            return nextId++;
-        }
+   private:
+    int nextFrameIndexId = 0;  // 每个函数实例独立的Frame Index计数器
+
+    int getNewStackObjectIdentifier() { return nextFrameIndexId++; }
 };
 
 }  // namespace riscv64

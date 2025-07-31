@@ -1002,14 +1002,37 @@ std::unique_ptr<MachineOperand> Visitor::visitCallInst(
     parent_bb->addInstruction(std::move(riscv_call_inst));
 
     // 调用后清理栈空间
+    // 重要修复：确保栈参数在被调用函数执行期间保持有效
     if (stack_space > 0) {
+        int64_t positive_space = static_cast<int64_t>(stack_space);
+        if (isValidImmediateOffset(positive_space)) {
+            // 栈空间在立即数范围内，直接使用 addi
         auto stack_restore_inst =
             std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
-        stack_restore_inst->addOperand(std::make_unique<RegisterOperand>("sp"));
-        stack_restore_inst->addOperand(std::make_unique<RegisterOperand>("sp"));
-        stack_restore_inst->addOperand(std::make_unique<ImmediateOperand>(
-            static_cast<int64_t>(stack_space)));
+            stack_restore_inst->addOperand(
+                std::make_unique<RegisterOperand>("sp"));
+            stack_restore_inst->addOperand(
+                std::make_unique<RegisterOperand>("sp"));
+            stack_restore_inst->addOperand(
+                std::make_unique<ImmediateOperand>(positive_space));
         parent_bb->addInstruction(std::move(stack_restore_inst));
+        } else {
+            // 栈空间超出立即数范围，使用 li + add
+            auto li_inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
+            li_inst->addOperand(
+                std::make_unique<RegisterOperand>(5, false));  // t0
+            li_inst->addOperand(std::make_unique<ImmediateOperand>(
+                static_cast<int64_t>(stack_space)));
+            parent_bb->addInstruction(std::move(li_inst));
+
+            auto add_inst =
+                std::make_unique<Instruction>(Opcode::ADD, parent_bb);
+            add_inst->addOperand(std::make_unique<RegisterOperand>("sp"));
+            add_inst->addOperand(std::make_unique<RegisterOperand>("sp"));
+            add_inst->addOperand(
+                std::make_unique<RegisterOperand>(5, false));  // t0
+            parent_bb->addInstruction(std::move(add_inst));
+        }
     }
 
     // 如果被调用函数有返回值，则从相应的返回寄存器获取值并保存到新寄存器

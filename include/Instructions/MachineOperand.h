@@ -6,8 +6,8 @@
 #include <stdexcept>
 #include <string>
 
-#include "IR/BasicBlock.h"
 #include "../ABI.h"
+#include "IR/BasicBlock.h"
 // #include "Function.h"
 
 namespace riscv64 {
@@ -133,6 +133,11 @@ class ImmediateOperand : public MachineOperand {
         : MachineOperand(OperandType::Immediate),
           type(RegisterType::Integer),  // 存储为 64 位
           value(static_cast<std::int64_t>(int_value)) {}
+
+    explicit ImmediateOperand(size_t value)
+        : MachineOperand(OperandType::Immediate),
+          type(RegisterType::Integer),
+          value(static_cast<std::int64_t>(value)) {}
 
     // 存储 float32
     explicit ImmediateOperand(float float_value)
