@@ -1358,6 +1358,12 @@ std::vector<unsigned> RegAllocChaitin::getABIPreferredRegs(
                     preferredRegs.push_back(reg);
                 }
             }
+            for (unsigned reg = 42; reg <= 49; ++reg) {  // fa0-fa7 -> 42-49
+                if (std::find(preferredRegs.begin(), preferredRegs.end(),
+                              reg) == preferredRegs.end()) {
+                    preferredRegs.push_back(reg);
+                }
+            }
             for (unsigned reg = 60; reg <= 63; ++reg) {  // ft8-ft11
                 if (std::find(preferredRegs.begin(), preferredRegs.end(),
                               reg) == preferredRegs.end()) {
@@ -1366,6 +1372,12 @@ std::vector<unsigned> RegAllocChaitin::getABIPreferredRegs(
             }
         } else {
             for (unsigned reg = 5; reg <= 7; ++reg) {  // t0-t2
+                if (std::find(preferredRegs.begin(), preferredRegs.end(),
+                              reg) == preferredRegs.end()) {
+                    preferredRegs.push_back(reg);
+                }
+            }
+            for (unsigned reg = 10; reg <= 17; ++reg) {  // a0-a7
                 if (std::find(preferredRegs.begin(), preferredRegs.end(),
                               reg) == preferredRegs.end()) {
                     preferredRegs.push_back(reg);
