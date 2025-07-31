@@ -31,11 +31,10 @@ void RegAllocChaitin::allocateRegisters() {
     if (assigningFloat) {
         printInterferenceGraph();
     }
-        printInterferenceGraph();
+    printInterferenceGraph();
 
     performCoalescing();
-        printInterferenceGraph();
-
+    printInterferenceGraph();
 
     bool success = colorGraph();
 
@@ -382,7 +381,15 @@ std::vector<unsigned> RegAllocChaitin::getSimplificationOrder() {
     // 如果还有未移除的节点，选择溢出候选
     for (auto& [regNum, node] : interferenceGraph) {
         if (removed.find(regNum) == removed.end() && !node->isPrecolored) {
-            spilledRegs.insert(regNum);
+            if (!ABI::isReservedReg(regNum, assigningFloat)) {
+                spilledRegs.insert(regNum);
+            } else {
+                std::cerr
+                    << "Warning: Reserved register " << regNum << " ("
+                    << ABI::getABINameFromRegNum(regNum) << ") "
+                    << "cannot be spilled and will cause allocation failure."
+                    << std::endl;
+            }
         }
     }
 
@@ -424,35 +431,42 @@ bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
 
         int selectedColor = -1;
 
-        
-            // 正常着色流程，但要避开保留寄存器
-            auto preferredRegs = getABIPreferredRegs(regNum);
-            for (unsigned color : preferredRegs) {
+        // 正常着色流程，但要避开保留寄存器
+        auto preferredRegs = getABIPreferredRegs(regNum);
+        for (unsigned color : preferredRegs) {
+            if (usedColors.find(color) == usedColors.end() &&
+                reservedPhysicalRegs.find(color) ==
+                    reservedPhysicalRegs.end() &&
+                std::find(availableRegs.begin(), availableRegs.end(), color) !=
+                    availableRegs.end()) {
+                selectedColor = color;
+                break;
+            }
+        }
+
+        if (selectedColor == -1) {
+            for (unsigned color : availableRegs) {
                 if (usedColors.find(color) == usedColors.end() &&
                     reservedPhysicalRegs.find(color) ==
                         reservedPhysicalRegs.end() &&
-                    std::find(availableRegs.begin(), availableRegs.end(),
-                              color) != availableRegs.end()) {
+                    !ABI::isReservedReg(color, assigningFloat)) {
                     selectedColor = color;
                     break;
                 }
             }
-
-            if (selectedColor == -1) {
-                for (unsigned color : availableRegs) {
-                    if (usedColors.find(color) == usedColors.end() &&
-                        reservedPhysicalRegs.find(color) ==
-                            reservedPhysicalRegs.end() &&
-                        !ABI::isReservedReg(color, assigningFloat)) {
-                        selectedColor = color;
-                        break;
-                    }
-                }
-            }
-        
+        }
 
         if (selectedColor == -1) {
-            spilledRegs.insert(regNum);
+            if (!ABI::isReservedReg(regNum, assigningFloat)) {
+                spilledRegs.insert(regNum);
+            } else {
+                std::cerr
+                    << "Error: Cannot spill reserved register " << regNum
+                    << " (" << ABI::getABINameFromRegNum(regNum) << "). "
+                    << "This indicates a serious register allocation problem."
+                    << std::endl;
+                // 对于保留寄存器，直接返回分配失败而不是spill
+            }
             return false;
         }
 
@@ -493,7 +507,13 @@ std::vector<unsigned> RegAllocChaitin::selectSpillCandidates() {
     std::vector<unsigned> candidates;
 
     for (unsigned reg : spilledRegs) {
-        candidates.push_back(reg);
+        if (!ABI::isReservedReg(reg, assigningFloat)) {
+            candidates.push_back(reg);
+        } else {
+            std::cerr << "Error: Attempted to spill reserved register " << reg
+                      << " (" << ABI::getABINameFromRegNum(reg) << "). "
+                      << "Reserved registers cannot be spilled." << std::endl;
+        }
     }
 
     // 优先spill链深度较小的寄存器

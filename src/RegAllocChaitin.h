@@ -9,6 +9,7 @@
 #include "Instructions/Instruction.h"
 #include "Instructions/MachineOperand.h"
 #include "SpillChainManager.h"
+#include "ABI.h"
 
 namespace riscv64 {
 
