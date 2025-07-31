@@ -1654,39 +1654,23 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
               << ", dest is int: " << is_int_dest
               << ", will use float reg: " << should_use_float_reg << std::endl;
 
-    // 特殊处理：如果目标是整数但值是浮点，寻找最近的fcvt.w.s指令结果
+    // 根据值的实际类型选择合适的寄存器类型
     std::unique_ptr<MachineOperand> value_operand;
-    if (is_int_dest && value_to_store->getType()->isFloatType()) {
-        // 查找最近的fcvt.w.s指令，使用其整数结果
-        std::unique_ptr<RegisterOperand> conversion_result;
-
-        for (auto it = parent_bb->rbegin(); it != parent_bb->rend(); ++it) {
-            if ((*it)->getOpcode() == Opcode::FCVT_W_S) {
-                if (!(*it)->getOperands().empty()) {
-                    auto* target_operand = dynamic_cast<RegisterOperand*>(
-                        (*it)->getOperands()[0].get());
-                    if (target_operand) {
-                        conversion_result = std::make_unique<RegisterOperand>(
-                            target_operand->getRegNum(),
-                            target_operand->isVirtual(), RegisterType::Integer);
-                        std::cout << "DEBUG: Found fcvt.w.s result, using "
-                                     "integer register"
-                                  << std::endl;
-                        break;
-                    }
-                }
-            }
-        }
-
-        value_operand = conversion_result
-                            ? std::move(conversion_result)
-                            : immToReg(std::move(raw_value_operand), parent_bb);
+    if (should_use_float_reg) {
+        value_operand = ensureFloatReg(std::move(raw_value_operand), parent_bb);
     } else {
-        value_operand =
-            should_use_float_reg
-                ? ensureFloatReg(std::move(raw_value_operand), parent_bb)
-                : immToReg(std::move(raw_value_operand), parent_bb);
+        value_operand = immToReg(std::move(raw_value_operand), parent_bb);
     }
+
+    // 根据value_operand的实际寄存器类型决定存储指令类型
+    bool is_float_store = false;
+    if (auto* reg_operand =
+            dynamic_cast<RegisterOperand*>(value_operand.get())) {
+        is_float_store = reg_operand->isFloatRegister();
+    }
+    std::cout << "DEBUG: Store analysis - value type: "
+              << store_inst->getValueOperand()->getType()->toString()
+              << ", actual register is float: " << is_float_store << std::endl;
 
     // 处理指针操作数 - 可能是 alloca 指令、GEP 指令或全局变量
     if (auto* alloca_inst =
@@ -1746,14 +1730,12 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
                 "GEP instruction should return a register operand");
         }
 
-        // 根据存储值的实际类型选择存储指令（与前面的类型检查保持一致）
-        bool is_float_store = should_use_float_reg;
-        std::cout << "DEBUG: Store to GEP - is_float: " << is_float_store
-                  << ", value type: "
+        // 根据value_operand的实际寄存器类型选择存储指令
+        Opcode store_opcode = is_float_store ? Opcode::FSW : Opcode::SW;
+        std::cout << "DEBUG: Store to GEP - using float store: "
+                  << is_float_store << ", value type: "
                   << store_inst->getValueOperand()->getType()->toString()
                   << std::endl;
-
-        Opcode store_opcode = is_float_store ? Opcode::FSW : Opcode::SW;
         std::cout << "DEBUG: Selected store opcode for GEP: "
                   << (store_opcode == Opcode::SW
                           ? "SW"
@@ -1782,15 +1764,12 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
             global_var->getName()));  // global symbol
         parent_bb->addInstruction(std::move(global_addr_inst));
 
-        // 根据原始IR中存储值的类型选择存储指令
-        bool is_float_store =
-            store_inst->getValueOperand()->getType()->isFloatType();
-        std::cout << "DEBUG: Store to Global - is_float: " << is_float_store
-                  << ", value type: "
+        // 根据value_operand的实际寄存器类型选择存储指令
+        Opcode store_opcode = is_float_store ? Opcode::FSW : Opcode::SW;
+        std::cout << "DEBUG: Store to Global - using float store: "
+                  << is_float_store << ", value type: "
                   << store_inst->getValueOperand()->getType()->toString()
                   << std::endl;
-
-        Opcode store_opcode = is_float_store ? Opcode::FSW : Opcode::SW;
         std::cout << "DEBUG: Selected store opcode for Global: "
                   << (store_opcode == Opcode::SW
                           ? "SW"
@@ -2177,7 +2156,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     // 使用 addi 指令
                     new_reg = codeGen_->allocateReg();
                     auto instruction =
-                        std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
+                        std::make_unique<Instruction>(Opcode::ADDIW, parent_bb);
 
                     auto* imm_operand = dynamic_cast<ImmediateOperand*>(
                         lhs->getType() == OperandType::Immediate ? lhs.get()
@@ -2199,7 +2178,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     // 使用 add 指令
                     new_reg = codeGen_->allocateReg();
                     auto instruction =
-                        std::make_unique<Instruction>(Opcode::ADD, parent_bb);
+                        std::make_unique<Instruction>(Opcode::ADDW, parent_bb);
                     instruction->addOperand(std::make_unique<RegisterOperand>(
                         new_reg->getRegNum(), new_reg->isVirtual()));  // rd
                     instruction->addOperand(std::move(lhs));           // rs1
@@ -2246,7 +2225,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
                     new_reg = codeGen_->allocateReg();
                     auto instruction =
-                        std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
+                        std::make_unique<Instruction>(Opcode::ADDIW, parent_bb);
                     instruction->addOperand(std::make_unique<RegisterOperand>(
                         new_reg->getRegNum(), new_reg->isVirtual()));  // rd
                     instruction->addOperand(std::move(lhs));           // rs1
@@ -2260,7 +2239,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
 
                     new_reg = codeGen_->allocateReg();
                     auto instruction =
-                        std::make_unique<Instruction>(Opcode::SUB, parent_bb);
+                        std::make_unique<Instruction>(Opcode::SUBW, parent_bb);
                     instruction->addOperand(std::make_unique<RegisterOperand>(
                         new_reg->getRegNum(), new_reg->isVirtual()));  // rd
                     instruction->addOperand(std::move(lhs_reg));       // rs1
@@ -2293,7 +2272,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
 
             new_reg = codeGen_->allocateReg();
             auto instruction =
-                std::make_unique<Instruction>(Opcode::MUL, parent_bb);
+                std::make_unique<Instruction>(Opcode::MULW, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual()));  // rd
             instruction->addOperand(std::move(lhs_reg));       // rs1
@@ -2327,7 +2306,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
 
             new_reg = codeGen_->allocateReg();
             auto instruction =
-                std::make_unique<Instruction>(Opcode::DIV, parent_bb);
+                std::make_unique<Instruction>(Opcode::DIVW, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual()));  // rd
             instruction->addOperand(std::move(lhs_reg));       // rs1
@@ -2356,7 +2335,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
 
             new_reg = codeGen_->allocateReg();
             auto instruction =
-                std::make_unique<Instruction>(Opcode::REM, parent_bb);
+                std::make_unique<Instruction>(Opcode::REMW, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual()));  // rd
             instruction->addOperand(std::move(lhs_reg));       // rs1
@@ -2531,7 +2510,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
                 new_reg = codeGen_->allocateReg();
                 auto instruction =
-                    std::make_unique<Instruction>(Opcode::SLLI, parent_bb);
+                    std::make_unique<Instruction>(Opcode::SLLIW, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
                 instruction->addOperand(std::move(lhs));           // rs1
@@ -2544,7 +2523,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
 
                 new_reg = codeGen_->allocateReg();
                 auto instruction =
-                    std::make_unique<Instruction>(Opcode::SLL, parent_bb);
+                    std::make_unique<Instruction>(Opcode::SLLW, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
                 instruction->addOperand(std::move(lhs_reg));       // rs1
@@ -2571,7 +2550,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
                 new_reg = codeGen_->allocateReg();
                 auto instruction =
-                    std::make_unique<Instruction>(Opcode::SRAI, parent_bb);
+                    std::make_unique<Instruction>(Opcode::SRAIW, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
                 instruction->addOperand(std::move(lhs));           // rs1
@@ -2585,7 +2564,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateReg();
                 // 使用算术右移（保持符号位）
                 auto instruction =
-                    std::make_unique<Instruction>(Opcode::SRA, parent_bb);
+                    std::make_unique<Instruction>(Opcode::SRAW, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
                 instruction->addOperand(std::move(lhs_reg));       // rs1
