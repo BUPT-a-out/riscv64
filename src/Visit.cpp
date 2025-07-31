@@ -919,13 +919,33 @@ std::unique_ptr<MachineOperand> Visitor::visitCallInst(
 
     // 一次性分配栈空间
     if (stack_space > 0) {
-        auto stack_alloc_inst =
-            std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
-        stack_alloc_inst->addOperand(std::make_unique<RegisterOperand>("sp"));
-        stack_alloc_inst->addOperand(std::make_unique<RegisterOperand>("sp"));
-        stack_alloc_inst->addOperand(std::make_unique<ImmediateOperand>(
-            -static_cast<int64_t>(stack_space)));
-        parent_bb->addInstruction(std::move(stack_alloc_inst));
+        if (isValidImmediateOffset(-stack_space)) {
+            auto stack_alloc_inst =
+                std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
+            stack_alloc_inst->addOperand(
+                std::make_unique<RegisterOperand>("sp"));
+            stack_alloc_inst->addOperand(
+                std::make_unique<RegisterOperand>("sp"));
+            stack_alloc_inst->addOperand(std::make_unique<ImmediateOperand>(
+                -static_cast<int64_t>(stack_space)));
+            parent_bb->addInstruction(std::move(stack_alloc_inst));
+        } else {
+            auto li_inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
+            auto li_reg = codeGen_->allocateReg();
+            li_inst->addOperand(std::make_unique<RegisterOperand>(
+                li_reg->getRegNum(), li_reg->isVirtual()));
+            li_inst->addOperand(std::make_unique<ImmediateOperand>(
+                -static_cast<int64_t>(stack_space)));
+            parent_bb->addInstruction(std::move(li_inst));
+
+            auto add_inst =
+                std::make_unique<Instruction>(Opcode::ADD, parent_bb);
+            add_inst->addOperand(std::make_unique<RegisterOperand>("sp"));
+            add_inst->addOperand(std::make_unique<RegisterOperand>("sp"));
+            add_inst->addOperand(std::make_unique<RegisterOperand>(
+                li_reg->getRegNum(), li_reg->isVirtual()));
+            parent_bb->addInstruction(std::move(add_inst));
+        }
     }
 
     // 处理所有参数

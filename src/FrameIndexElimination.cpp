@@ -177,7 +177,7 @@ void FrameIndexElimination::generateFinalPrologueEpilogue() {
 
     // 生成序言 (插入到函数开头)
     // TODO(rikka): use getEntryBlock
-    BasicBlock* entryBlock = function->getBasicBlockByIndex(0);
+    BasicBlock* entryBlock = function->getEntryBlock();
     if (entryBlock) {
         std::vector<std::unique_ptr<Instruction>> prologueInsts;
 
