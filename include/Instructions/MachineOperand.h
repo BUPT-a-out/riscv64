@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <string>
 
-#include "../../../midend/include/IR/BasicBlock.h"
+#include "IR/BasicBlock.h"
 #include "../ABI.h"
 // #include "Function.h"
 
