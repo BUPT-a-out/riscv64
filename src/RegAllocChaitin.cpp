@@ -1358,12 +1358,6 @@ std::vector<unsigned> RegAllocChaitin::getABIPreferredRegs(
                     preferredRegs.push_back(reg);
                 }
             }
-            for (unsigned reg = 42; reg <= 49; ++reg) {  // fa0-fa7 -> 42-49
-                if (std::find(preferredRegs.begin(), preferredRegs.end(),
-                              reg) == preferredRegs.end()) {
-                    preferredRegs.push_back(reg);
-                }
-            }
             for (unsigned reg = 60; reg <= 63; ++reg) {  // ft8-ft11
                 if (std::find(preferredRegs.begin(), preferredRegs.end(),
                               reg) == preferredRegs.end()) {
