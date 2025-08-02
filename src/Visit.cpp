@@ -3627,15 +3627,41 @@ void Visitor::storeOperandToReg(
     if (dest_reg->getType() == OperandType::Register) {
         switch (source_operand->getType()) {
             case OperandType::Immediate: {
-                auto inst =
-                    std::make_unique<Instruction>(Opcode::LI, parent_bb);
                 auto* const source_imm =
                     dynamic_cast<ImmediateOperand*>(source_operand.get());
+                auto* reg_dest = dynamic_cast<RegisterOperand*>(dest_reg.get());
 
-                inst->addOperand(std::move(dest_reg));  // rd
-                inst->addOperand(std::make_unique<ImmediateOperand>(
+                if (reg_dest && reg_dest->isFloatRegister()) {
+                    // 浮点寄存器：需要先加载到整数寄存器，再移动到浮点寄存器
+                    auto temp_reg = codeGen_->allocateReg();
+
+                    // 1. li temp_reg, imm
+                    auto li_inst =
+                        std::make_unique<Instruction>(Opcode::LI, parent_bb);
+                    li_inst->addOperand(std::make_unique<RegisterOperand>(
+                        temp_reg->getRegNum(), temp_reg->isVirtual(),
+                        RegisterType::Integer));
+                    li_inst->addOperand(std::make_unique<ImmediateOperand>(
+                        source_imm->getValue()));
+                    parent_bb->insert(insert_pos, std::move(li_inst));
+
+                    // 2. fmv.w.x dest_reg, temp_reg
+                    auto fmv_inst = std::make_unique<Instruction>(
+                        Opcode::FMV_W_X, parent_bb);
+                    fmv_inst->addOperand(std::move(dest_reg));
+                    fmv_inst->addOperand(std::make_unique<RegisterOperand>(
+                        temp_reg->getRegNum(), temp_reg->isVirtual(),
+                        RegisterType::Integer));
+                    parent_bb->insert(insert_pos, std::move(fmv_inst));
+                } else {
+                    // 整数寄存器：直接使用 li 指令
+                    auto li_inst =
+                        std::make_unique<Instruction>(Opcode::LI, parent_bb);
+                    li_inst->addOperand(std::move(dest_reg));  // rd
+                    li_inst->addOperand(std::make_unique<ImmediateOperand>(
                     source_imm->getValue()));  // imm
-                parent_bb->insert(insert_pos, std::move(inst));
+                    parent_bb->insert(insert_pos, std::move(li_inst));
+                }
                 break;
             }
             case OperandType::Register: {
