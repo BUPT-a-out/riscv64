@@ -90,17 +90,23 @@ void FrameIndexElimination::assignFinalOffsets() {
         // 按这种初始化, 先做减法.
         if (obj->type == StackObjectType::AllocatedStackSlot) {
             currentLocalOffset -= alignTo(obj->size, obj->alignment);
+            // 确保偏移量是8的倍数（RISCV64要求）- 向下对齐负偏移量
+            currentLocalOffset = (currentLocalOffset / 8) * 8;
             layout.frameIndexToOffset[obj->identifier] = currentLocalOffset;
 
             std::cout << "FI(" << obj->identifier << ") [alloca] -> s0"
-                      << currentLocalOffset << std::endl;
+                      << currentLocalOffset << " (size: " << obj->size
+                      << ", alignment: " << obj->alignment << ")" << std::endl;
         } else if (obj->type == StackObjectType::SpilledRegister) {
             currentSpillOffset -= alignTo(obj->size, obj->alignment);
+            // 确保偏移量是8的倍数（RISCV64要求）- 向下对齐负偏移量
+            currentSpillOffset = (currentSpillOffset / 8) * 8;
             layout.frameIndexToOffset[obj->identifier] = currentSpillOffset;
 
             std::cout << "FI(" << obj->identifier << ") [spill reg "
                       << obj->regNum << "] -> s0" << currentSpillOffset
-                      << std::endl;
+                      << " (size: " << obj->size
+                      << ", alignment: " << obj->alignment << ")" << std::endl;
         }
     }
 }
@@ -110,7 +116,8 @@ int FrameIndexElimination::calculateSavedRegisterSize() {
     auto usedSavedIntegerRegs = collectSavedIntegerRegisters();
     auto usedSavedFloatRegs = collectSavedFloatRegisters();
 
-    return usedSavedIntegerRegs.size() * 8 + usedSavedFloatRegs.size() * 4;  // 每个整数寄存器8字节，单精浮点4字节
+    return usedSavedIntegerRegs.size() * 8 +
+           usedSavedFloatRegs.size() * 4;  // 每个整数寄存器8字节，单精浮点4字节
 }
 
 int FrameIndexElimination::calculateMaxCallArgSize() {
@@ -253,7 +260,7 @@ void FrameIndexElimination::generateFinalPrologueEpilogue() {
 
             prologueInsts.push_back(std::move(saveReg));
         }
-        
+
         for (int regNum : savedFloatRegs) {
             offset -= 4;
             auto saveReg = std::make_unique<Instruction>(Opcode::FSW);
@@ -376,7 +383,8 @@ void FrameIndexElimination::generateFinalPrologueEpilogue() {
 
                 for (int regNum : savedFloatRegs) {
                     offset -= 4;
-                    auto restoreReg = std::make_unique<Instruction>(Opcode::FLW);
+                    auto restoreReg =
+                        std::make_unique<Instruction>(Opcode::FLW);
                     restoreReg->addOperand(
                         std::make_unique<RegisterOperand>(regNum, false));
 

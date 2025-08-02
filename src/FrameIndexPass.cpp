@@ -102,7 +102,10 @@ void FrameIndexPass::calculateFrameOffsets() {
     // 计算局部变量总大小
     int localVarSize = 0;
     for (const auto& [fi, size] : fiToSize) {
-        localVarSize += alignTo(size, 4);  // 4字节对齐
+        // 获取实际的栈对象对齐要求
+        auto* obj = stackManager->getStackObjectByIdentifier(fi);
+        int alignment = obj ? obj->alignment : 8;  // 默认8字节对齐
+        localVarSize += alignTo(size, alignment);
     }
 
     // 计算总栈帧大小
@@ -121,14 +124,20 @@ void FrameIndexPass::calculateFrameOffsets() {
 
     // 按FI索引排序，确保一致的布局
     for (const auto& [fiIndex, size] : fiToSize) {
+        // 获取实际的栈对象对齐要求
+        auto* obj = stackManager->getStackObjectByIdentifier(fiIndex);
+        int alignment = obj ? obj->alignment : 8;  // 默认8字节对齐
+
         // 为当前对象分配空间，先增加偏移量
-        currentOffset += alignTo(size, 4);
+        currentOffset += alignTo(size, alignment);
+        // 确保偏移量是8的倍数（RISCV64要求）
+        currentOffset = alignTo(currentOffset, 8);
         // 当前对象的偏移量是负的累积偏移量
         layout.frameIndexToOffset[fiIndex] = -currentOffset;
 
         std::cout << "FI(" << fiIndex << ") -> offset "
                   << layout.frameIndexToOffset[fiIndex] << " (size: " << size
-                  << ")" << std::endl;
+                  << ", alignment: " << alignment << ")" << std::endl;
     }
 
     std::cout << "Total frame size: " << layout.totalFrameSize << " bytes"
