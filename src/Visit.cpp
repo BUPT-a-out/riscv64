@@ -1125,136 +1125,19 @@ std::unique_ptr<MachineOperand> Visitor::visitPhiInst(
         throw std::runtime_error("Not a PHI instruction: " + inst->toString());
     }
 
-    // 分配一个公共虚拟寄存器用于PHI结果
+    // 只分配寄存器，不生成指令
+    // 实际的PHI指令处理将在processDeferredPhiNode中完成
     auto phi_reg = codeGen_->allocateReg();
-    auto* parent_func = parent_bb->getParent();
 
     // 记录PHI的映射
     codeGen_->mapValueToReg(inst, phi_reg->getRegNum(), phi_reg->isVirtual());
-
-    // 延迟处理PHI节点，存储必要信息供后续处理
-    // 这里我们只返回寄存器，实际的赋值指令将在后续阶段插入
-    for (unsigned i = 0; i < phi_inst->getNumIncomingValues(); ++i) {
-        auto* incoming_value = phi_inst->getIncomingValue(i);
-        auto* incoming_bb_midend = phi_inst->getIncomingBlock(i);
-        auto* incoming_bb = parent_func->getBasicBlock(incoming_bb_midend);
-
-        if (!incoming_bb) {
-            throw std::runtime_error("Incoming block not found for PHI");
-        }
-
-        // 改进的插入策略：查找真正的跳转指令并在其前插入
-        auto insert_pos = incoming_bb->end();
-
-        // 向后查找最后一条非PHI相关的指令（应该是跳转指令）
-        bool found_jump = false;
-        auto current_pos = incoming_bb->end();
-
-        while (current_pos != incoming_bb->begin()) {
-            --current_pos;
-            auto* current_inst = current_pos->get();
-
-            // 检查是否是跳转指令
-            if (current_inst->isJumpInstr() || current_inst->isBranch() ||
-                current_inst->getOpcode() == Opcode::BNEZ ||
-                current_inst->getOpcode() == Opcode::BEQZ ||
-                current_inst->getOpcode() == Opcode::BEQ ||
-                current_inst->getOpcode() == Opcode::BNE ||
-                current_inst->getOpcode() == Opcode::J) {
-                insert_pos = current_pos;
-                found_jump = true;
-                break;
-            }
-        }
-
-        // 如果没找到跳转指令，插入到末尾
-        if (!found_jump) {
-            insert_pos = incoming_bb->end();
-        }
-
-        // 特殊处理常量值：直接生成指令而不调用visit，避免指令顺序问题
-        std::unique_ptr<MachineOperand> value_operand;
-        if (auto* const_int =
-                midend::dyn_cast<midend::ConstantInt>(incoming_value)) {
-            auto value_int = const_int->getSignedValue();
-            constexpr int64_t IMM_MIN = -2048;
-            constexpr int64_t IMM_MAX = 2047;
-            auto signed_value = static_cast<int64_t>(value_int);
-
-            if (signed_value >= IMM_MIN && signed_value <= IMM_MAX) {
-                value_operand = std::make_unique<ImmediateOperand>(value_int);
-            } else {
-                // 创建寄存器并在跳转指令前生成li指令
-                auto temp_reg = codeGen_->allocateReg();
-                auto li_inst =
-                    std::make_unique<Instruction>(Opcode::LI, incoming_bb);
-                li_inst->addOperand(std::make_unique<RegisterOperand>(
-                    temp_reg->getRegNum(), temp_reg->isVirtual()));
-                li_inst->addOperand(
-                    std::make_unique<ImmediateOperand>(value_int));
-                // 确保在跳转指令前插入
-                auto li_safe_pos = incoming_bb->end();
-                for (auto it = incoming_bb->begin(); it != incoming_bb->end();
-                     ++it) {
-                    auto* current_inst = it->get();
-                    if (current_inst->isTerminator()) {
-                        li_safe_pos = it;
-                        break;
-                    }
-                }
-                incoming_bb->insert(li_safe_pos, std::move(li_inst));
-
-                value_operand = std::make_unique<RegisterOperand>(
-                    temp_reg->getRegNum(), temp_reg->isVirtual());
-            }
-        } else {
-            // 对于非常量值，使用临时基本块避免指令调度问题
-            auto temp_bb = std::make_unique<BasicBlock>(
-                incoming_bb->getParent(), "temp_phi_visitbb");
-            value_operand = visit(incoming_value, temp_bb.get());
-
-            // 将临时基本块中的指令移动到原基本块的跳转指令前
-            auto visit_insert_pos = incoming_bb->end();
-            for (auto it = incoming_bb->begin(); it != incoming_bb->end();
-                 ++it) {
-                auto* current_inst = it->get();
-                if (current_inst->isTerminator()) {
-                    visit_insert_pos = it;
-                    break;
-                }
-            }
-
-            for (auto it = temp_bb->begin(); it != temp_bb->end();) {
-                auto current_it = it++;
-                auto inst = std::move(*current_it);
-                inst->setParent(incoming_bb);
-                incoming_bb->insert(visit_insert_pos, std::move(inst));
-            }
-        }
-
-        // 创建赋值指令，确保在跳转指令前
-        auto dest_reg = std::make_unique<RegisterOperand>(phi_reg->getRegNum(),
-                                                          phi_reg->isVirtual());
-
-        auto store_insert_pos = incoming_bb->end();
-        for (auto it = incoming_bb->begin(); it != incoming_bb->end(); ++it) {
-            auto* current_inst = it->get();
-            if (current_inst->isTerminator()) {
-                store_insert_pos = it;
-                break;
-            }
-        }
-
-        storeOperandToReg(std::move(value_operand), std::move(dest_reg),
-                          incoming_bb, store_insert_pos);
-    }
 
     // PHI块本身不生成任何指令，只返回寄存器
     return std::make_unique<RegisterOperand>(phi_reg->getRegNum(),
                                              phi_reg->isVirtual());
 }
 
-// 延迟处理PHI节点的方法
+// 延迟处理PHI节点的方法 - 简化版本
 void Visitor::processDeferredPhiNode(const midend::Instruction* inst,
                                      const midend::BasicBlock* bb_midend,
                                      Function* parent_func) {
@@ -1271,7 +1154,7 @@ void Visitor::processDeferredPhiNode(const midend::Instruction* inst,
     auto phi_reg_num = foundReg.value()->getRegNum();
     bool phi_is_virtual = foundReg.value()->isVirtual();
 
-    // 对每个前驱块，在其跳转指令前插入赋值
+    // 对每个前驱块，在其终结符指令前插入赋值
     for (unsigned i = 0; i < phi_inst->getNumIncomingValues(); ++i) {
         auto* incoming_value = phi_inst->getIncomingValue(i);
         auto* incoming_bb_midend = phi_inst->getIncomingBlock(i);
@@ -1281,297 +1164,100 @@ void Visitor::processDeferredPhiNode(const midend::Instruction* inst,
             throw std::runtime_error("Incoming block not found for PHI");
         }
 
-        // 特殊处理常量值：直接生成指令而不调用visit，避免指令顺序问题
-        std::unique_ptr<MachineOperand> value_operand;
-        bool is_constant_phi = false;
+        // 查找终结符指令位置
+        auto insert_pos = incoming_bb->end();
+        for (auto it = incoming_bb->begin(); it != incoming_bb->end(); ++it) {
+            auto* current_inst = it->get();
+            if (current_inst->isTerminator()) {
+                insert_pos = it;
+                break;
+            }
+        }
 
+        // 处理常量值
+        std::unique_ptr<MachineOperand> value_operand;
         if (auto* const_int =
                 midend::dyn_cast<midend::ConstantInt>(incoming_value)) {
-            is_constant_phi = true;
             auto value_int = const_int->getSignedValue();
             constexpr int64_t IMM_MIN = -2048;
             constexpr int64_t IMM_MAX = 2047;
-            auto signed_value = static_cast<int64_t>(value_int);
 
-            if (signed_value >= IMM_MIN && signed_value <= IMM_MAX) {
+            if (value_int >= IMM_MIN && value_int <= IMM_MAX) {
                 value_operand = std::make_unique<ImmediateOperand>(value_int);
             } else {
-                // 对于大常量，需要等到确定插入位置后才生成li指令
-                // 暂时使用特殊标记
-                value_operand = std::make_unique<ImmediateOperand>(value_int);
+                // 对于大常量，生成li指令
+                auto temp_reg = codeGen_->allocateReg();
+                auto li_inst =
+                    std::make_unique<Instruction>(Opcode::LI, incoming_bb);
+                li_inst->addOperand(std::make_unique<RegisterOperand>(
+                    temp_reg->getRegNum(), temp_reg->isVirtual(),
+                    RegisterType::Integer));
+                li_inst->addOperand(
+                    std::make_unique<ImmediateOperand>(value_int));
+                incoming_bb->insert(insert_pos, std::move(li_inst));
+                value_operand = std::make_unique<RegisterOperand>(
+                    temp_reg->getRegNum(), temp_reg->isVirtual(),
+                    RegisterType::Integer);
             }
+        } else if (auto* const_float =
+                       midend::dyn_cast<midend::ConstantFP>(incoming_value)) {
+            // 处理浮点常量
+            auto temp_reg = codeGen_->allocateReg();
+            auto float_val = const_float->getValue();
+
+            // 生成浮点常量加载指令
+            union {
+                float f;
+                int32_t i;
+            } converter;
+            converter.f = float_val;
+
+            auto li_inst =
+                std::make_unique<Instruction>(Opcode::LI, incoming_bb);
+            li_inst->addOperand(std::make_unique<RegisterOperand>(
+                temp_reg->getRegNum(), temp_reg->isVirtual(),
+                RegisterType::Integer));
+            li_inst->addOperand(
+                std::make_unique<ImmediateOperand>(converter.i));
+            incoming_bb->insert(insert_pos, std::move(li_inst));
+
+            auto fmv_inst =
+                std::make_unique<Instruction>(Opcode::FMV_W_X, incoming_bb);
+            auto float_reg = codeGen_->allocateFloatReg();
+            fmv_inst->addOperand(std::make_unique<RegisterOperand>(
+                float_reg->getRegNum(), float_reg->isVirtual(),
+                RegisterType::Float));
+            fmv_inst->addOperand(std::make_unique<RegisterOperand>(
+                temp_reg->getRegNum(), temp_reg->isVirtual(),
+                RegisterType::Integer));
+            incoming_bb->insert(insert_pos, std::move(fmv_inst));
+
+            value_operand = std::make_unique<RegisterOperand>(
+                float_reg->getRegNum(), float_reg->isVirtual(),
+                RegisterType::Float);
         } else {
-            // 对于非常量值，需要特别处理以避免指令调度问题
-            // 先查找跳转指令位置，然后在跳转前生成所需指令
-            auto temp_insert_pos = incoming_bb->end();
-
-            // 查找终结符指令位置
-            for (auto it = incoming_bb->begin(); it != incoming_bb->end();
-                 ++it) {
-                auto* current_inst = it->get();
-                if (current_inst->isTerminator()) {
-                    temp_insert_pos = it;
-                    break;
-                }
-            }
-
-            // 创建临时基本块来生成指令，避免污染原基本块
+            // 对于非常量值，使用临时基本块生成指令
             auto temp_bb = std::make_unique<BasicBlock>(
                 incoming_bb->getParent(), "temp_phi_bb");
             value_operand = visit(incoming_value, temp_bb.get());
 
-            // 将临时基本块中生成的指令移动到原基本块的正确位置（跳转指令之前）
+            // 将临时基本块中的指令移动到原基本块
             for (auto it = temp_bb->begin(); it != temp_bb->end();) {
                 auto current_it = it++;
-                auto inst = std::move(*current_it);
-                inst->setParent(incoming_bb);
-                incoming_bb->insert(temp_insert_pos, std::move(inst));
+                auto inst_ptr = std::move(*current_it);
+                inst_ptr->setParent(incoming_bb);
+                incoming_bb->insert(insert_pos, std::move(inst_ptr));
             }
         }
 
-        // 创建赋值指令 - 但要注意避免干扰条件判断
-        auto dest_reg =
-            std::make_unique<RegisterOperand>(phi_reg_num, phi_is_virtual);
+        // 创建赋值指令
+        bool is_float_phi = inst->getType()->isFloatType();
+        auto dest_reg = std::make_unique<RegisterOperand>(
+            phi_reg_num, phi_is_virtual,
+            is_float_phi ? RegisterType::Float : RegisterType::Integer);
 
-        // 查找跳转指令并在其前插入
-        auto insert_pos = incoming_bb->end();
-        bool found_jump = false;
-
-        // 更精确的跳转指令查找策略：
-        // 1. 优先查找条件跳转指令
-        // 2. 如果没有条件跳转，则查找无条件跳转
-        auto conditional_jump_pos = incoming_bb->end();
-        auto unconditional_jump_pos = incoming_bb->end();
-        bool found_conditional = false;
-        bool found_unconditional = false;
-
-        for (auto it = incoming_bb->begin(); it != incoming_bb->end(); ++it) {
-            auto* current_inst = it->get();
-
-            // 检查条件跳转指令
-            if (current_inst->getOpcode() == Opcode::BNEZ ||
-                current_inst->getOpcode() == Opcode::BEQZ ||
-                current_inst->getOpcode() == Opcode::BEQ ||
-                current_inst->getOpcode() == Opcode::BNE ||
-                current_inst->getOpcode() == Opcode::BLT ||
-                current_inst->getOpcode() == Opcode::BGE ||
-                current_inst->getOpcode() == Opcode::BLTU ||
-                current_inst->getOpcode() == Opcode::BGEU) {
-                conditional_jump_pos = it;
-                found_conditional = true;
-                break;  // 找到第一个条件跳转就停止
-            }
-            // 检查无条件跳转指令
-            else if (current_inst->getOpcode() == Opcode::J ||
-                     current_inst->getOpcode() == Opcode::JAL ||
-                     current_inst->getOpcode() == Opcode::JALR ||
-                     current_inst->isJumpInstr()) {
-                if (!found_unconditional) {
-                    unconditional_jump_pos = it;
-                    found_unconditional = true;
-                }
-            }
-        }
-
-        // 选择插入位置：优先条件跳转，其次无条件跳转
-        if (found_conditional) {
-            insert_pos = conditional_jump_pos;
-            found_jump = true;
-        } else if (found_unconditional) {
-            insert_pos = unconditional_jump_pos;
-            found_jump = true;
-        }
-
-        // 如果没找到跳转指令，插入到末尾
-        if (!found_jump) {
-            insert_pos = incoming_bb->end();
-        }
-
-        // 临时修复：对于常量PHI值，检查是否会干扰条件判断
-        bool should_skip_phi = false;
-        if (is_constant_phi && found_conditional) {
-            // 更强的干扰检测：检查条件跳转指令使用的条件寄存器
-            auto* cond_inst = insert_pos->get();
-            if (cond_inst && (cond_inst->getOpcode() == Opcode::BNEZ ||
-                              cond_inst->getOpcode() == Opcode::BEQZ)) {
-                if (!cond_inst->getOperands().empty()) {
-                    auto* cond_reg_op = cond_inst->getOperands()[0].get();
-                    if (auto* cond_reg =
-                            dynamic_cast<RegisterOperand*>(cond_reg_op)) {
-                        // 如果PHI目标寄存器与条件跳转使用的寄存器相同，跳过PHI赋值
-                        if (cond_reg->getRegNum() == phi_reg_num) {
-                            should_skip_phi = true;
-                        }
-                    }
-                }
-            }
-
-            // 额外检查：检查条件计算指令
-            if (!should_skip_phi) {
-                auto check_pos = insert_pos;
-                int check_count = 0;
-                while (check_pos != incoming_bb->begin() && check_count < 5) {
-                    --check_pos;
-                    auto* inst = check_pos->get();
-                    if (inst->getOpcode() == Opcode::SEQZ ||
-                        inst->getOpcode() == Opcode::SNEZ ||
-                        inst->getOpcode() == Opcode::SLT ||
-                        inst->getOpcode() == Opcode::SGT ||
-                        inst->getOpcode() == Opcode::XOR) {
-                        if (!inst->getOperands().empty()) {
-                            auto* target_op = inst->getOperands()[0].get();
-                            if (auto* target_reg =
-                                    dynamic_cast<RegisterOperand*>(target_op)) {
-                                if (target_reg->getRegNum() == phi_reg_num) {
-                                    should_skip_phi = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    check_count++;
-                }
-            }
-        }
-
-        // 修复：当检测到寄存器冲突时，使用更安全的策略
-        if (should_skip_phi) {
-            // 检测到寄存器冲突，需要特殊处理
-            // 对于常量PHI值，我们可以在条件跳转之前的安全位置插入
-            if (is_constant_phi) {
-                // 找到更早的插入位置，在条件计算之前
-                auto early_pos = incoming_bb->begin();
-                auto safe_early_pos = early_pos;
-
-                // 寻找条件计算指令之前的位置
-                for (auto it = incoming_bb->begin();
-                     it != insert_pos && it != incoming_bb->end(); ++it) {
-                    auto* current_inst = it->get();
-                    if (current_inst->getOpcode() != Opcode::SEQZ &&
-                        current_inst->getOpcode() != Opcode::SNEZ &&
-                        current_inst->getOpcode() != Opcode::SLT &&
-                        current_inst->getOpcode() != Opcode::SGT) {
-                        safe_early_pos = it;
-                        ++safe_early_pos;  // 插入到这个指令之后
-                    }
-                }
-
-                // 对于大常量，先生成li指令，再生成mv指令
-                if (auto* imm_op =
-                        dynamic_cast<ImmediateOperand*>(value_operand.get())) {
-                    auto value_int = imm_op->getValue();
-                    constexpr int64_t IMM_MIN = -2048;
-                    constexpr int64_t IMM_MAX = 2047;
-                    if (value_int < IMM_MIN || value_int > IMM_MAX) {
-                        // 生成临时寄存器和li指令
-                        auto temp_reg = codeGen_->allocateReg();
-                        auto li_inst = std::make_unique<Instruction>(
-                            Opcode::LI, incoming_bb);
-                        li_inst->addOperand(std::make_unique<RegisterOperand>(
-                            temp_reg->getRegNum(), temp_reg->isVirtual()));
-                        li_inst->addOperand(
-                            std::make_unique<ImmediateOperand>(value_int));
-
-                        // 在安全位置插入li指令
-                        if (safe_early_pos != incoming_bb->end()) {
-                            incoming_bb->insert(safe_early_pos,
-                                                std::move(li_inst));
-                        } else {
-                            incoming_bb->insert(incoming_bb->begin(),
-                                                std::move(li_inst));
-                        }
-
-                        // 更新value_operand为临时寄存器
-                        value_operand = std::make_unique<RegisterOperand>(
-                            temp_reg->getRegNum(), temp_reg->isVirtual());
-                    }
-                }
-
-                // 在安全的早期位置插入PHI赋值
-                if (safe_early_pos != incoming_bb->end()) {
-                    storeOperandToReg(std::move(value_operand),
-                                      std::move(dest_reg), incoming_bb,
-                                      safe_early_pos);
-                } else {
-                    // 如果找不到安全位置，在基本块开始处插入
-                    storeOperandToReg(std::move(value_operand),
-                                      std::move(dest_reg), incoming_bb,
-                                      incoming_bb->begin());
-                }
-            } else {
-                // 对于非常量PHI值，使用安全策略 - 在跳转指令前插入
-                auto safe_insert_pos = incoming_bb->end();
-                for (auto it = incoming_bb->begin(); it != incoming_bb->end();
-                     ++it) {
-                    auto* current_inst = it->get();
-                    if (current_inst->isTerminator()) {
-                        safe_insert_pos = it;
-                        break;
-                    }
-                }
-                storeOperandToReg(std::move(value_operand), std::move(dest_reg),
-                                  incoming_bb, safe_insert_pos);
-            }
-        } else {
-            // 没有冲突，但还要处理大常量的情况
-            if (auto* imm_op =
-                    dynamic_cast<ImmediateOperand*>(value_operand.get())) {
-                auto value_int = imm_op->getValue();
-                constexpr int64_t IMM_MIN = -2048;
-                constexpr int64_t IMM_MAX = 2047;
-                if (value_int < IMM_MIN || value_int > IMM_MAX) {
-                    // 生成临时寄存器和li指令
-                    auto temp_reg = codeGen_->allocateReg();
-                    auto li_inst =
-                        std::make_unique<Instruction>(Opcode::LI, incoming_bb);
-                    li_inst->addOperand(std::make_unique<RegisterOperand>(
-                        temp_reg->getRegNum(), temp_reg->isVirtual()));
-                    li_inst->addOperand(
-                        std::make_unique<ImmediateOperand>(value_int));
-
-                    // 在正确位置插入li指令 - 在跳转指令前
-                    auto li_insert_pos = incoming_bb->end();
-                    for (auto it = incoming_bb->begin();
-                         it != incoming_bb->end(); ++it) {
-                        auto* current_inst = it->get();
-                        if (current_inst->getOpcode() == Opcode::J ||
-                            current_inst->getOpcode() == Opcode::JAL ||
-                            current_inst->getOpcode() == Opcode::JALR ||
-                            current_inst->getOpcode() == Opcode::BNEZ ||
-                            current_inst->getOpcode() == Opcode::BEQZ ||
-                            current_inst->getOpcode() == Opcode::BEQ ||
-                            current_inst->getOpcode() == Opcode::BNE ||
-                            current_inst->getOpcode() == Opcode::BLT ||
-                            current_inst->getOpcode() == Opcode::BGE ||
-                            current_inst->getOpcode() == Opcode::BLTU ||
-                            current_inst->getOpcode() == Opcode::BGEU ||
-                            current_inst->getOpcode() == Opcode::RET ||
-                            current_inst->isJumpInstr()) {
-                            li_insert_pos = it;
-                            break;
-                        }
-                    }
-                    incoming_bb->insert(li_insert_pos, std::move(li_inst));
-
-                    // 更新value_operand为临时寄存器
-                    value_operand = std::make_unique<RegisterOperand>(
-                        temp_reg->getRegNum(), temp_reg->isVirtual());
-                }
-            }
-
-            // 正常执行赋值 - 在跳转指令前插入
-            auto final_insert_pos = incoming_bb->end();
-            for (auto it = incoming_bb->begin(); it != incoming_bb->end();
-                 ++it) {
-                auto* current_inst = it->get();
-                if (current_inst->isTerminator()) {
-                    final_insert_pos = it;
-                    break;
-                }
-            }
-            storeOperandToReg(std::move(value_operand), std::move(dest_reg),
-                              incoming_bb, final_insert_pos);
-        }
+        storeOperandToReg(std::move(value_operand), std::move(dest_reg),
+                          incoming_bb, insert_pos);
     }
 }
 
@@ -3659,7 +3345,7 @@ void Visitor::storeOperandToReg(
                         std::make_unique<Instruction>(Opcode::LI, parent_bb);
                     li_inst->addOperand(std::move(dest_reg));  // rd
                     li_inst->addOperand(std::make_unique<ImmediateOperand>(
-                    source_imm->getValue()));  // imm
+                        source_imm->getValue()));  // imm
                     parent_bb->insert(insert_pos, std::move(li_inst));
                 }
                 break;
@@ -3973,6 +3659,12 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
     // 检查是否已经处理过该值
     const auto foundReg = findRegForValue(value);
     if (foundReg.has_value()) {
+        // 调试输出 - 特别关注PHI节点
+        if (value->getName().find("phi") != std::string::npos) {
+            std::cout << "DEBUG VISIT: Found register for PHI value "
+                      << value->getName() << " -> reg "
+                      << foundReg.value()->getRegNum() << std::endl;
+        }
         // 对于alloca指令，即使已经处理过，如果它被用作指针，也应该返回FrameIndex
         if (auto* alloca_inst = midend::dyn_cast<midend::AllocaInst>(value)) {
             auto* sfm = parent_bb->getParent()->getStackFrameManager();
