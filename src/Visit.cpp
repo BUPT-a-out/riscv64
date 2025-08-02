@@ -284,10 +284,13 @@ BasicBlock* Visitor::visit(const midend::BasicBlock* bb,
     for (const auto& inst : *bb) {
         // 跳过PHI节点，稍后处理
         if (inst->getOpcode() == midend::Opcode::PHI) {
-            // 为PHI节点分配寄存器但不生成赋值指令
-            auto phi_reg = codeGen_->allocateReg();
-            codeGen_->mapValueToReg(inst, phi_reg->getRegNum(),
-                                    phi_reg->isVirtual());
+            // 为PHI节点根据类型分配正确的寄存器
+            bool is_float_phi = inst->getType()->isFloatType();
+            auto phi_reg = is_float_phi ? codeGen_->allocateFloatReg()
+                                        : codeGen_->allocateReg();
+            codeGen_->mapValueToReg(
+                inst, phi_reg->getRegNum(), phi_reg->isVirtual(),
+                is_float_phi ? RegisterType::Float : RegisterType::Integer);
             continue;
         }
         visit(inst, bb_ptr);
@@ -1124,14 +1127,19 @@ std::unique_ptr<MachineOperand> Visitor::visitPhiInst(
 
     // 只分配寄存器，不生成指令
     // 实际的PHI指令处理将在processDeferredPhiNode中完成
-    auto phi_reg = codeGen_->allocateReg();
+    bool is_float_phi = inst->getType()->isFloatType();
+    auto phi_reg =
+        is_float_phi ? codeGen_->allocateFloatReg() : codeGen_->allocateReg();
 
     // 记录PHI的映射
-    codeGen_->mapValueToReg(inst, phi_reg->getRegNum(), phi_reg->isVirtual());
+    codeGen_->mapValueToReg(
+        inst, phi_reg->getRegNum(), phi_reg->isVirtual(),
+        is_float_phi ? RegisterType::Float : RegisterType::Integer);
 
     // PHI块本身不生成任何指令，只返回寄存器
-    return std::make_unique<RegisterOperand>(phi_reg->getRegNum(),
-                                             phi_reg->isVirtual());
+    return std::make_unique<RegisterOperand>(
+        phi_reg->getRegNum(), phi_reg->isVirtual(),
+        is_float_phi ? RegisterType::Float : RegisterType::Integer);
 }
 
 // 新的并行拷贝调度实现
@@ -1300,6 +1308,8 @@ void Visitor::scheduleRegisterCopies(
     std::set<int> dest_regs;
     std::map<int, RegisterOperand*>
         dest_reg_operands;  // dest_reg_num -> RegisterOperand*
+    std::map<int, RegisterOperand*>
+        source_reg_operands;  // src_reg_num -> RegisterOperand*
 
     for (const auto& op : register_copies) {
         if (op.src_operand->getType() == OperandType::Register) {
@@ -1314,6 +1324,7 @@ void Visitor::scheduleRegisterCopies(
                     source_regs.insert(src_num);
                     dest_regs.insert(dest_num);
                     dest_reg_operands[dest_num] = op.dest_reg;
+                    source_reg_operands[src_num] = src_reg;
                 }
             }
         }
@@ -1331,15 +1342,25 @@ void Visitor::scheduleRegisterCopies(
 
     // 为冲突寄存器分配临时寄存器并保存值
     for (int reg : conflict_regs) {
-        auto temp_reg = codeGen_->allocateReg();
+        // 获取原始寄存器的类型
+        auto* original_reg = source_reg_operands[reg];
+        bool is_float = original_reg->isFloatRegister();
+
+        // 根据寄存器类型分配临时寄存器
+        std::unique_ptr<RegisterOperand> temp_reg;
+        if (is_float) {
+            temp_reg = codeGen_->allocateFloatReg();
+        } else {
+            temp_reg = codeGen_->allocateReg();
+        }
         temp_reg_map[reg] = temp_reg->getRegNum();
 
         // 生成保存指令: temp_reg <- original_reg
         auto temp_operand = std::make_unique<RegisterOperand>(
             temp_reg->getRegNum(), temp_reg->isVirtual(),
-            RegisterType::Integer);
-        auto src_operand =
-            std::make_unique<RegisterOperand>(reg, true, RegisterType::Integer);
+            is_float ? RegisterType::Float : RegisterType::Integer);
+        auto src_operand = std::make_unique<RegisterOperand>(
+            reg, true, is_float ? RegisterType::Float : RegisterType::Integer);
         generateCopyInstruction(temp_operand.get(), std::move(src_operand), bb,
                                 insert_pos);
     }
@@ -1358,8 +1379,10 @@ void Visitor::scheduleRegisterCopies(
 
                 // 如果源寄存器是冲突寄存器，使用临时寄存器
                 if (temp_reg_map.count(src_num)) {
+                    // 使用与源寄存器相同的类型
+                    RegisterType reg_type = src_reg->getRegisterType();
                     auto temp_src = std::make_unique<RegisterOperand>(
-                        temp_reg_map[src_num], true, RegisterType::Integer);
+                        temp_reg_map[src_num], true, reg_type);
                     generateCopyInstruction(op.dest_reg, std::move(temp_src),
                                             bb, insert_pos);
                 } else {
@@ -1381,36 +1404,82 @@ void Visitor::generateCopyInstruction(
         auto* imm_op = dynamic_cast<ImmediateOperand*>(src_operand.get());
         auto value = imm_op->getValue();
 
-        constexpr int64_t IMM_MIN = -2048;
-        constexpr int64_t IMM_MAX = 2047;
+        if (dest_reg->isFloatRegister()) {
+            // 浮点寄存器立即数加载：li temp_reg, imm; fmv.w.x dest_reg,
+            // temp_reg
+            auto temp_reg = codeGen_->allocateReg();  // 分配临时整数寄存器
 
-        if (value >= IMM_MIN && value <= IMM_MAX) {
-            // 使用 addi rd, x0, imm
-            auto addi_inst = std::make_unique<Instruction>(Opcode::ADDI, bb);
-            addi_inst->addOperand(std::make_unique<RegisterOperand>(
-                dest_reg->getRegNum(), dest_reg->isVirtual(),
-                dest_reg->getRegisterType()));
-            addi_inst->addOperand(std::make_unique<RegisterOperand>(
-                0, false, RegisterType::Integer));  // x0
-            addi_inst->addOperand(std::move(src_operand));
-            bb->insert(insert_pos, std::move(addi_inst));
-        } else {
-            // 使用 li 指令
+            // 先加载立即数到临时整数寄存器
             auto li_inst = std::make_unique<Instruction>(Opcode::LI, bb);
             li_inst->addOperand(std::make_unique<RegisterOperand>(
-                dest_reg->getRegNum(), dest_reg->isVirtual(),
-                dest_reg->getRegisterType()));
+                temp_reg->getRegNum(), temp_reg->isVirtual(),
+                RegisterType::Integer));
             li_inst->addOperand(std::move(src_operand));
             bb->insert(insert_pos, std::move(li_inst));
+
+            // 然后从整数寄存器移动到浮点寄存器
+            auto fmv_inst = std::make_unique<Instruction>(Opcode::FMV_W_X, bb);
+            fmv_inst->addOperand(std::make_unique<RegisterOperand>(
+                dest_reg->getRegNum(), dest_reg->isVirtual(),
+                RegisterType::Float));
+            fmv_inst->addOperand(std::make_unique<RegisterOperand>(
+                temp_reg->getRegNum(), temp_reg->isVirtual(),
+                RegisterType::Integer));
+            bb->insert(insert_pos, std::move(fmv_inst));
+        } else {
+            // 整数寄存器立即数加载
+            constexpr int64_t IMM_MIN = -2048;
+            constexpr int64_t IMM_MAX = 2047;
+
+            if (value >= IMM_MIN && value <= IMM_MAX) {
+                // 使用 addi rd, x0, imm
+                auto addi_inst =
+                    std::make_unique<Instruction>(Opcode::ADDI, bb);
+                addi_inst->addOperand(std::make_unique<RegisterOperand>(
+                    dest_reg->getRegNum(), dest_reg->isVirtual(),
+                    dest_reg->getRegisterType()));
+                addi_inst->addOperand(std::make_unique<RegisterOperand>(
+                    0, false, RegisterType::Integer));  // x0
+                addi_inst->addOperand(
+                    std::make_unique<ImmediateOperand>(value));
+                bb->insert(insert_pos, std::move(addi_inst));
+            } else {
+                // 使用 li 指令
+                auto li_inst = std::make_unique<Instruction>(Opcode::LI, bb);
+                li_inst->addOperand(std::make_unique<RegisterOperand>(
+                    dest_reg->getRegNum(), dest_reg->isVirtual(),
+                    dest_reg->getRegisterType()));
+                li_inst->addOperand(std::make_unique<ImmediateOperand>(value));
+                bb->insert(insert_pos, std::move(li_inst));
+            }
         }
     } else {
-        // 寄存器拷贝，使用 mv 指令
-        auto mv_inst = std::make_unique<Instruction>(Opcode::MV, bb);
-        mv_inst->addOperand(std::make_unique<RegisterOperand>(
-            dest_reg->getRegNum(), dest_reg->isVirtual(),
-            dest_reg->getRegisterType()));
-        mv_inst->addOperand(std::move(src_operand));
-        bb->insert(insert_pos, std::move(mv_inst));
+        // 寄存器拷贝，根据寄存器类型选择指令
+        auto* src_reg = dynamic_cast<RegisterOperand*>(src_operand.get());
+        if (src_reg && dest_reg->isFloatRegister() &&
+            src_reg->isFloatRegister()) {
+            // 浮点寄存器之间的拷贝，使用 fsgnj.s 指令
+            auto fsgnj_inst =
+                std::make_unique<Instruction>(Opcode::FSGNJ_S, bb);
+            fsgnj_inst->addOperand(std::make_unique<RegisterOperand>(
+                dest_reg->getRegNum(), dest_reg->isVirtual(),
+                dest_reg->getRegisterType()));
+            fsgnj_inst->addOperand(std::make_unique<RegisterOperand>(
+                src_reg->getRegNum(), src_reg->isVirtual(),
+                src_reg->getRegisterType()));
+            fsgnj_inst->addOperand(std::make_unique<RegisterOperand>(
+                src_reg->getRegNum(), src_reg->isVirtual(),
+                src_reg->getRegisterType()));  // FSGNJ.S 需要两个源操作数
+            bb->insert(insert_pos, std::move(fsgnj_inst));
+        } else {
+            // 整数寄存器拷贝，使用 mv 指令
+            auto mv_inst = std::make_unique<Instruction>(Opcode::MV, bb);
+            mv_inst->addOperand(std::make_unique<RegisterOperand>(
+                dest_reg->getRegNum(), dest_reg->isVirtual(),
+                dest_reg->getRegisterType()));
+            mv_inst->addOperand(std::move(src_operand));
+            bb->insert(insert_pos, std::move(mv_inst));
+        }
     }
 }
 
@@ -2333,17 +2402,20 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
                 auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
                 if (is_float_op) {
-                    float result = lhs_imm->getFloatValue() - rhs_imm->getFloatValue();
+                    float result =
+                        lhs_imm->getFloatValue() - rhs_imm->getFloatValue();
                     // 对于浮点常量，直接返回立即数（因为后续会通过FloatConstantPool处理）
                     return std::make_unique<ImmediateOperand>(result);
                 } else {
                     int64_t result = lhs_imm->getValue() - rhs_imm->getValue();
                     // 分配寄存器并生成 li 指令
                     new_reg = codeGen_->allocateReg();
-                    auto instruction = std::make_unique<Instruction>(Opcode::LI, parent_bb);
+                    auto instruction =
+                        std::make_unique<Instruction>(Opcode::LI, parent_bb);
                     instruction->addOperand(std::make_unique<RegisterOperand>(
                         new_reg->getRegNum(), new_reg->isVirtual()));
-                    instruction->addOperand(std::make_unique<ImmediateOperand>(result));
+                    instruction->addOperand(
+                        std::make_unique<ImmediateOperand>(result));
                     parent_bb->addInstruction(std::move(instruction));
                 }
             } else if (is_float_op) {
@@ -2402,16 +2474,18 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 (rhs->getType() == OperandType::Immediate)) {
                 auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
                 auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
-                
+
                 // 计算常量值
                 int64_t result = lhs_imm->getValue() * rhs_imm->getValue();
-                
+
                 // 分配寄存器并生成 li 指令
                 new_reg = codeGen_->allocateReg();
-                auto instruction = std::make_unique<Instruction>(Opcode::LI, parent_bb);
+                auto instruction =
+                    std::make_unique<Instruction>(Opcode::LI, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));
-                instruction->addOperand(std::make_unique<ImmediateOperand>(result));
+                instruction->addOperand(
+                    std::make_unique<ImmediateOperand>(result));
                 parent_bb->addInstruction(std::move(instruction));
             } else {
                 auto lhs_reg = immToReg(std::move(lhs), parent_bb);
@@ -2447,13 +2521,15 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 }
                 // 计算常量值
                 int64_t result = lhs_imm->getValue() / rhs_imm->getValue();
-                
+
                 // 分配寄存器并生成 li 指令
                 new_reg = codeGen_->allocateReg();
-                auto instruction = std::make_unique<Instruction>(Opcode::LI, parent_bb);
+                auto instruction =
+                    std::make_unique<Instruction>(Opcode::LI, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));
-                instruction->addOperand(std::make_unique<ImmediateOperand>(result));
+                instruction->addOperand(
+                    std::make_unique<ImmediateOperand>(result));
                 parent_bb->addInstruction(std::move(instruction));
             } else {
                 auto lhs_reg = immToReg(std::move(lhs), parent_bb);
@@ -2484,13 +2560,15 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 }
                 // 计算常量值
                 int64_t result = lhs_imm->getValue() % rhs_imm->getValue();
-                
+
                 // 分配寄存器并生成 li 指令
                 new_reg = codeGen_->allocateReg();
-                auto instruction = std::make_unique<Instruction>(Opcode::LI, parent_bb);
+                auto instruction =
+                    std::make_unique<Instruction>(Opcode::LI, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));
-                instruction->addOperand(std::make_unique<ImmediateOperand>(result));
+                instruction->addOperand(
+                    std::make_unique<ImmediateOperand>(result));
                 parent_bb->addInstruction(std::move(instruction));
             } else {
                 auto lhs_reg = immToReg(std::move(lhs), parent_bb);

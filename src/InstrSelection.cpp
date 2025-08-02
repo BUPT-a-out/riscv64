@@ -26,6 +26,16 @@ RegisterOperand* CodeGenerator::mapValueToReg(const midend::Value* val,
     return regPtr;
 }
 
+RegisterOperand* CodeGenerator::mapValueToReg(const midend::Value* val,
+                                              unsigned reg_num, bool is_virtual,
+                                              RegisterType reg_type) {
+    // 创建新的 RegisterOperand 并使用智能指针管理
+    auto reg = std::make_unique<RegisterOperand>(reg_num, is_virtual, reg_type);
+    auto* regPtr = reg.get();
+    valueToReg_[val] = std::move(reg);
+    return regPtr;
+}
+
 LabelOperand* CodeGenerator::mapBBToLabel(const midend::BasicBlock* bb,
                                           const std::string& label) {
     // 创建新的 LabelOperand 并使用智能指针管理
