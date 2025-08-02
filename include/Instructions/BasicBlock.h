@@ -57,12 +57,8 @@ class BasicBlock {
     // CFG (控制流图) 信息 - 使用原始指针，因为这些是弱引用关系
     void addSuccessor(BasicBlock* succ) { successors.push_back(succ); }
     void addPredecessor(BasicBlock* pred) { predecessors.push_back(pred); }
-    auto getSuccessors() {
-        return successors;
-    }
-    auto getPredecessors() {
-        return predecessors;
-    }
+    auto getSuccessors() { return successors; }
+    auto getPredecessors() { return predecessors; }
 
     std::string toString() const;
 

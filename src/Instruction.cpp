@@ -52,6 +52,15 @@ bool Instruction::isJumpInstr() const {
            opcode == RET;
 }
 
+bool Instruction::isTerminator() const {
+    return opcode == Opcode::J || opcode == Opcode::JAL ||
+           opcode == Opcode::JALR || opcode == Opcode::BNEZ ||
+           opcode == Opcode::BEQZ || opcode == Opcode::BEQ ||
+           opcode == Opcode::BNE || opcode == Opcode::BLT ||
+           opcode == Opcode::BGE || opcode == Opcode::BLTU ||
+           opcode == Opcode::BGEU || opcode == Opcode::RET || isJumpInstr();
+}
+
 bool Instruction::isCallInstr() const {
     // 直接的函数调用指令
     if (opcode == CALL) {

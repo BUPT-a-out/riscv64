@@ -239,6 +239,7 @@ class Instruction {
     bool isCopyInstr() const;
     bool isCallInstr() const;
     bool isJumpInstr() const;
+    bool isTerminator() const;
     bool isReturnInstr() const;
 
     bool isBranch() const;

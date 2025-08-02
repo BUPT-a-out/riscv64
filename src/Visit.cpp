@@ -1184,7 +1184,7 @@ std::unique_ptr<MachineOperand> Visitor::visitPhiInst(
             if (signed_value >= IMM_MIN && signed_value <= IMM_MAX) {
                 value_operand = std::make_unique<ImmediateOperand>(value_int);
             } else {
-                // 创建寄存器并在指定位置生成li指令
+                // 创建寄存器并在跳转指令前生成li指令
                 auto temp_reg = codeGen_->allocateReg();
                 auto li_inst =
                     std::make_unique<Instruction>(Opcode::LI, incoming_bb);
@@ -1192,22 +1192,61 @@ std::unique_ptr<MachineOperand> Visitor::visitPhiInst(
                     temp_reg->getRegNum(), temp_reg->isVirtual()));
                 li_inst->addOperand(
                     std::make_unique<ImmediateOperand>(value_int));
-                incoming_bb->insert(insert_pos, std::move(li_inst));
+                // 确保在跳转指令前插入
+                auto li_safe_pos = incoming_bb->end();
+                for (auto it = incoming_bb->begin(); it != incoming_bb->end();
+                     ++it) {
+                    auto* current_inst = it->get();
+                    if (current_inst->isTerminator()) {
+                        li_safe_pos = it;
+                        break;
+                    }
+                }
+                incoming_bb->insert(li_safe_pos, std::move(li_inst));
 
                 value_operand = std::make_unique<RegisterOperand>(
                     temp_reg->getRegNum(), temp_reg->isVirtual());
             }
         } else {
-            // 对于非常量值，使用原有逻辑但在临时BB中处理
-            value_operand = visit(incoming_value, incoming_bb);
+            // 对于非常量值，使用临时基本块避免指令调度问题
+            auto temp_bb = std::make_unique<BasicBlock>(
+                incoming_bb->getParent(), "temp_phi_visitbb");
+            value_operand = visit(incoming_value, temp_bb.get());
+
+            // 将临时基本块中的指令移动到原基本块的跳转指令前
+            auto visit_insert_pos = incoming_bb->end();
+            for (auto it = incoming_bb->begin(); it != incoming_bb->end();
+                 ++it) {
+                auto* current_inst = it->get();
+                if (current_inst->isTerminator()) {
+                    visit_insert_pos = it;
+                    break;
+                }
+            }
+
+            for (auto it = temp_bb->begin(); it != temp_bb->end();) {
+                auto current_it = it++;
+                auto inst = std::move(*current_it);
+                inst->setParent(incoming_bb);
+                incoming_bb->insert(visit_insert_pos, std::move(inst));
+            }
         }
 
-        // 创建赋值指令
+        // 创建赋值指令，确保在跳转指令前
         auto dest_reg = std::make_unique<RegisterOperand>(phi_reg->getRegNum(),
                                                           phi_reg->isVirtual());
 
+        auto store_insert_pos = incoming_bb->end();
+        for (auto it = incoming_bb->begin(); it != incoming_bb->end(); ++it) {
+            auto* current_inst = it->get();
+            if (current_inst->isTerminator()) {
+                store_insert_pos = it;
+                break;
+            }
+        }
+
         storeOperandToReg(std::move(value_operand), std::move(dest_reg),
-                          incoming_bb, insert_pos);
+                          incoming_bb, store_insert_pos);
     }
 
     // PHI块本身不生成任何指令，只返回寄存器
@@ -1262,8 +1301,32 @@ void Visitor::processDeferredPhiNode(const midend::Instruction* inst,
                 value_operand = std::make_unique<ImmediateOperand>(value_int);
             }
         } else {
-            // 对于非常量值，使用原有逻辑
-            value_operand = visit(incoming_value, incoming_bb);
+            // 对于非常量值，需要特别处理以避免指令调度问题
+            // 先查找跳转指令位置，然后在跳转前生成所需指令
+            auto temp_insert_pos = incoming_bb->end();
+
+            // 查找终结符指令位置
+            for (auto it = incoming_bb->begin(); it != incoming_bb->end();
+                 ++it) {
+                auto* current_inst = it->get();
+                if (current_inst->isTerminator()) {
+                    temp_insert_pos = it;
+                    break;
+                }
+            }
+
+            // 创建临时基本块来生成指令，避免污染原基本块
+            auto temp_bb = std::make_unique<BasicBlock>(
+                incoming_bb->getParent(), "temp_phi_bb");
+            value_operand = visit(incoming_value, temp_bb.get());
+
+            // 将临时基本块中生成的指令移动到原基本块的正确位置（跳转指令之前）
+            for (auto it = temp_bb->begin(); it != temp_bb->end();) {
+                auto current_it = it++;
+                auto inst = std::move(*current_it);
+                inst->setParent(incoming_bb);
+                incoming_bb->insert(temp_insert_pos, std::move(inst));
+            }
         }
 
         // 创建赋值指令 - 但要注意避免干扰条件判断
@@ -1436,9 +1499,18 @@ void Visitor::processDeferredPhiNode(const midend::Instruction* inst,
                                       incoming_bb->begin());
                 }
             } else {
-                // 对于非常量PHI值，使用原策略
+                // 对于非常量PHI值，使用安全策略 - 在跳转指令前插入
+                auto safe_insert_pos = incoming_bb->end();
+                for (auto it = incoming_bb->begin(); it != incoming_bb->end();
+                     ++it) {
+                    auto* current_inst = it->get();
+                    if (current_inst->isTerminator()) {
+                        safe_insert_pos = it;
+                        break;
+                    }
+                }
                 storeOperandToReg(std::move(value_operand), std::move(dest_reg),
-                                  incoming_bb, insert_pos);
+                                  incoming_bb, safe_insert_pos);
             }
         } else {
             // 没有冲突，但还要处理大常量的情况
@@ -1457,8 +1529,29 @@ void Visitor::processDeferredPhiNode(const midend::Instruction* inst,
                     li_inst->addOperand(
                         std::make_unique<ImmediateOperand>(value_int));
 
-                    // 在正确位置插入li指令
-                    incoming_bb->insert(insert_pos, std::move(li_inst));
+                    // 在正确位置插入li指令 - 在跳转指令前
+                    auto li_insert_pos = incoming_bb->end();
+                    for (auto it = incoming_bb->begin();
+                         it != incoming_bb->end(); ++it) {
+                        auto* current_inst = it->get();
+                        if (current_inst->getOpcode() == Opcode::J ||
+                            current_inst->getOpcode() == Opcode::JAL ||
+                            current_inst->getOpcode() == Opcode::JALR ||
+                            current_inst->getOpcode() == Opcode::BNEZ ||
+                            current_inst->getOpcode() == Opcode::BEQZ ||
+                            current_inst->getOpcode() == Opcode::BEQ ||
+                            current_inst->getOpcode() == Opcode::BNE ||
+                            current_inst->getOpcode() == Opcode::BLT ||
+                            current_inst->getOpcode() == Opcode::BGE ||
+                            current_inst->getOpcode() == Opcode::BLTU ||
+                            current_inst->getOpcode() == Opcode::BGEU ||
+                            current_inst->getOpcode() == Opcode::RET ||
+                            current_inst->isJumpInstr()) {
+                            li_insert_pos = it;
+                            break;
+                        }
+                    }
+                    incoming_bb->insert(li_insert_pos, std::move(li_inst));
 
                     // 更新value_operand为临时寄存器
                     value_operand = std::make_unique<RegisterOperand>(
@@ -1466,9 +1559,18 @@ void Visitor::processDeferredPhiNode(const midend::Instruction* inst,
                 }
             }
 
-            // 正常执行赋值
+            // 正常执行赋值 - 在跳转指令前插入
+            auto final_insert_pos = incoming_bb->end();
+            for (auto it = incoming_bb->begin(); it != incoming_bb->end();
+                 ++it) {
+                auto* current_inst = it->get();
+                if (current_inst->isTerminator()) {
+                    final_insert_pos = it;
+                    break;
+                }
+            }
             storeOperandToReg(std::move(value_operand), std::move(dest_reg),
-                              incoming_bb, insert_pos);
+                              incoming_bb, final_insert_pos);
         }
     }
 }
