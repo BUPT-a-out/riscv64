@@ -2333,15 +2333,20 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
                 auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
                 if (is_float_op) {
-                    return std::make_unique<ImmediateOperand>(
-                        lhs_imm->getFloatValue() - rhs_imm->getFloatValue());
+                    float result = lhs_imm->getFloatValue() - rhs_imm->getFloatValue();
+                    // 对于浮点常量，直接返回立即数（因为后续会通过FloatConstantPool处理）
+                    return std::make_unique<ImmediateOperand>(result);
                 } else {
-                    return std::make_unique<ImmediateOperand>(
-                        lhs_imm->getValue() - rhs_imm->getValue());
+                    int64_t result = lhs_imm->getValue() - rhs_imm->getValue();
+                    // 分配寄存器并生成 li 指令
+                    new_reg = codeGen_->allocateReg();
+                    auto instruction = std::make_unique<Instruction>(Opcode::LI, parent_bb);
+                    instruction->addOperand(std::make_unique<RegisterOperand>(
+                        new_reg->getRegNum(), new_reg->isVirtual()));
+                    instruction->addOperand(std::make_unique<ImmediateOperand>(result));
+                    parent_bb->addInstruction(std::move(instruction));
                 }
-            }
-
-            if (is_float_op) {
+            } else if (is_float_op) {
                 // 浮点减法：使用 fsub 指令
                 new_reg = codeGen_->allocateFloatReg();
                 auto instruction =
@@ -2397,22 +2402,31 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 (rhs->getType() == OperandType::Immediate)) {
                 auto* lhs_imm = dynamic_cast<ImmediateOperand*>(lhs.get());
                 auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
-                return std::make_unique<ImmediateOperand>(lhs_imm->getValue() *
-                                                          rhs_imm->getValue());
+                
+                // 计算常量值
+                int64_t result = lhs_imm->getValue() * rhs_imm->getValue();
+                
+                // 分配寄存器并生成 li 指令
+                new_reg = codeGen_->allocateReg();
+                auto instruction = std::make_unique<Instruction>(Opcode::LI, parent_bb);
+                instruction->addOperand(std::make_unique<RegisterOperand>(
+                    new_reg->getRegNum(), new_reg->isVirtual()));
+                instruction->addOperand(std::make_unique<ImmediateOperand>(result));
+                parent_bb->addInstruction(std::move(instruction));
+            } else {
+                auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+                auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+                new_reg = codeGen_->allocateReg();
+                auto instruction =
+                    std::make_unique<Instruction>(Opcode::MULW, parent_bb);
+                instruction->addOperand(std::make_unique<RegisterOperand>(
+                    new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+                instruction->addOperand(std::move(lhs_reg));       // rs1
+                instruction->addOperand(std::move(rhs_reg));       // rs2
+
+                parent_bb->addInstruction(std::move(instruction));
             }
-
-            auto lhs_reg = immToReg(std::move(lhs), parent_bb);
-            auto rhs_reg = immToReg(std::move(rhs), parent_bb);
-
-            new_reg = codeGen_->allocateReg();
-            auto instruction =
-                std::make_unique<Instruction>(Opcode::MULW, parent_bb);
-            instruction->addOperand(std::make_unique<RegisterOperand>(
-                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-            instruction->addOperand(std::move(lhs_reg));       // rs1
-            instruction->addOperand(std::move(rhs_reg));       // rs2
-
-            parent_bb->addInstruction(std::move(instruction));
             break;
         }
 
@@ -2431,22 +2445,30 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 if (rhs_imm->getValue() == 0) {
                     throw std::runtime_error("Division by zero");
                 }
-                return std::make_unique<ImmediateOperand>(lhs_imm->getValue() /
-                                                          rhs_imm->getValue());
+                // 计算常量值
+                int64_t result = lhs_imm->getValue() / rhs_imm->getValue();
+                
+                // 分配寄存器并生成 li 指令
+                new_reg = codeGen_->allocateReg();
+                auto instruction = std::make_unique<Instruction>(Opcode::LI, parent_bb);
+                instruction->addOperand(std::make_unique<RegisterOperand>(
+                    new_reg->getRegNum(), new_reg->isVirtual()));
+                instruction->addOperand(std::make_unique<ImmediateOperand>(result));
+                parent_bb->addInstruction(std::move(instruction));
+            } else {
+                auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+                auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+                new_reg = codeGen_->allocateReg();
+                auto instruction =
+                    std::make_unique<Instruction>(Opcode::DIVW, parent_bb);
+                instruction->addOperand(std::make_unique<RegisterOperand>(
+                    new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+                instruction->addOperand(std::move(lhs_reg));       // rs1
+                instruction->addOperand(std::move(rhs_reg));       // rs2
+
+                parent_bb->addInstruction(std::move(instruction));
             }
-
-            auto lhs_reg = immToReg(std::move(lhs), parent_bb);
-            auto rhs_reg = immToReg(std::move(rhs), parent_bb);
-
-            new_reg = codeGen_->allocateReg();
-            auto instruction =
-                std::make_unique<Instruction>(Opcode::DIVW, parent_bb);
-            instruction->addOperand(std::make_unique<RegisterOperand>(
-                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-            instruction->addOperand(std::move(lhs_reg));       // rs1
-            instruction->addOperand(std::move(rhs_reg));       // rs2
-
-            parent_bb->addInstruction(std::move(instruction));
             break;
         }
 
@@ -2460,22 +2482,30 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     throw std::runtime_error(
                         "Division by zero in modulo operation");
                 }
-                return std::make_unique<ImmediateOperand>(lhs_imm->getValue() %
-                                                          rhs_imm->getValue());
+                // 计算常量值
+                int64_t result = lhs_imm->getValue() % rhs_imm->getValue();
+                
+                // 分配寄存器并生成 li 指令
+                new_reg = codeGen_->allocateReg();
+                auto instruction = std::make_unique<Instruction>(Opcode::LI, parent_bb);
+                instruction->addOperand(std::make_unique<RegisterOperand>(
+                    new_reg->getRegNum(), new_reg->isVirtual()));
+                instruction->addOperand(std::make_unique<ImmediateOperand>(result));
+                parent_bb->addInstruction(std::move(instruction));
+            } else {
+                auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+                auto rhs_reg = immToReg(std::move(rhs), parent_bb);
+
+                new_reg = codeGen_->allocateReg();
+                auto instruction =
+                    std::make_unique<Instruction>(Opcode::REMW, parent_bb);
+                instruction->addOperand(std::make_unique<RegisterOperand>(
+                    new_reg->getRegNum(), new_reg->isVirtual()));  // rd
+                instruction->addOperand(std::move(lhs_reg));       // rs1
+                instruction->addOperand(std::move(rhs_reg));       // rs2
+
+                parent_bb->addInstruction(std::move(instruction));
             }
-
-            auto lhs_reg = immToReg(std::move(lhs), parent_bb);
-            auto rhs_reg = immToReg(std::move(rhs), parent_bb);
-
-            new_reg = codeGen_->allocateReg();
-            auto instruction =
-                std::make_unique<Instruction>(Opcode::REMW, parent_bb);
-            instruction->addOperand(std::make_unique<RegisterOperand>(
-                new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-            instruction->addOperand(std::move(lhs_reg));       // rs1
-            instruction->addOperand(std::move(rhs_reg));       // rs2
-
-            parent_bb->addInstruction(std::move(instruction));
             break;
         }
 
