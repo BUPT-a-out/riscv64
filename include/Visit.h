@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include "IR/Module.h"
 #include "Instructions/All.h"
@@ -50,6 +51,8 @@ class Visitor {
     void processDeferredPhiNode(const midend::Instruction* inst,
                                 const midend::BasicBlock* bb_midend,
                                 Function* parent_func);
+    void processAllPhiNodes(const midend::Function* func,
+                            Function* parent_func);
     void visitBranchInst(const midend::Instruction* inst,
                          BasicBlock* parent_bb);
     std::unique_ptr<RegisterOperand> immToReg(
@@ -83,6 +86,30 @@ class Visitor {
 
    private:
     CodeGenerator* codeGen_;
+
+    // PHI节点并行拷贝相关的结构体和函数
+    struct CopyOperation {
+        RegisterOperand* dest_reg;                    // 目标寄存器
+        std::unique_ptr<MachineOperand> src_operand;  // 源操作数
+        bool is_constant;                             // 是否是常量拷贝
+    };
+
+    void generateParallelCopyForEdge(
+        const std::vector<const midend::Instruction*>& phi_nodes,
+        const midend::BasicBlock* pred_bb_midend, Function* parent_func);
+
+    void scheduleParallelCopy(
+        std::vector<CopyOperation>& copy_ops, BasicBlock* bb,
+        std::list<std::unique_ptr<Instruction>>::const_iterator insert_pos);
+
+    void scheduleRegisterCopies(
+        std::vector<CopyOperation>& register_copies, BasicBlock* bb,
+        std::list<std::unique_ptr<Instruction>>::const_iterator insert_pos);
+
+    void generateCopyInstruction(
+        RegisterOperand* dest_reg, std::unique_ptr<MachineOperand> src_operand,
+        BasicBlock* bb,
+        std::list<std::unique_ptr<Instruction>>::const_iterator insert_pos);
 
     std::optional<RegisterOperand*> findRegForValue(const midend::Value* value);
 

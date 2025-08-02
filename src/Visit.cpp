@@ -2,10 +2,13 @@
 
 #include <functional>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <optional>
 #include <ostream>
+#include <set>
 #include <stdexcept>
+#include <vector>
 
 #include "ABI.h"
 #include "CodeGen.h"
@@ -123,13 +126,7 @@ void Visitor::visit(const midend::Function* func, Module* parent_module) {
     }
 
     // 后处理：处理所有PHI节点
-    for (const auto& bb : *func) {
-        for (const auto& inst : *bb) {
-            if (inst->getOpcode() == midend::Opcode::PHI) {
-                processDeferredPhiNode(inst, bb, func_ptr);
-            }
-        }
-    }
+    processAllPhiNodes(func, func_ptr);
 
     // 为新函数清理函数级别的映射
     codeGen_->clearFunctionLevelMappings();
@@ -1137,7 +1134,287 @@ std::unique_ptr<MachineOperand> Visitor::visitPhiInst(
                                              phi_reg->isVirtual());
 }
 
-// 延迟处理PHI节点的方法 - 简化版本
+// 新的并行拷贝调度实现
+void Visitor::processAllPhiNodes(const midend::Function* func,
+                                 Function* parent_func) {
+    // 为每个包含PHI节点的基本块收集所有PHI节点
+    std::map<const midend::BasicBlock*, std::vector<const midend::Instruction*>>
+        phi_map;
+
+    for (const auto& bb : *func) {
+        for (const auto& inst : *bb) {
+            if (inst->getOpcode() == midend::Opcode::PHI) {
+                phi_map[bb].push_back(inst);
+            }
+        }
+    }
+
+    // 为每个基本块处理其PHI节点
+    for (const auto& [bb_midend, phi_nodes] : phi_map) {
+        if (phi_nodes.empty()) continue;
+
+        // 获取所有前驱边
+        std::set<const midend::BasicBlock*> predecessors;
+        for (const auto* phi_inst_ptr : phi_nodes) {
+            const auto* phi_inst =
+                dynamic_cast<const midend::PHINode*>(phi_inst_ptr);
+            if (!phi_inst) continue;
+
+            for (unsigned i = 0; i < phi_inst->getNumIncomingValues(); ++i) {
+                predecessors.insert(phi_inst->getIncomingBlock(i));
+            }
+        }
+
+        // 为每条前驱边生成并行拷贝
+        for (const auto* pred_bb_midend : predecessors) {
+            generateParallelCopyForEdge(phi_nodes, pred_bb_midend, parent_func);
+        }
+    }
+}
+
+// 为单条前驱边生成并行拷贝
+void Visitor::generateParallelCopyForEdge(
+    const std::vector<const midend::Instruction*>& phi_nodes,
+    const midend::BasicBlock* pred_bb_midend, Function* parent_func) {
+    auto* pred_bb = parent_func->getBasicBlock(pred_bb_midend);
+    if (!pred_bb) {
+        throw std::runtime_error("Predecessor block not found");
+    }
+
+    // 查找终结符指令位置
+    auto insert_pos = pred_bb->end();
+    for (auto it = pred_bb->begin(); it != pred_bb->end(); ++it) {
+        auto* current_inst = it->get();
+        if (current_inst->isTerminator()) {
+            insert_pos = it;
+            break;
+        }
+    }
+
+    // 收集所有拷贝操作：dest_reg -> src_operand
+    std::vector<CopyOperation> copy_ops;
+
+    // 构建拷贝操作列表
+    for (const auto* phi_inst_ptr : phi_nodes) {
+        const auto* phi_inst =
+            dynamic_cast<const midend::PHINode*>(phi_inst_ptr);
+        if (!phi_inst) continue;
+
+        // 找到对应前驱边的值
+        const midend::Value* incoming_value = nullptr;
+        for (unsigned i = 0; i < phi_inst->getNumIncomingValues(); ++i) {
+            if (phi_inst->getIncomingBlock(i) == pred_bb_midend) {
+                incoming_value = phi_inst->getIncomingValue(i);
+                break;
+            }
+        }
+
+        if (!incoming_value) continue;
+
+        // 获取PHI节点的目标寄存器
+        auto foundReg = findRegForValue(phi_inst_ptr);
+        if (!foundReg.has_value()) {
+            throw std::runtime_error("PHI register not found");
+        }
+
+        // 处理源操作数
+        std::unique_ptr<MachineOperand> src_operand;
+        bool is_constant = false;
+
+        if (auto* const_int =
+                midend::dyn_cast<midend::ConstantInt>(incoming_value)) {
+            // 处理整数常量
+            auto value_int = const_int->getSignedValue();
+            src_operand = std::make_unique<ImmediateOperand>(value_int);
+            is_constant = true;
+        } else if (auto* const_float =
+                       midend::dyn_cast<midend::ConstantFP>(incoming_value)) {
+            // 处理浮点常量
+            auto float_val = const_float->getValue();
+            union {
+                float f;
+                int32_t i;
+            } converter;
+            converter.f = float_val;
+            src_operand = std::make_unique<ImmediateOperand>(converter.i);
+            is_constant = true;
+        } else {
+            // 处理寄存器操作数
+            auto temp_bb = std::make_unique<BasicBlock>(pred_bb->getParent(),
+                                                        "temp_phi_bb");
+            src_operand = visit(incoming_value, temp_bb.get());
+
+            // 将临时基本块中的指令移动到原基本块
+            for (auto it = temp_bb->begin(); it != temp_bb->end();) {
+                auto current_it = it++;
+                auto inst_ptr = std::move(*current_it);
+                inst_ptr->setParent(pred_bb);
+                pred_bb->insert(insert_pos, std::move(inst_ptr));
+            }
+        }
+
+        copy_ops.push_back(
+            {foundReg.value(), std::move(src_operand), is_constant});
+    }
+
+    // 执行并行拷贝调度
+    scheduleParallelCopy(copy_ops, pred_bb, insert_pos);
+}
+
+// 并行拷贝调度算法
+void Visitor::scheduleParallelCopy(
+    std::vector<CopyOperation>& copy_ops, BasicBlock* bb,
+    std::list<std::unique_ptr<Instruction>>::const_iterator insert_pos) {
+    if (copy_ops.empty()) return;
+
+    // 分离常量拷贝和寄存器拷贝
+    std::vector<CopyOperation> constant_copies;
+    std::vector<CopyOperation> register_copies;
+
+    for (auto& op : copy_ops) {
+        if (op.is_constant) {
+            constant_copies.push_back(std::move(op));
+        } else {
+            register_copies.push_back(std::move(op));
+        }
+    }
+
+    // 1. 先处理寄存器到寄存器的拷贝（可能有依赖关系）
+    scheduleRegisterCopies(register_copies, bb, insert_pos);
+
+    // 2. 最后处理常量拷贝（没有依赖关系）
+    for (auto& op : constant_copies) {
+        generateCopyInstruction(op.dest_reg, std::move(op.src_operand), bb,
+                                insert_pos);
+    }
+}
+
+// 调度寄存器拷贝，处理依赖关系和环
+void Visitor::scheduleRegisterCopies(
+    std::vector<CopyOperation>& register_copies, BasicBlock* bb,
+    std::list<std::unique_ptr<Instruction>>::const_iterator insert_pos) {
+    if (register_copies.empty()) return;
+
+    // 构建源寄存器和目标寄存器的集合
+    std::set<int> source_regs;
+    std::set<int> dest_regs;
+    std::map<int, RegisterOperand*>
+        dest_reg_operands;  // dest_reg_num -> RegisterOperand*
+
+    for (const auto& op : register_copies) {
+        if (op.src_operand->getType() == OperandType::Register) {
+            auto* src_reg =
+                dynamic_cast<RegisterOperand*>(op.src_operand.get());
+            if (src_reg) {
+                int dest_num = op.dest_reg->getRegNum();
+                int src_num = src_reg->getRegNum();
+
+                // 跳过自拷贝
+                if (dest_num != src_num) {
+                    source_regs.insert(src_num);
+                    dest_regs.insert(dest_num);
+                    dest_reg_operands[dest_num] = op.dest_reg;
+                }
+            }
+        }
+    }
+
+    // 找到既是源又是目标的寄存器（需要临时寄存器保存）
+    std::set<int> conflict_regs;
+    std::map<int, int> temp_reg_map;  // original_reg -> temp_reg
+
+    for (int reg : source_regs) {
+        if (dest_regs.count(reg)) {
+            conflict_regs.insert(reg);
+        }
+    }
+
+    // 为冲突寄存器分配临时寄存器并保存值
+    for (int reg : conflict_regs) {
+        auto temp_reg = codeGen_->allocateReg();
+        temp_reg_map[reg] = temp_reg->getRegNum();
+
+        // 生成保存指令: temp_reg <- original_reg
+        auto temp_operand = std::make_unique<RegisterOperand>(
+            temp_reg->getRegNum(), temp_reg->isVirtual(),
+            RegisterType::Integer);
+        auto src_operand =
+            std::make_unique<RegisterOperand>(reg, true, RegisterType::Integer);
+        generateCopyInstruction(temp_operand.get(), std::move(src_operand), bb,
+                                insert_pos);
+    }
+
+    // 执行所有拷贝操作，将冲突寄存器的源替换为临时寄存器
+    for (auto& op : register_copies) {
+        if (op.src_operand->getType() == OperandType::Register) {
+            auto* src_reg =
+                dynamic_cast<RegisterOperand*>(op.src_operand.get());
+            if (src_reg) {
+                int dest_num = op.dest_reg->getRegNum();
+                int src_num = src_reg->getRegNum();
+
+                // 跳过自拷贝
+                if (dest_num == src_num) continue;
+
+                // 如果源寄存器是冲突寄存器，使用临时寄存器
+                if (temp_reg_map.count(src_num)) {
+                    auto temp_src = std::make_unique<RegisterOperand>(
+                        temp_reg_map[src_num], true, RegisterType::Integer);
+                    generateCopyInstruction(op.dest_reg, std::move(temp_src),
+                                            bb, insert_pos);
+                } else {
+                    generateCopyInstruction(
+                        op.dest_reg, std::move(op.src_operand), bb, insert_pos);
+                }
+            }
+        }
+    }
+}
+
+// 生成单个拷贝指令
+void Visitor::generateCopyInstruction(
+    RegisterOperand* dest_reg, std::unique_ptr<MachineOperand> src_operand,
+    BasicBlock* bb,
+    std::list<std::unique_ptr<Instruction>>::const_iterator insert_pos) {
+    if (src_operand->isImm()) {
+        // 常量拷贝
+        auto* imm_op = dynamic_cast<ImmediateOperand*>(src_operand.get());
+        auto value = imm_op->getValue();
+
+        constexpr int64_t IMM_MIN = -2048;
+        constexpr int64_t IMM_MAX = 2047;
+
+        if (value >= IMM_MIN && value <= IMM_MAX) {
+            // 使用 addi rd, x0, imm
+            auto addi_inst = std::make_unique<Instruction>(Opcode::ADDI, bb);
+            addi_inst->addOperand(std::make_unique<RegisterOperand>(
+                dest_reg->getRegNum(), dest_reg->isVirtual(),
+                dest_reg->getRegisterType()));
+            addi_inst->addOperand(std::make_unique<RegisterOperand>(
+                0, false, RegisterType::Integer));  // x0
+            addi_inst->addOperand(std::move(src_operand));
+            bb->insert(insert_pos, std::move(addi_inst));
+        } else {
+            // 使用 li 指令
+            auto li_inst = std::make_unique<Instruction>(Opcode::LI, bb);
+            li_inst->addOperand(std::make_unique<RegisterOperand>(
+                dest_reg->getRegNum(), dest_reg->isVirtual(),
+                dest_reg->getRegisterType()));
+            li_inst->addOperand(std::move(src_operand));
+            bb->insert(insert_pos, std::move(li_inst));
+        }
+    } else {
+        // 寄存器拷贝，使用 mv 指令
+        auto mv_inst = std::make_unique<Instruction>(Opcode::MV, bb);
+        mv_inst->addOperand(std::make_unique<RegisterOperand>(
+            dest_reg->getRegNum(), dest_reg->isVirtual(),
+            dest_reg->getRegisterType()));
+        mv_inst->addOperand(std::move(src_operand));
+        bb->insert(insert_pos, std::move(mv_inst));
+    }
+}
+
+// 延迟处理PHI节点的方法 - 简化版本（保留用于兼容性，但不再使用）
 void Visitor::processDeferredPhiNode(const midend::Instruction* inst,
                                      const midend::BasicBlock* bb_midend,
                                      Function* parent_func) {
