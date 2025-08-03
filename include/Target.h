@@ -4,6 +4,7 @@
 
 #include "IR/Module.h"
 #include "Instructions/Module.h"
+#include "Pass/Pass.h"
 
 namespace riscv64 {
 
@@ -12,7 +13,7 @@ class RISCV64Target {
     RISCV64Target() = default;
     ~RISCV64Target() = default;
 
-    std::string compileToAssembly(const midend::Module& module);
+    std::string compileToAssembly(const midend::Module& module, const midend::AnalysisManager* analysisManager = nullptr);
 
     // 三阶段编译流程
     Module instructionSelectionPass(
