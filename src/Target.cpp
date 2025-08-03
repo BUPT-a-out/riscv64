@@ -6,11 +6,15 @@
 #include "FrameIndexPass.h"
 #include "IR/Function.h"
 #include "RegAllocChaitin.h"
+#include "ValueReusePass.h"
 #include "Visit.h"
 
 namespace riscv64 {
 
-std::string RISCV64Target::compileToAssembly(const midend::Module& module) {
+std::string RISCV64Target::compileToAssembly(
+    const midend::Module& module,
+    const midend::AnalysisManager* analysisManager) {
+    (void)analysisManager;  // Suppress unused parameter warning
     std::vector<std::string> assembly;
 
     // 添加汇编头部
@@ -19,12 +23,43 @@ std::string RISCV64Target::compileToAssembly(const midend::Module& module) {
 
     // 执行完整的三阶段编译流程
     auto riscv_module = instructionSelectionPass(module);
+
+    // 在寄存器分配之前运行Value Reuse优化
+    valueReusePass(riscv_module, module);
+
     initialFrameIndexPass(riscv_module);  // 第一阶段
     basicBlockReorderingPass(riscv_module);  // 第1.7阶段：基本块重排优化
     registerAllocationPass(riscv_module);     // 第二阶段
     frameIndexEliminationPass(riscv_module);  // 第三阶段
 
     return riscv_module.toString();
+}
+
+Module& RISCV64Target::valueReusePass(riscv64::Module& riscv_module,
+                                      const midend::Module& midend_module) {
+    (void)midend_module;  // Suppress unused parameter warning for now
+    std::cout << "\n=== Phase 0.5: Value Reuse Optimization ===" << std::endl;
+
+    ValueReusePass pass;
+
+    // Process each RISCV64 function
+    for (auto& riscv_function : riscv_module) {
+        if (!riscv_function->empty()) {
+            std::cout << "Running ValueReusePass on function: "
+                      << riscv_function->getName() << std::endl;
+
+            bool optimized = pass.runOnFunction(riscv_function.get());
+            if (optimized) {
+                const auto& stats = pass.getStatistics();
+                std::cout << "  Optimization results: " << stats.loadsEliminated
+                          << " loads eliminated, " << stats.virtualRegsReused
+                          << " registers reused" << std::endl;
+            }
+        }
+    }
+
+    std::cout << "=== Value Reuse Optimization Completed ===" << std::endl;
+    return riscv_module;
 }
 
 Module RISCV64Target::instructionSelectionPass(const midend::Module& module) {
