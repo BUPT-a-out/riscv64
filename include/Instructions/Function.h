@@ -12,10 +12,14 @@
 
 namespace riscv64 {
 
-class StackFrameManager;  // 前向声明
+class StackFrameManager;     // 前向声明
+class BasicBlockReordering;  // 前向声明
 
 class Function {
    public:
+    // 友元声明，允许BasicBlockReordering访问私有成员
+    friend class BasicBlockReordering;
+
     explicit Function(std::string name)
         : name(std::move(name)),
           stackFrameManager_(std::make_unique<StackFrameManager>(this)) {}
@@ -46,7 +50,7 @@ class Function {
     bool empty() const { return basic_blocks.empty(); }
     const std::string& getName() const { return name; }
 
-    BasicBlock* getEntryBlock() const { 
+    BasicBlock* getEntryBlock() const {
         if (basic_blocks.empty()) return nullptr;
         return basic_blocks.front().get();
     }
@@ -99,17 +103,19 @@ class Function {
 
     unsigned getMaxRegNum() const {
         unsigned M = 0;
-        for (const auto& bb_ptr:basic_blocks) {
+        for (const auto& bb_ptr : basic_blocks) {
             const auto* bb = bb_ptr.get();
-            for (const auto& inst_ptr: *bb) {
+            for (const auto& inst_ptr : *bb) {
                 const auto* inst = inst_ptr.get();
                 const auto& ops = inst->getOperands();
-                for (const auto& op: ops) {
+                for (const auto& op : ops) {
                     if (op->isReg()) {
                         const auto num = op->getRegNum();
                         M = std::max(M, num);
                     } else if (op->isMem()) {
-                        const auto num = static_cast<MemoryOperand*>(op.get())->getBaseReg()->getRegNum();
+                        const auto num = static_cast<MemoryOperand*>(op.get())
+                                             ->getBaseReg()
+                                             ->getRegNum();
                         M = std::max(M, num);
                     }
                 }
