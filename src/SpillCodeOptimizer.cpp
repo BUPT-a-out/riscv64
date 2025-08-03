@@ -1,156 +1,482 @@
 #include "SpillCodeOptimizer.h"
+#include <iostream>
+#include <algorithm>
+#include <set>
+
 namespace riscv64 {
 
-// It only plays with integer regs.
 void SpillCodeOptimizer::optimizeSpillCode(Function* function) {
-    std::cout << "Starting spill code optimization..." << std::endl;
-    removeRedundantFrameAddr(function);
+    std::cout << "Starting linear scan spill code optimization..." << std::endl;
+    for (auto& bb : *function) {
+        optimizeBasicBlock(bb.get());
+    }
+    // TODO: post opt: reduce dead code
     std::cout << "Spill code optimization completed." << std::endl;
 }
 
-void SpillCodeOptimizer::removeRedundantFrameAddr(Function* function) {
-    for (auto& bb : *function) {
-        std::unordered_map<int, unsigned>
-            frameToRegMap;  // frameIndex -> regNum
-        std::unordered_map<unsigned, int>
-            regToFrameMap;  // regNum -> frameIndex
-        std::vector<BasicBlock::iterator> toErase;
+void SpillCodeOptimizer::optimizeBasicBlock(BasicBlock* bb) {
+    std::cout << "Optimizing basic block with " << bb->size() << " instructions" << std::endl;
+    BasicBlockTracker tracker;
+    
+    // 线性扫描基本块中的每条指令
+    for (auto it = bb->begin(); it != bb->end(); ++it) {
+        Instruction* inst = it->get();
+        tracker.currentPos++;
+        
+        // 检查是否可以优化当前指令
+        if (canOptimizeInstruction(inst, tracker)) {
+            applyOptimization(inst, tracker);
+        }
+        
+        // 根据指令类型更新状态
+        if (isFrameAddrInst(inst)) {
+            handleFrameAddr(tracker, inst);
+        } else if (isLoadFromFI(inst)) {
+            handleLoad(tracker, inst);
+        } else if (isStoreToFI(inst)) {
+            handleStore(tracker, inst);
+        } else {
+            // 处理其他指令对寄存器的定义
+            handleRegisterDef(tracker, inst);
+        }
+    }
+}
 
-        std::cout << "Processing basic block " << bb->getLabel() << " with "
-                  << bb->size() << " instructions" << std::endl;
+// BasicBlockTracker 方法实现
+void SpillCodeOptimizer::BasicBlockTracker::updateRegister(
+    unsigned reg, RegisterState state, unsigned fiId, int pos) {
+    
+    // 清除该寄存器之前的FI关联
+    if (regMap.count(reg)) {
+        auto& oldInfo = regMap[reg];
+        if (oldInfo.fiId != 0) {
+            removeFIRegisterAssociation(oldInfo.fiId, reg, oldInfo.state);
+        }
+    }
+    
+    // 更新寄存器信息
+    regMap[reg] = RegisterInfo(state, fiId, pos);
+    
+    // 更新FI信息 - 支持多个寄存器
+    if (fiId != 0) {
+        addFIRegisterAssociation(fiId, reg, state, pos);
+    }
+}
 
-        for (auto it = bb->begin(); it != bb->end(); ++it) {
-            Instruction* inst = it->get();
-            int frameIndex = -1;
-            unsigned dstReg = 0;
+void SpillCodeOptimizer::BasicBlockTracker::clearRegister(unsigned reg) {
+    if (regMap.count(reg)) {
+        auto& info = regMap[reg];
+        if (info.fiId != 0) {
+            removeFIRegisterAssociation(info.fiId, reg, info.state);
+        }
+        regMap.erase(reg);
+    }
+}
 
-            // 检查是否是frameaddr指令
-            if (isFrameAddrInstruction(inst, frameIndex, dstReg)) {
-                std::cout << "Found frameaddr: reg=" << dstReg
-                          << ", FI=" << frameIndex << std::endl;
+void SpillCodeOptimizer::BasicBlockTracker::addFIRegisterAssociation(
+    unsigned fiId, unsigned reg, RegisterState state, int pos) {
+    
+    auto& fiInfo = fiMap[fiId];
+    
+    if (state == RegisterState::FI_ADDRESS) {
+        fiInfo.addressRegs[reg] = pos;
+    } else if (state == RegisterState::FI_VALUE) {
+        fiInfo.valueRegs[reg] = pos;
+    }
+}
 
-                // 使用frameToRegMap快速查找是否已经有寄存器保存了相同frameIndex的地址
-                auto existingIt = frameToRegMap.find(frameIndex);
-                if (existingIt != frameToRegMap.end()) {
-                    unsigned existingReg = existingIt->second;
-                    std::cout << "Found redundant frameaddr! Replacing reg "
-                              << dstReg << " with existing reg " << existingReg
-                              << std::endl;
+void SpillCodeOptimizer::BasicBlockTracker::removeFIRegisterAssociation(
+    unsigned fiId, unsigned reg, RegisterState state) {
+    
+    if (fiMap.count(fiId)) {
+        auto& fiInfo = fiMap[fiId];
+        if (state == RegisterState::FI_ADDRESS) {
+            fiInfo.addressRegs.erase(reg);
+        } else if (state == RegisterState::FI_VALUE) {
+            fiInfo.valueRegs.erase(reg);
+        }
+    }
+}
 
-                    // 用现有寄存器替换当前寄存器的所有后续使用
-                    replaceIntegerRegisterInBasicBlock(bb.get(), dstReg,
-                                                       existingReg);
+void SpillCodeOptimizer::BasicBlockTracker::clearFIRegister(unsigned fiId, unsigned reg) {
+    if (fiMap.count(fiId)) {
+        auto& info = fiMap[fiId];
+        info.addressRegs.erase(reg);
+        info.valueRegs.erase(reg);
+    }
+}
 
-                    // 标记删除冗余指令
-                    toErase.push_back(it);
-                    continue;
-                } else {
-                    // 如果目标寄存器之前保存了其他frameIndex，先清除旧映射
-                    auto oldFrameIt = regToFrameMap.find(dstReg);
-                    if (oldFrameIt != regToFrameMap.end()) {
-                        int oldFrameIndex = oldFrameIt->second;
-                        frameToRegMap.erase(oldFrameIndex);
-                        std::cout << "Register " << dstReg << " was holding FI("
-                                  << oldFrameIndex << "), clearing old mapping"
-                                  << std::endl;
+bool SpillCodeOptimizer::BasicBlockTracker::canReuseFIAddress(unsigned fiId, unsigned& outReg) {
+    if (fiMap.count(fiId) && !fiMap[fiId].addressRegs.empty()) {
+        // 选择最近定义的有效地址寄存器
+        int latestPos = -1;
+        unsigned bestReg = 0;
+        
+        for (const auto& pair : fiMap[fiId].addressRegs) {
+            unsigned reg = pair.first;
+            int pos = pair.second;
+            
+            // 检查寄存器是否仍然有效（没有被重新定义）
+            if (regMap.count(reg) && 
+                regMap[reg].state == RegisterState::FI_ADDRESS &&
+                regMap[reg].fiId == fiId &&
+                pos > latestPos) {
+                bestReg = reg;
+                latestPos = pos;
+            }
+        }
+        
+        if (bestReg != 0) {
+            outReg = bestReg;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool SpillCodeOptimizer::BasicBlockTracker::canReuseFIValue(unsigned fiId, unsigned& outReg) {
+    if (fiMap.count(fiId) && !fiMap[fiId].valueRegs.empty()) {
+        // 选择最近定义的有效值寄存器
+        int latestPos = -1;
+        unsigned bestReg = 0;
+        
+        for (const auto& pair : fiMap[fiId].valueRegs) {
+            unsigned reg = pair.first;
+            int pos = pair.second;
+            
+            // 检查寄存器是否仍然有效
+            if (regMap.count(reg) && 
+                regMap[reg].state == RegisterState::FI_VALUE &&
+                regMap[reg].fiId == fiId &&
+                pos > latestPos) {
+                bestReg = reg;
+                latestPos = pos;
+            }
+        }
+        
+        if (bestReg != 0) {
+            outReg = bestReg;
+            return true;
+        }
+    }
+    return false;
+}
+
+// 获取FI的所有有效地址寄存器
+std::vector<unsigned> SpillCodeOptimizer::BasicBlockTracker::getFIAddressRegs(unsigned fiId) {
+    std::vector<unsigned> validRegs;
+    if (fiMap.count(fiId)) {
+        for (const auto& pair : fiMap[fiId].addressRegs) {
+            unsigned reg = pair.first;
+            if (regMap.count(reg) && 
+                regMap[reg].state == RegisterState::FI_ADDRESS &&
+                regMap[reg].fiId == fiId) {
+                validRegs.push_back(reg);
+            }
+        }
+    }
+    return validRegs;
+}
+
+// 获取FI的所有有效值寄存器
+std::vector<unsigned> SpillCodeOptimizer::BasicBlockTracker::getFIValueRegs(unsigned fiId) {
+    std::vector<unsigned> validRegs;
+    if (fiMap.count(fiId)) {
+        for (const auto& pair : fiMap[fiId].valueRegs) {
+            unsigned reg = pair.first;
+            if (regMap.count(reg) && 
+                regMap[reg].state == RegisterState::FI_VALUE &&
+                regMap[reg].fiId == fiId) {
+                validRegs.push_back(reg);
+            }
+        }
+    }
+    return validRegs;
+}
+
+// 指令处理函数
+void SpillCodeOptimizer::handleFrameAddr(BasicBlockTracker& tracker, Instruction* inst) {
+    unsigned targetReg = getTargetRegister(inst);
+    unsigned fiId = getFrameIndex(inst);
+    
+    std::cout << "FRAMEADDR: reg " << targetReg << " gets address of FI " << fiId
+              << " at position " << tracker.currentPos << std::endl;
+    
+    tracker.updateRegister(targetReg, RegisterState::FI_ADDRESS, fiId, tracker.currentPos);
+    
+    // 打印该FI现在拥有的所有地址寄存器
+    auto addressRegs = tracker.getFIAddressRegs(fiId);
+    if (addressRegs.size() > 1) {
+        std::cout << "FI " << fiId << " now has " << addressRegs.size() 
+                  << " address registers: ";
+        for (unsigned reg : addressRegs) {
+            std::cout << "r" << reg << " ";
+        }
+        std::cout << std::endl;
+    }
+}
+
+void SpillCodeOptimizer::handleLoad(BasicBlockTracker& tracker, Instruction* inst) {
+    unsigned targetReg = getTargetRegister(inst);
+    
+    // 获取内存操作数，判断是否从FI加载
+    const auto& operands = inst->getOperands();
+    if (operands.size() >= 2 && operands[1]->isMem()) {
+        auto memOp = static_cast<MemoryOperand*>(operands[1].get());
+        if (memOp->getBaseReg() && memOp->getBaseReg()->isReg()) {
+            unsigned baseReg = memOp->getBaseReg()->getRegNum();
+            
+            // 检查基址寄存器是否持有FI地址
+            if (tracker.regMap.count(baseReg) &&
+                tracker.regMap[baseReg].state == RegisterState::FI_ADDRESS) {
+                unsigned fiId = tracker.regMap[baseReg].fiId;
+                
+                std::cout << "LOAD: reg " << targetReg << " gets value from FI " << fiId
+                          << " at position " << tracker.currentPos << std::endl;
+                
+                tracker.updateRegister(targetReg, RegisterState::FI_VALUE, fiId, tracker.currentPos);
+                
+                // 打印该FI现在拥有的所有值寄存器
+                auto valueRegs = tracker.getFIValueRegs(fiId);
+                if (valueRegs.size() > 1) {
+                    std::cout << "FI " << fiId << " now has " << valueRegs.size() 
+                              << " value registers: ";
+                    for (unsigned reg : valueRegs) {
+                        std::cout << "r" << reg << " ";
                     }
+                    std::cout << std::endl;
+                }
+                return;
+            }
+        }
+    }
+    
+    // 如果不是从FI加载，标记为OTHER
+    tracker.updateRegister(targetReg, RegisterState::OTHER, 0, tracker.currentPos);
+}
 
-                    // 建立新的双向映射
-                    frameToRegMap[frameIndex] = dstReg;
-                    regToFrameMap[dstReg] = frameIndex;
-                    std::cout << "Cached frameaddr: FI(" << frameIndex
-                              << ") <-> reg" << dstReg << std::endl;
+void SpillCodeOptimizer::handleStore(BasicBlockTracker& tracker, Instruction* inst) {
+    // Store指令不会更新目标寄存器，但会使FI的值状态失效
+    const auto& operands = inst->getOperands();
+    if (operands.size() >= 2 && operands[1]->isMem()) {
+        auto memOp = static_cast<MemoryOperand*>(operands[1].get());
+        if (memOp->getBaseReg() && memOp->getBaseReg()->isReg()) {
+            unsigned baseReg = memOp->getBaseReg()->getRegNum();
+            
+            // 检查是否存储到FI
+            if (tracker.regMap.count(baseReg) &&
+                tracker.regMap[baseReg].state == RegisterState::FI_ADDRESS) {
+                unsigned fiId = tracker.regMap[baseReg].fiId;
+                
+                std::cout << "STORE: storing to FI " << fiId
+                          << " at position " << tracker.currentPos << std::endl;
+                
+                // 使该FI的所有值寄存器失效（因为内存值已改变）
+                if (tracker.fiMap.count(fiId)) {
+                    auto valueRegs = tracker.getFIValueRegs(fiId);
+                    for (unsigned valueReg : valueRegs) {
+                        std::cout << "Invalidating value register r" << valueReg 
+                                  << " for FI " << fiId << std::endl;
+                        tracker.clearRegister(valueReg);
+                    }
+                }
+            }
+        }
+    }
+}
+
+void SpillCodeOptimizer::handleRegisterDef(BasicBlockTracker& tracker, Instruction* inst) {
+    if (inst->isCopyInstr()) {
+        // 获取源寄存器和目标寄存器
+        unsigned sourceReg = getSourceRegister(inst);
+        unsigned targetReg = getTargetRegister(inst);
+        
+        if (sourceReg != 0 && targetReg != 0) {
+            // 先清除目标寄存器的旧状态
+            tracker.clearRegister(targetReg);
+            
+            // 如果源寄存器有有效的状态信息，将其复制到目标寄存器
+            if (tracker.regMap.count(sourceReg)) {
+                const auto& sourceInfo = tracker.regMap[sourceReg];
+                
+                std::cout << "COPY: reg " << targetReg << " inherits state from reg "
+                          << sourceReg << " (FI " << sourceInfo.fiId << ", state: ";
+                
+                switch (sourceInfo.state) {
+                    case RegisterState::FI_ADDRESS:
+                        std::cout << "FI_ADDRESS)" << std::endl;
+                        tracker.updateRegister(targetReg, RegisterState::FI_ADDRESS,
+                                               sourceInfo.fiId, tracker.currentPos);
+                        break;
+                    case RegisterState::FI_VALUE:
+                        std::cout << "FI_VALUE)" << std::endl;
+                        tracker.updateRegister(targetReg, RegisterState::FI_VALUE,
+                                               sourceInfo.fiId, tracker.currentPos);
+                        break;
+                    case RegisterState::OTHER:
+                        std::cout << "OTHER)" << std::endl;
+                        tracker.updateRegister(targetReg, RegisterState::OTHER,
+                                               0, tracker.currentPos);
+                        break;
+                    case RegisterState::UNKNOWN:
+                        break;
                 }
             } else {
-                // 检查指令是否重新定义了缓存中的寄存器，如果重新定义了就清除缓存
-                auto definedRegs = inst->getDefinedIntegerRegs();
+                // 源寄存器没有跟踪信息，目标寄存器标记为OTHER
+                tracker.updateRegister(targetReg, RegisterState::OTHER, 0, tracker.currentPos);
+            }
+            return; // 提前返回，不执行后面的通用处理逻辑
+        }
+    }
+    
+    // 获取指令定义的所有寄存器
+    auto definedRegs = inst->getDefinedIntegerRegs();
+    auto definedFloatRegs = inst->getDefinedFloatRegs();
+    
+    // 清除所有被定义寄存器的状态
+    for (unsigned reg : definedRegs) {
+        if (reg != 0) { // x0寄存器除外
+            tracker.clearRegister(reg);
+        }
+    }
+    for (unsigned reg : definedFloatRegs) {
+        tracker.clearRegister(reg);
+    }
+}
 
-                for (unsigned reg : definedRegs) {
-                    auto regFrameIt = regToFrameMap.find(reg);
-                    if (regFrameIt != regToFrameMap.end()) {
-                        int frameIndex = regFrameIt->second;
-                        std::cout << "Register " << reg
-                                  << " redefined, invalidating FI("
-                                  << frameIndex << ")" << std::endl;
+// 优化检查和应用
+bool SpillCodeOptimizer::canOptimizeInstruction(Instruction* inst, BasicBlockTracker& tracker) {
+    if (isFrameAddrInst(inst)) {
+        // 检查是否可以复用已有的地址寄存器
+        unsigned fiId = getFrameIndex(inst);
+        unsigned reuseReg;
+        return tracker.canReuseFIAddress(fiId, reuseReg);
+    } else if (isLoadFromFI(inst)) {
+        // 检查是否可以复用已有的值寄存器
+        const auto& operands = inst->getOperands();
+        if (operands.size() >= 2 && operands[1]->isMem()) {
+            auto memOp = static_cast<MemoryOperand*>(operands[1].get());
+            if (memOp->getBaseReg() && memOp->getBaseReg()->isReg()) {
+                unsigned baseReg = memOp->getBaseReg()->getRegNum();
+                if (tracker.regMap.count(baseReg) &&
+                    tracker.regMap[baseReg].state == RegisterState::FI_ADDRESS) {
+                    unsigned fiId = tracker.regMap[baseReg].fiId;
+                    unsigned reuseReg;
+                    return tracker.canReuseFIValue(fiId, reuseReg);
+                }
+            }
+        }
+    }
+    return false;
+}
 
-                        // 同时从两个映射中删除
-                        regToFrameMap.erase(regFrameIt);
-                        frameToRegMap.erase(frameIndex);
+void SpillCodeOptimizer::applyOptimization(Instruction* inst, BasicBlockTracker& tracker) {
+    if (isFrameAddrInst(inst)) {
+        unsigned fiId = getFrameIndex(inst);
+        unsigned reuseReg;
+        if (tracker.canReuseFIAddress(fiId, reuseReg)) {
+            unsigned targetReg = getTargetRegister(inst);
+            
+            auto addressRegs = tracker.getFIAddressRegs(fiId);
+            std::cout << "OPTIMIZATION: Reusing address register " << reuseReg
+                      << " for FI " << fiId << " instead of reg " << targetReg 
+                      << " (available: " << addressRegs.size() << " address regs)" << std::endl;
+            
+            // 将FRAMEADDR指令替换为MV指令
+            replaceWithMoveInstruction(inst, targetReg, reuseReg, false);
+        }
+    } else if (isLoadFromFI(inst)) {
+        const auto& operands = inst->getOperands();
+        if (operands.size() >= 2 && operands[1]->isMem()) {
+            auto memOp = static_cast<MemoryOperand*>(operands[1].get());
+            if (memOp->getBaseReg() && memOp->getBaseReg()->isReg()) {
+                unsigned baseReg = memOp->getBaseReg()->getRegNum();
+                if (tracker.regMap.count(baseReg) &&
+                    tracker.regMap[baseReg].state == RegisterState::FI_ADDRESS) {
+                    unsigned fiId = tracker.regMap[baseReg].fiId;
+                    unsigned reuseReg;
+                    if (tracker.canReuseFIValue(fiId, reuseReg)) {
+                        unsigned targetReg = getTargetRegister(inst);
+                        
+                        auto valueRegs = tracker.getFIValueRegs(fiId);
+                        std::cout << "OPTIMIZATION: Reusing value register " << reuseReg
+                                  << " for FI " << fiId << " instead of loading to reg " << targetReg
+                                  << " (available: " << valueRegs.size() << " value regs)" << std::endl;
+                        
+                        // 判断是整数还是浮点数加载，选择MV或FMV
+                        bool isFloatLoad = (inst->getOpcode() == Opcode::FLW);
+                        replaceWithMoveInstruction(inst, targetReg, reuseReg, isFloatLoad);
                     }
                 }
             }
         }
-
-        // 删除标记的冗余指令
-        std::cout << "Erasing " << toErase.size()
-                  << " redundant frameaddr instructions" << std::endl;
-        for (auto it : toErase) {
-            bb->erase(it);
-        }
     }
 }
 
-bool SpillCodeOptimizer::isFrameAddrInstruction(Instruction* inst,
-                                                int& frameIndex,
-                                                unsigned& dstReg) {
-    if (inst->getOpcode() != Opcode::FRAMEADDR) {
-        return false;
+// 替换为移动指令
+void SpillCodeOptimizer::replaceWithMoveInstruction(Instruction* inst,
+                                                   unsigned targetReg,
+                                                   unsigned sourceReg,
+                                                   bool isFloat) {
+    // 清除原有操作数
+    inst->clearOperands();
+    
+    // 设置新的操作码
+    if (isFloat) {
+        inst->setOpcode(Opcode::FMOV_S);  // 浮点移动指令
+    } else {
+        inst->setOpcode(Opcode::MV);     // 整数移动指令
     }
+    
+    auto T = isFloat ? RegisterType::Float : RegisterType::Integer;
+    
+    // 添加目标寄存器操作数
+    auto targetOperand = std::make_unique<RegisterOperand>(targetReg, false, T);
+    inst->addOperand(std::move(targetOperand));
+    
+    // 添加源寄存器操作数
+    auto sourceOperand = std::make_unique<RegisterOperand>(sourceReg, false, T);
+    inst->addOperand(std::move(sourceOperand));
+    
+    std::cout << "Replaced instruction with " << (isFloat ? "FMV" : "MV")
+              << " r" << targetReg << ", r" << sourceReg << std::endl;
+}
 
+// 辅助函数实现
+bool SpillCodeOptimizer::isFrameAddrInst(Instruction* inst) {
+    return inst->getOpcode() == Opcode::FRAMEADDR;
+}
+
+bool SpillCodeOptimizer::isLoadFromFI(Instruction* inst) {
+    return inst->getOpcode() == Opcode::LD || inst->getOpcode() == Opcode::FLW;
+}
+
+bool SpillCodeOptimizer::isStoreToFI(Instruction* inst) {
+    return inst->getOpcode() == Opcode::SD || inst->getOpcode() == Opcode::FSW;
+}
+
+unsigned SpillCodeOptimizer::getFrameIndex(Instruction* inst) {
     const auto& operands = inst->getOperands();
-    if (operands.size() < 2) {
-        return false;
+    if (operands.size() >= 2 && operands[1]->isFrameIndex()) {
+        return static_cast<FrameIndexOperand*>(operands[1].get())->getIndex();
     }
-
-    // 第一个操作数应该是目标寄存器
-    if (!operands[0]->isReg()) {
-        return false;
-    }
-
-    // 第二个操作数应该是FrameIndex
-    if (!operands[1]->isFrameIndex()) {
-        return false;
-    }
-
-    dstReg = static_cast<RegisterOperand*>(operands[0].get())->getRegNum();
-    frameIndex = static_cast<FrameIndexOperand*>(operands[1].get())->getIndex();
-    return true;
+    return 0;
 }
 
-void SpillCodeOptimizer::replaceIntegerRegisterInBasicBlock(BasicBlock* bb,
-                                                            unsigned oldReg,
-                                                            unsigned newReg) {
-    if (oldReg == newReg) {
-        return;
+unsigned SpillCodeOptimizer::getTargetRegister(Instruction* inst) {
+    const auto& operands = inst->getOperands();
+    if (!operands.empty() && operands[0]->isReg()) {
+        return operands[0]->getRegNum();
     }
-    std::cout << "Replacing register " << oldReg << " with " << newReg
-              << " in basic block" << std::endl;
-
-    for (auto& inst : *bb) {
-        const auto& operands = inst->getOperands();
-        for (const auto& operand : operands) {
-            if (operand->isReg()) {
-                RegisterOperand* regOp =
-                    static_cast<RegisterOperand*>(operand.get());
-                if (regOp->getRegNum() == oldReg &&
-                    regOp->isIntegerRegister()) {
-                    std::cout << "  Replacing register operand " << oldReg
-                              << " -> " << newReg << std::endl;
-                    regOp->setRegNum(newReg);
-                }
-            } else if (operand->isMem()) {
-                MemoryOperand* memOp =
-                    static_cast<MemoryOperand*>(operand.get());
-                if (memOp->getBaseReg() &&
-                    memOp->getBaseReg()->getRegNum() == oldReg &&
-                    memOp->getBaseReg()->isIntegerRegister()) {
-                    std::cout << "  Replacing memory base register " << oldReg
-                              << " -> " << newReg << std::endl;
-                    memOp->getBaseReg()->setRegNum(newReg);
-                }
-            }
-        }
-    }
+    return 0;
 }
 
-}  // namespace riscv64
+unsigned SpillCodeOptimizer::getSourceRegister(Instruction* inst) {
+    const auto& operands = inst->getOperands();
+    if (operands.size() >= 2 && operands[1]->isReg()) {
+        return operands[1]->getRegNum();
+    }
+    return 0;
+}
+
+} // namespace riscv64

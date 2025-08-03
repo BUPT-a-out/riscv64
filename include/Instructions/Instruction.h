@@ -217,8 +217,11 @@ class Instruction {
     void addOperand(std::unique_ptr<MachineOperand> operand) {
         operands.push_back(std::move(operand));
     }
+    void clearOperands() { operands.clear(); }
 
     Opcode getOpcode() const { return opcode; }
+    void setOpcode(Opcode new_opcode) { opcode = new_opcode; }
+
     const std::vector<std::unique_ptr<MachineOperand>>& getOperands() const {
         return operands;
     }
