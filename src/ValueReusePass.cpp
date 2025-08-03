@@ -1,6 +1,7 @@
 #include "ValueReusePass.h"
 
 #include <algorithm>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -20,9 +21,11 @@ bool ValueReusePass::runOnFunction(Function* riscv_function) {
     buildImmediateMap(riscv_function);
 
     // Apply optimizations - process each basic block
+    // Use a global liveness set that persists across blocks based on domination
+    std::unordered_set<unsigned> globalLiveRegs;
     bool modified = false;
     for (auto& riscv_bb : *riscv_function) {
-        if (processBasicBlock(riscv_bb.get())) {
+        if (processBasicBlockGlobal(riscv_bb.get(), globalLiveRegs)) {
             modified = true;
         }
     }
@@ -122,20 +125,24 @@ void ValueReusePass::buildImmediateMap(Function* riscv_function) {
 }
 
 bool ValueReusePass::processBasicBlock(BasicBlock* riscv_bb) {
+    std::unordered_set<unsigned> localLiveRegs;
+    return processBasicBlockGlobal(riscv_bb, localLiveRegs);
+}
+
+bool ValueReusePass::processBasicBlockGlobal(
+    BasicBlock* riscv_bb, std::unordered_set<unsigned>& globalLiveRegs) {
     if (riscv_bb == nullptr) {
         return false;
     }
 
-    std::cout << "  Processing basic block" << std::endl;
+    std::cout << "  Processing basic block: " << riscv_bb->getLabel()
+              << std::endl;
 
     bool modified = false;
     std::vector<BasicBlock::iterator> toErase;
 
-    // Track register liveness within this basic block
-    std::unordered_set<unsigned> liveRegs;
-
     for (auto it = riscv_bb->begin(); it != riscv_bb->end(); ++it) {
-        if (processInstruction(it->get(), liveRegs)) {
+        if (processInstruction(it->get(), globalLiveRegs)) {
             // Mark for potential removal if it's redundant
             if (shouldRemoveInstruction(it->get())) {
                 toErase.push_back(it);
@@ -144,11 +151,27 @@ bool ValueReusePass::processBasicBlock(BasicBlock* riscv_bb) {
         }
     }
 
-    // Remove optimized instructions
+    // Remove optimized instructions marked by processInstruction
     for (auto iter : toErase) {
         std::cout << "    Removing redundant instruction" << std::endl;
         riscv_bb->erase(iter);
-        stats_.loadsEliminated++;
+    }
+
+    // Remove instructions marked by optimization passes
+    if (!instructionsToRemove_.empty()) {
+        std::cout << "    Removing " << instructionsToRemove_.size()
+                  << " optimized memory load instructions" << std::endl;
+
+        // Remove in reverse order to maintain iterator validity
+        for (auto inst : instructionsToRemove_) {
+            for (auto it = riscv_bb->begin(); it != riscv_bb->end(); ++it) {
+                if (it->get() == inst) {
+                    riscv_bb->erase(it);
+                    break;
+                }
+            }
+        }
+        instructionsToRemove_.clear();
     }
 
     return modified;
@@ -256,18 +279,106 @@ bool ValueReusePass::optimizeMemoryLoad(
         return false;
     }
 
-    // For now, just track that we analyzed a memory load
-    // In a full implementation, we would:
-    // 1. Track memory locations and their loaded values
-    // 2. Check for redundant loads from the same location
-    // 3. Optimize using available registers
+    // Parse memory operand to get base register and offset
+    auto* memory_operand = dynamic_cast<MemoryOperand*>(operands[1].get());
+    if (memory_operand == nullptr) {
+        // Not a memory operand, can't optimize
+        liveRegs.insert(dest_reg->getRegNum());
+        return false;
+    }
 
-    std::cout << "    Found memory load into register " << dest_reg->getRegNum()
-              << std::endl;
+    unsigned base_reg = memory_operand->getBaseReg()->getRegNum();
+    int64_t offset = memory_operand->getOffset()->getValue();
+
+    // Find the corresponding LA instruction that loaded the address
+    Instruction* la_inst = findCorrespondingLA(inst, inst->getParent());
+    if (la_inst == nullptr) {
+        // No corresponding LA instruction found, can't optimize
+        std::cout << "    Found memory load from address (base=" << base_reg
+                  << ", offset=" << offset << ") into register "
+                  << dest_reg->getRegNum()
+                  << " - no corresponding LA instruction" << std::endl;
+        liveRegs.insert(dest_reg->getRegNum());
+        return false;
+    }
+
+    // Extract global variable name from LA instruction
+    std::string global_var_name = extractGlobalVarFromLA(la_inst);
+    if (global_var_name.empty()) {
+        // Not a global variable LA instruction, can't optimize
+        std::cout << "    Found memory load from address (base=" << base_reg
+                  << ", offset=" << offset << ") into register "
+                  << dest_reg->getRegNum() << " - not a global variable"
+                  << std::endl;
+        liveRegs.insert(dest_reg->getRegNum());
+        return false;
+    }
+
+    std::cout << "    Found global variable load: " << global_var_name
+              << " into register " << dest_reg->getRegNum() << std::endl;
+
+    // Check if this global variable has been loaded before
+    auto existing_reg_iter = globalVarToFirstReg_.find(global_var_name);
+    if (existing_reg_iter != globalVarToFirstReg_.end()) {
+        unsigned existing_reg = existing_reg_iter->second;
+
+        // Check if the existing register is still live
+        if (liveRegs.count(existing_reg) > 0) {
+            // We can reuse the value from the existing register!
+            std::cout << "    OPTIMIZING: Global variable " << global_var_name
+                      << " already loaded in register " << existing_reg
+                      << ", can eliminate load into register "
+                      << dest_reg->getRegNum() << std::endl;
+
+            // Generate MOV instruction to copy the existing value to the target
+            // register
+            auto move_inst =
+                std::make_unique<Instruction>(Opcode::MV, inst->getParent());
+            move_inst->addOperand(std::make_unique<RegisterOperand>(
+                dest_reg->getRegNum(), dest_reg->isVirtual(),
+                dest_reg->getRegisterType()));
+            move_inst->addOperand(std::make_unique<RegisterOperand>(
+                existing_reg, true,
+                dest_reg->getRegisterType()));  // Assume source is virtual
+
+            // Insert MOV instruction before the current LW instruction
+            auto bb = inst->getParent();
+            auto it =
+                std::find_if(bb->begin(), bb->end(),
+                             [inst](const std::unique_ptr<Instruction>& instr) {
+                                 return instr.get() == inst;
+                             });
+            if (it != bb->end()) {
+                bb->insert(it, std::move(move_inst));
+                std::cout << "    Generated MOV instruction from register "
+                          << existing_reg << " to register "
+                          << dest_reg->getRegNum() << std::endl;
+            }
+
+            // Mark both LA and LW instructions for removal
+            instructionsToRemove_.push_back(la_inst);
+            instructionsToRemove_.push_back(inst);
+            stats_.loadsEliminated++;
+            stats_.virtualRegsReused++;
+
+            liveRegs.insert(dest_reg->getRegNum());
+            return true;
+        } else {
+            // The existing register is no longer live, update the mapping
+            std::cout << "    Previous register " << existing_reg
+                      << " no longer live, updating mapping" << std::endl;
+            globalVarToFirstReg_[global_var_name] = dest_reg->getRegNum();
+        }
+    } else {
+        // First time loading this global variable
+        std::cout << "    First load of global variable " << global_var_name
+                  << ", recording in register " << dest_reg->getRegNum()
+                  << std::endl;
+        globalVarToFirstReg_[global_var_name] = dest_reg->getRegNum();
+    }
 
     liveRegs.insert(dest_reg->getRegNum());
     stats_.optimizationOpportunities++;
-
     return false;
 }
 
@@ -309,6 +420,81 @@ void ValueReusePass::resetState() {
     stats_.virtualRegsReused = 0;
 
     immediateToFirstReg_.clear();
+    globalVarToFirstReg_.clear();
+    laInstToGlobalVar_.clear();
+    instructionsToRemove_.clear();
+}
+
+std::string ValueReusePass::extractGlobalVarFromLA(Instruction* inst) {
+    if (inst == nullptr || inst->getOpcode() != Opcode::LA) {
+        return "";
+    }
+
+    const auto& operands = inst->getOperands();
+    if (operands.size() < 2) {
+        return "";
+    }
+
+    // Second operand should be a LabelOperand containing the global variable
+    // name
+    auto* label_operand = dynamic_cast<LabelOperand*>(operands[1].get());
+    if (label_operand == nullptr) {
+        return "";
+    }
+
+    return label_operand->getLabelName();
+}
+
+Instruction* ValueReusePass::findCorrespondingLA(Instruction* lw_inst,
+                                                 BasicBlock* bb) {
+    if (lw_inst == nullptr || bb == nullptr) {
+        return nullptr;
+    }
+
+    // Get the base register from the LW instruction
+    const auto& operands = lw_inst->getOperands();
+    if (operands.size() < 2) {
+        return nullptr;
+    }
+
+    auto* memory_operand = dynamic_cast<MemoryOperand*>(operands[1].get());
+    if (memory_operand == nullptr) {
+        return nullptr;
+    }
+
+    unsigned base_reg = memory_operand->getBaseReg()->getRegNum();
+
+    // Search backwards in the basic block for an LA instruction that loads into
+    // base_reg
+    auto it = std::find_if(bb->begin(), bb->end(),
+                           [lw_inst](const std::unique_ptr<Instruction>& inst) {
+                               return inst.get() == lw_inst;
+                           });
+
+    if (it == bb->end()) {
+        return nullptr;
+    }
+
+    // Search backwards from the LW instruction
+    for (auto rev_it = std::make_reverse_iterator(it); rev_it != bb->rend();
+         ++rev_it) {
+        Instruction* candidate = rev_it->get();
+        if (candidate->getOpcode() == Opcode::LA) {
+            const auto& la_operands = candidate->getOperands();
+            if (la_operands.size() >= 2) {
+                auto* dest_reg =
+                    dynamic_cast<RegisterOperand*>(la_operands[0].get());
+                auto* label_operand =
+                    dynamic_cast<LabelOperand*>(la_operands[1].get());
+                if (dest_reg != nullptr && label_operand != nullptr &&
+                    dest_reg->getRegNum() == base_reg) {
+                    return candidate;
+                }
+            }
+        }
+    }
+
+    return nullptr;
 }
 
 }  // namespace riscv64

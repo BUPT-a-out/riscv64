@@ -44,6 +44,17 @@ class ValueReusePass {
     // Mapping from immediate values to their first register
     std::unordered_map<int64_t, unsigned> immediateToFirstReg_;
 
+    // Mapping from global variable names to their first loaded register
+    // Key: global variable name (e.g., "g_val.26")
+    // Value: register number that holds the loaded value
+    std::unordered_map<std::string, unsigned> globalVarToFirstReg_;
+
+    // Mapping from instruction to global variable name (for LA instructions)
+    std::unordered_map<Instruction*, std::string> laInstToGlobalVar_;
+
+    // Track instructions to be removed after optimization
+    std::vector<Instruction*> instructionsToRemove_;
+
     /**
      * @brief Build mapping of immediate values to registers
      * @param riscv_function - Function to analyze
@@ -56,6 +67,15 @@ class ValueReusePass {
      * @return True if block was modified
      */
     bool processBasicBlock(BasicBlock* riscv_bb);
+
+    /**
+     * @brief Process a single RISCV64 basic block with global liveness tracking
+     * @param riscv_bb - RISCV64 basic block to analyze
+     * @param globalLiveRegs - Global set of live registers across blocks
+     * @return True if block was modified
+     */
+    bool processBasicBlockGlobal(BasicBlock* riscv_bb,
+                                 std::unordered_set<unsigned>& globalLiveRegs);
 
     /**
      * @brief Process a single RISCV64 instruction
@@ -113,6 +133,21 @@ class ValueReusePass {
      * @brief Reset state for a new function
      */
     void resetState();
+
+    /**
+     * @brief Extract global variable name from LA instruction
+     * @param inst - The LA instruction
+     * @return Global variable name, or empty string if not a global var LA
+     */
+    std::string extractGlobalVarFromLA(Instruction* inst);
+
+    /**
+     * @brief Find the LA instruction that loads address for this LW instruction
+     * @param lw_inst - The LW instruction
+     * @param bb - Basic block containing the instruction
+     * @return Pointer to the LA instruction, or nullptr if not found
+     */
+    Instruction* findCorrespondingLA(Instruction* lw_inst, BasicBlock* bb);
 };
 
 }  // namespace riscv64
