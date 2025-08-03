@@ -20,9 +20,10 @@ class RISCV64Target {
     // 三阶段编译流程
     Module instructionSelectionPass(
         const midend::Module& module);  // 阶段1：指令选择
-    Module& valueReusePass(
-        riscv64::Module& riscv_module,
-        const midend::Module& midend_module);  // 阶段0.5：值重用优化
+    Module& valueReusePass(riscv64::Module& riscv_module,
+                           const midend::Module& midend_module,
+                           const midend::AnalysisManager* analysisManager =
+                               nullptr);  // 阶段0.5：值重用优化
     Module& initialFrameIndexPass(
         riscv64::Module& module);  // 阶段1.5：初始Frame Index
     Module& basicBlockReorderingPass(

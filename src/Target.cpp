@@ -14,7 +14,6 @@ namespace riscv64 {
 std::string RISCV64Target::compileToAssembly(
     const midend::Module& module,
     const midend::AnalysisManager* analysisManager) {
-    (void)analysisManager;  // Suppress unused parameter warning
     std::vector<std::string> assembly;
 
     // 添加汇编头部
@@ -24,8 +23,13 @@ std::string RISCV64Target::compileToAssembly(
     // 执行完整的三阶段编译流程
     auto riscv_module = instructionSelectionPass(module);
 
-    // 在寄存器分配之前运行Value Reuse优化
-    valueReusePass(riscv_module, module);
+    // 在寄存器分配之前运行Value Reuse优化，现在传递AnalysisManager
+    if (analysisManager != nullptr) {
+        valueReusePass(riscv_module, module, analysisManager);
+    } else {
+        std::cout << "No AnalysisManager provided for ValueReusePass, skipped."
+                  << std::endl;
+    }
 
     initialFrameIndexPass(riscv_module);  // 第一阶段
     basicBlockReorderingPass(riscv_module);  // 第1.7阶段：基本块重排优化
@@ -35,25 +39,45 @@ std::string RISCV64Target::compileToAssembly(
     return riscv_module.toString();
 }
 
-Module& RISCV64Target::valueReusePass(riscv64::Module& riscv_module,
-                                      const midend::Module& midend_module) {
-    (void)midend_module;  // Suppress unused parameter warning for now
-    std::cout << "\n=== Phase 0.5: Value Reuse Optimization ===" << std::endl;
+Module& RISCV64Target::valueReusePass(
+    riscv64::Module& riscv_module, const midend::Module& midend_module,
+    const midend::AnalysisManager* analysisManager) {
+    std::cout << "\n=== Phase 0.5: Value Reuse Optimization (Dominator Tree "
+                 "Based) ==="
+              << std::endl;
 
     ValueReusePass pass;
 
-    // Process each RISCV64 function
+    // Process each RISCV64 function with its corresponding midend function
     for (auto& riscv_function : riscv_module) {
         if (!riscv_function->empty()) {
-            std::cout << "Running ValueReusePass on function: "
-                      << riscv_function->getName() << std::endl;
+            // Find corresponding midend function by name
+            const midend::Function* midend_function = nullptr;
+            for (const auto& midend_func : midend_module) {
+                if (midend_func->getName() == riscv_function->getName()) {
+                    midend_function = midend_func;
+                    break;
+                }
+            }
 
-            bool optimized = pass.runOnFunction(riscv_function.get());
-            if (optimized) {
-                const auto& stats = pass.getStatistics();
-                std::cout << "  Optimization results: " << stats.loadsEliminated
-                          << " loads eliminated, " << stats.virtualRegsReused
-                          << " registers reused" << std::endl;
+            if (midend_function != nullptr) {
+                std::cout << "Running ValueReusePass on function: "
+                          << riscv_function->getName()
+                          << " (midend: " << midend_function->getName() << ")"
+                          << std::endl;
+
+                bool optimized = pass.runOnFunction(
+                    riscv_function.get(), midend_function, analysisManager);
+                if (optimized) {
+                    const auto& stats = pass.getStatistics();
+                    std::cout
+                        << "  Optimization results: " << stats.loadsEliminated
+                        << " loads eliminated, " << stats.virtualRegsReused
+                        << " registers reused" << std::endl;
+                }
+            } else {
+                std::cout << "No corresponding midend function found for: "
+                          << riscv_function->getName() << std::endl;
             }
         }
     }
