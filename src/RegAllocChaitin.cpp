@@ -8,8 +8,8 @@
 #include <set>
 #include <stack>
 
-#include "SpillCodeOptimizer.h"
 #include "StackFrameManager.h"
+#include "SpillCodeOptimizer.h"
 namespace riscv64 {
 
 /// Entry
@@ -49,11 +49,12 @@ void RegAllocChaitin::allocateRegisters() {
     removeCoalescedCopies();
 
     rewriteInstructions();
-    removeRebundantCopies();
 
     if (!assigningFloat) {
-        // SpillCodeOptimizer::optimizeSpillCode(function);
+        SpillCodeOptimizer::optimizeSpillCode(function);
     }
+
+    removeRebundantCopies();
 
     printAllocationResult();
     printCoalesceResult();

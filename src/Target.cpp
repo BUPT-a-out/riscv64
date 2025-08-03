@@ -140,6 +140,8 @@ Module& RISCV64Target::registerAllocationPass(riscv64::Module& module) {
         std::cout << "RegAlloc for int" << std::endl;
         RegAllocChaitin allocatorInt(function.get(), false);
         allocatorInt.run();
+
+        std::cout << function->toString() << std::endl;
     }
 
     std::cout << module.toString() << std::endl;

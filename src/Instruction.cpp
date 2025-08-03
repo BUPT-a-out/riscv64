@@ -735,6 +735,28 @@ std::vector<unsigned> Instruction::getDefinedIntegerRegs() const {
             break;
         }
 
+        // CALL指令定义所有caller-saved整数寄存器
+        case CALL: {
+            // ra (x1)
+            // definedRegs.push_back(1);
+
+            // t0-t2 (x5-x7)
+            for (unsigned i = 5; i <= 7; ++i) {
+                definedRegs.push_back(i);
+            }
+
+            // a0-a7 (x10-x17)
+            for (unsigned i = 10; i <= 17; ++i) {
+                definedRegs.push_back(i);
+            }
+
+            // t3-t6 (x28-x31)
+            for (unsigned i = 28; i <= 31; ++i) {
+                definedRegs.push_back(i);
+            }
+            break;
+        }
+
         // 存储指令不定义寄存器
         case SD:
         case SW:
@@ -904,6 +926,24 @@ std::vector<unsigned> Instruction::getDefinedFloatRegs() const {
         // 浮点到整数移动指令不定义浮点寄存器
         case FMV_X_W:
         case FMV_X_D: {
+            break;
+        }
+
+        case CALL: {
+            // ft0-ft7 (f0-f7) -> 编号32-39
+            for (unsigned i = 32; i <= 39; ++i) {
+                definedRegs.push_back(i);
+            }
+
+            // fa0-fa7 (f10-f17) -> 编号42-49
+            for (unsigned i = 42; i <= 49; ++i) {
+                definedRegs.push_back(i);
+            }
+
+            // ft8-ft11 (f28-f31) -> 编号60-63
+            for (unsigned i = 60; i <= 63; ++i) {
+                definedRegs.push_back(i);
+            }
             break;
         }
 
