@@ -1,5 +1,6 @@
 #include "Target.h"
 
+#include "BasicBlockReordering.h"
 #include "CodeGen.h"
 #include "FrameIndexElimination.h"
 #include "FrameIndexPass.h"
@@ -18,7 +19,8 @@ std::string RISCV64Target::compileToAssembly(const midend::Module& module) {
 
     // 执行完整的三阶段编译流程
     auto riscv_module = instructionSelectionPass(module);
-    initialFrameIndexPass(riscv_module);      // 第一阶段
+    initialFrameIndexPass(riscv_module);  // 第一阶段
+    basicBlockReorderingPass(riscv_module);  // 第1.7阶段：基本块重排优化
     registerAllocationPass(riscv_module);     // 第二阶段
     frameIndexEliminationPass(riscv_module);  // 第三阶段
 
@@ -62,6 +64,29 @@ Module& RISCV64Target::initialFrameIndexPass(riscv64::Module& module) {
         }
     }
 
+    std::cout << module.toString() << std::endl;
+
+    return module;
+}
+
+Module& RISCV64Target::basicBlockReorderingPass(riscv64::Module& module) {
+    std::cout << "\n=== Phase 1.7: Basic Block Reordering ===" << std::endl;
+
+    for (auto& function : module) {
+        if (function->empty()) {
+            std::cout << "Skipping empty function: " << function->getName()
+                      << std::endl;
+            continue;
+        }
+
+        std::cout << "Processing function: " << function->getName()
+                  << std::endl;
+
+        BasicBlockReordering reordering(function.get());
+        reordering.run();
+    }
+
+    std::cout << "=== Basic Block Reordering Completed ===" << std::endl;
     std::cout << module.toString() << std::endl;
 
     return module;

@@ -4909,7 +4909,7 @@ void Visitor::visit(const midend::GlobalVariable* global_var,
                         using T = std::decay_t<decltype(value)>;
                         if constexpr (std::is_same_v<T, std::vector<int32_t>>) {
                             std::cout << "Non-zero int array initializer for "
-                                      << name << " with " << value.size()
+                                      << name << " with " << value.size()  
                                       << " elements: ";
                             for (size_t i = 0;
                                  i < std::min(value.size(), size_t(10)); ++i) {
