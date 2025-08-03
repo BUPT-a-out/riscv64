@@ -290,48 +290,35 @@ bool ValueReusePass::optimizeMemoryLoad(
     unsigned base_reg = memory_operand->getBaseReg()->getRegNum();
     int64_t offset = memory_operand->getOffset()->getValue();
 
-    // Find the corresponding LA instruction that loaded the address
-    Instruction* la_inst = findCorrespondingLA(inst, inst->getParent());
-    if (la_inst == nullptr) {
-        // No corresponding LA instruction found, can't optimize
+    // Create canonical memory address key for this load
+    std::string memory_key = createCanonicalMemoryKey(inst, inst->getParent());
+    if (memory_key.empty()) {
+        // Unable to create canonical key, can't optimize
         std::cout << "    Found memory load from address (base=" << base_reg
                   << ", offset=" << offset << ") into register "
                   << dest_reg->getRegNum()
-                  << " - no corresponding LA instruction" << std::endl;
+                  << " - unable to create canonical memory key" << std::endl;
         liveRegs.insert(dest_reg->getRegNum());
         return false;
     }
 
-    // Extract global variable name from LA instruction
-    std::string global_var_name = extractGlobalVarFromLA(la_inst);
-    if (global_var_name.empty()) {
-        // Not a global variable LA instruction, can't optimize
-        std::cout << "    Found memory load from address (base=" << base_reg
-                  << ", offset=" << offset << ") into register "
-                  << dest_reg->getRegNum() << " - not a global variable"
-                  << std::endl;
-        liveRegs.insert(dest_reg->getRegNum());
-        return false;
-    }
-
-    std::cout << "    Found global variable load: " << global_var_name
+    std::cout << "    Found memory load: " << memory_key 
               << " into register " << dest_reg->getRegNum() << std::endl;
 
-    // Check if this global variable has been loaded before
-    auto existing_reg_iter = globalVarToFirstReg_.find(global_var_name);
-    if (existing_reg_iter != globalVarToFirstReg_.end()) {
+    // Check if this memory location has been loaded before
+    auto existing_reg_iter = memoryToFirstReg_.find(memory_key);
+    if (existing_reg_iter != memoryToFirstReg_.end()) {
         unsigned existing_reg = existing_reg_iter->second;
 
         // Check if the existing register is still live
         if (liveRegs.count(existing_reg) > 0) {
             // We can reuse the value from the existing register!
-            std::cout << "    OPTIMIZING: Global variable " << global_var_name
+            std::cout << "    OPTIMIZING: Memory location " << memory_key
                       << " already loaded in register " << existing_reg
                       << ", can eliminate load into register "
                       << dest_reg->getRegNum() << std::endl;
 
-            // Generate MOV instruction to copy the existing value to the target
-            // register
+            // Generate MOV instruction to copy the existing value to the target register
             auto move_inst =
                 std::make_unique<Instruction>(Opcode::MV, inst->getParent());
             move_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -355,8 +342,18 @@ bool ValueReusePass::optimizeMemoryLoad(
                           << dest_reg->getRegNum() << std::endl;
             }
 
-            // Mark both LA and LW instructions for removal
-            instructionsToRemove_.push_back(la_inst);
+            // Mark address generation and load instructions for removal
+            if (memory_key.substr(0, 7) == "global:") {
+                Instruction* la_inst = findCorrespondingLA(inst, bb);
+                if (la_inst) {
+                    instructionsToRemove_.push_back(la_inst);
+                }
+            } else if (memory_key.substr(0, 6) == "frame:") {
+                Instruction* frameaddr_inst = findCorrespondingFrameAddr(inst, bb);
+                if (frameaddr_inst) {
+                    instructionsToRemove_.push_back(frameaddr_inst);
+                }
+            }
             instructionsToRemove_.push_back(inst);
             stats_.loadsEliminated++;
             stats_.virtualRegsReused++;
@@ -367,14 +364,14 @@ bool ValueReusePass::optimizeMemoryLoad(
             // The existing register is no longer live, update the mapping
             std::cout << "    Previous register " << existing_reg
                       << " no longer live, updating mapping" << std::endl;
-            globalVarToFirstReg_[global_var_name] = dest_reg->getRegNum();
+            memoryToFirstReg_[memory_key] = dest_reg->getRegNum();
         }
     } else {
-        // First time loading this global variable
-        std::cout << "    First load of global variable " << global_var_name
+        // First time loading from this memory location
+        std::cout << "    First load of memory location " << memory_key
                   << ", recording in register " << dest_reg->getRegNum()
                   << std::endl;
-        globalVarToFirstReg_[global_var_name] = dest_reg->getRegNum();
+        memoryToFirstReg_[memory_key] = dest_reg->getRegNum();
     }
 
     liveRegs.insert(dest_reg->getRegNum());
@@ -420,8 +417,7 @@ void ValueReusePass::resetState() {
     stats_.virtualRegsReused = 0;
 
     immediateToFirstReg_.clear();
-    globalVarToFirstReg_.clear();
-    laInstToGlobalVar_.clear();
+    memoryToFirstReg_.clear();
     instructionsToRemove_.clear();
 }
 
@@ -494,6 +490,101 @@ Instruction* ValueReusePass::findCorrespondingLA(Instruction* lw_inst,
         }
     }
 
+    return nullptr;
+}
+
+std::string ValueReusePass::createCanonicalMemoryKey(Instruction* lw_inst, BasicBlock* bb) {
+    if (!lw_inst || !bb) {
+        return "";
+    }
+    
+    const auto& operands = lw_inst->getOperands();
+    if (operands.size() < 2) {
+        return "";
+    }
+    
+    auto* memory_operand = dynamic_cast<MemoryOperand*>(operands[1].get());
+    if (!memory_operand) {
+        return "";
+    }
+    
+    unsigned base_reg = memory_operand->getBaseReg()->getRegNum();
+    int64_t offset = memory_operand->getOffset()->getValue();
+    
+    // Try to find corresponding address generation instruction
+    
+    // First, check for global variable access (LA instruction)
+    Instruction* la_inst = findCorrespondingLA(lw_inst, bb);
+    if (la_inst) {
+        std::string global_var_name = extractGlobalVarFromLA(la_inst);
+        if (!global_var_name.empty()) {
+            return "global:" + global_var_name + ":offset" + std::to_string(offset);
+        }
+    }
+    
+    // Second, check for local variable access (FRAMEADDR instruction)
+    Instruction* frameaddr_inst = findCorrespondingFrameAddr(lw_inst, bb);
+    if (frameaddr_inst) {
+        // Extract frame index from FRAMEADDR instruction
+        const auto& frameaddr_operands = frameaddr_inst->getOperands();
+        if (frameaddr_operands.size() >= 2) {
+            auto* frame_index_operand = dynamic_cast<FrameIndexOperand*>(frameaddr_operands[1].get());
+            if (frame_index_operand) {
+                int frame_index = frame_index_operand->getIndex();
+                return "frame:FI#" + std::to_string(frame_index) + ":offset" + std::to_string(offset);
+            }
+        }
+    }
+    
+    // Unable to create canonical key
+    return "";
+}
+
+Instruction* ValueReusePass::findCorrespondingFrameAddr(Instruction* lw_inst, BasicBlock* bb) {
+    if (!lw_inst || !bb) {
+        return nullptr;
+    }
+    
+    // Get the base register from the LW instruction
+    const auto& operands = lw_inst->getOperands();
+    if (operands.size() < 2) {
+        return nullptr;
+    }
+    
+    auto* memory_operand = dynamic_cast<MemoryOperand*>(operands[1].get());
+    if (!memory_operand) {
+        return nullptr;
+    }
+    
+    unsigned base_reg = memory_operand->getBaseReg()->getRegNum();
+    
+    // Search backwards in the basic block for a FRAMEADDR instruction that loads into base_reg
+    auto it = std::find_if(bb->begin(), bb->end(), 
+        [lw_inst](const std::unique_ptr<Instruction>& inst) {
+            return inst.get() == lw_inst;
+        });
+    
+    if (it == bb->end()) {
+        return nullptr;
+    }
+    
+    // Search backwards from the LW instruction
+    for (auto rev_it = std::make_reverse_iterator(it); rev_it != bb->rend(); ++rev_it) {
+        Instruction* candidate = rev_it->get();
+        if (candidate->getOpcode() == Opcode::FRAMEADDR) {
+            const auto& frameaddr_operands = candidate->getOperands();
+            if (frameaddr_operands.size() >= 2) {
+                auto* dest_reg = dynamic_cast<RegisterOperand*>(frameaddr_operands[0].get());
+                auto* frame_index_operand = 
+                    dynamic_cast<FrameIndexOperand*>(frameaddr_operands[1].get());
+                if (dest_reg && frame_index_operand && 
+                    dest_reg->getRegNum() == base_reg) {
+                    return candidate;
+                }
+            }
+        }
+    }
+    
     return nullptr;
 }
 

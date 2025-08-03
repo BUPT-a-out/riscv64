@@ -44,13 +44,10 @@ class ValueReusePass {
     // Mapping from immediate values to their first register
     std::unordered_map<int64_t, unsigned> immediateToFirstReg_;
 
-    // Mapping from global variable names to their first loaded register
-    // Key: global variable name (e.g., "g_val.26")
+        // Unified mapping from canonical memory addresses to their first loaded register
+    // Key: canonical memory address string (e.g., "global:g_val.26" or "frame:FI#1:offset0")
     // Value: register number that holds the loaded value
-    std::unordered_map<std::string, unsigned> globalVarToFirstReg_;
-
-    // Mapping from instruction to global variable name (for LA instructions)
-    std::unordered_map<Instruction*, std::string> laInstToGlobalVar_;
+    std::unordered_map<std::string, unsigned> memoryToFirstReg_;
 
     // Track instructions to be removed after optimization
     std::vector<Instruction*> instructionsToRemove_;
@@ -148,6 +145,22 @@ class ValueReusePass {
      * @return Pointer to the LA instruction, or nullptr if not found
      */
     Instruction* findCorrespondingLA(Instruction* lw_inst, BasicBlock* bb);
+    
+    /**
+     * @brief Create a canonical memory address key for any type of memory access
+     * @param lw_inst - The LW instruction to analyze
+     * @param bb - Basic block containing the instruction
+     * @return String representing the canonical memory address, or empty if not recognized
+     */
+    std::string createCanonicalMemoryKey(Instruction* lw_inst, BasicBlock* bb);
+    
+    /**
+     * @brief Find the frameaddr instruction that loads address for this LW instruction
+     * @param lw_inst - The LW instruction
+     * @param bb - Basic block containing the instruction
+     * @return Pointer to the frameaddr instruction, or nullptr if not found
+     */
+    Instruction* findCorrespondingFrameAddr(Instruction* lw_inst, BasicBlock* bb);
 };
 
 }  // namespace riscv64
