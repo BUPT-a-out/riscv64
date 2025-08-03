@@ -199,28 +199,51 @@ bool BasicBlockReordering::isUnconditionalJump(BasicBlock* block,
 bool BasicBlockReordering::isConditionalBranch(
     BasicBlock* block, BasicBlock*& jump_target,
     BasicBlock*& fallthrough_target) const {
-    if (block->size() == 0) return false;
+    if (block->size() < 2) return false;
 
+    // 获取最后两条指令
     auto it = block->rbegin();
     if (it == block->rend()) return false;
 
-    const Instruction* last_inst = it->get();
-    Opcode opcode = last_inst->getOpcode();
+    const Instruction* last_inst = it->get();  // 最后一条指令
+    ++it;
+    if (it == block->rend()) return false;
 
-    // 检查是否是条件分支指令
-    bool is_conditional = (opcode == Opcode::BEQ || opcode == Opcode::BNE ||
-                           opcode == Opcode::BLT || opcode == Opcode::BGE ||
-                           opcode == Opcode::BLTU || opcode == Opcode::BGEU ||
-                           opcode == Opcode::BEQZ || opcode == Opcode::BNEZ ||
-                           opcode == Opcode::BLEZ || opcode == Opcode::BGEZ ||
-                           opcode == Opcode::BLTZ || opcode == Opcode::BGTZ);
+    const Instruction* second_last_inst = it->get();  // 倒数第二条指令
+
+    // 检查是否是条件分支+无条件跳转的模式
+    Opcode last_opcode = last_inst->getOpcode();
+    Opcode second_last_opcode = second_last_inst->getOpcode();
+
+    // 最后一条必须是无条件跳转
+    if (last_opcode != Opcode::J) {
+        return false;
+    }
+
+    // 倒数第二条必须是条件分支
+    bool is_conditional = (second_last_opcode == Opcode::BEQ ||
+                           second_last_opcode == Opcode::BNE ||
+                           second_last_opcode == Opcode::BLT ||
+                           second_last_opcode == Opcode::BGE ||
+                           second_last_opcode == Opcode::BLTU ||
+                           second_last_opcode == Opcode::BGEU ||
+                           second_last_opcode == Opcode::BEQZ ||
+                           second_last_opcode == Opcode::BNEZ ||
+                           second_last_opcode == Opcode::BLEZ ||
+                           second_last_opcode == Opcode::BGEZ ||
+                           second_last_opcode == Opcode::BLTZ ||
+                           second_last_opcode == Opcode::BGTZ);
 
     if (is_conditional) {
         const auto& successors = block->getSuccessors();
         if (successors.size() == 2) {
-            // 按约定：successors[0] 是跳转目标，successors[1] 是fallthrough目标
-            jump_target = successors[0];
-            fallthrough_target = successors[1];
+            // 对于条件分支+无条件跳转的模式：
+            // - 条件分支指令跳转到第一个successor（条件成立时）
+            // -
+            // 无条件跳转指令跳转到第二个successor（条件不成立时的fallthrough）
+            jump_target = successors[0];  // 条件分支的目标
+            fallthrough_target =
+                successors[1];  // 无条件跳转的目标（原本的fallthrough）
             return true;
         }
     }
@@ -244,6 +267,8 @@ void BasicBlockReordering::removeRedundantJumps() {
         if (it == current->rend()) continue;
 
         Instruction* last_inst = it->get();
+
+        // 情况1：普通的无条件跳转
         if (last_inst->getOpcode() == Opcode::J) {
             // 检查这个J指令是否跳转到紧邻的下一个块
             const auto& successors = current->getSuccessors();
@@ -257,6 +282,27 @@ void BasicBlockReordering::removeRedundantJumps() {
                 --forward_it;  // 指向最后一个元素
                 current->erase(forward_it);
                 removed_jumps++;
+            }
+        }
+
+        // 情况2：条件分支+无条件跳转模式，检查是否可以优化无条件跳转部分
+        if (current->size() >= 2) {
+            BasicBlock* jump_target = nullptr;
+            BasicBlock* fallthrough_target = nullptr;
+
+            if (isConditionalBranch(current, jump_target, fallthrough_target)) {
+                // 如果fallthrough_target是下一个块，可以删除最后的无条件跳转
+                if (fallthrough_target == next) {
+                    std::cout << "  Removing redundant fallthrough jump from "
+                              << current->getLabel() << " to "
+                              << next->getLabel() << std::endl;
+
+                    // 删除最后的无条件跳转指令
+                    auto forward_it = current->end();
+                    --forward_it;  // 指向最后一个元素
+                    current->erase(forward_it);
+                    removed_jumps++;
+                }
             }
         }
     }
