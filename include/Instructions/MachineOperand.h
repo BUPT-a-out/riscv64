@@ -113,6 +113,11 @@ class RegisterOperand : public MachineOperand {
                       : RegisterType::Integer;
     }
 
+    bool operator==(const RegisterOperand& other) const {
+        return regNum == other.regNum && is_virtual == other.is_virtual &&
+               regType == other.regType;
+    }
+
    private:
     unsigned regNum;
     bool is_virtual;
@@ -183,6 +188,10 @@ class ImmediateOperand : public MachineOperand {
 
     std::string toString() const;
 
+    bool operator==(const ImmediateOperand& other) const {
+        return value == other.value && type == other.type;
+    }
+
    private:
     std::int64_t value;
 };
@@ -196,6 +205,10 @@ class FrameIndexOperand : public MachineOperand {
     int getIndex() const { return index; }
 
     std::string toString() const;
+
+    bool operator==(const FrameIndexOperand& other) const {
+        return index == other.index;
+    }
 
    private:
     int index;
@@ -217,6 +230,10 @@ class MemoryOperand : public MachineOperand {
     ImmediateOperand* getOffset() const { return offsetVal.get(); }
 
     std::string toString() const;
+
+    bool operator==(const MemoryOperand& other) const {
+        return *baseReg == *other.baseReg && *offsetVal == *other.offsetVal;
+    }
 
    private:
     std::unique_ptr<RegisterOperand> baseReg;

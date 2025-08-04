@@ -1,10 +1,12 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
 #include "Instructions/MachineOperand.h"
+#include "Pass/Analysis/DominanceInfo.h"
 
 // Forward declarations
 namespace midend {
@@ -54,16 +56,19 @@ class ValueReusePass {
 
    private:
     // Core optimization algorithm using dominator tree
-    bool traverseDominatorTree(
-        const void* node,  // DominatorTree::Node pointer
-        Function* riscv_function, const midend::Function* midend_function,
-        std::unordered_map<const midend::Value*, RegisterOperand*>& valueMap);
+    bool traverseDominatorTree(midend::DominatorTree::Node* node,
+                               Function* riscv_function);
 
     // Process individual basic blocks
     bool processBasicBlock(
         BasicBlock* riscv_bb, const midend::BasicBlock* midend_bb,
         std::unordered_map<const midend::Value*, RegisterOperand*>& valueMap,
         std::vector<const midend::Value*>& definitionsInThisBlock);
+
+    bool modifyInstruction(
+        Instruction* inst, BasicBlock* riscv_bb,
+        std::vector<MachineOperand*>& definitionsInThisBlock,
+        std::unordered_map<MachineOperand*, RegisterOperand*>& valueMap);
 
     // Process individual instructions
     bool processInstruction(

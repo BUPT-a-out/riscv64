@@ -49,6 +49,17 @@ class BasicBlock {
         inst->setParent(this);
         return instructions.insert(pos, std::move(inst));
     }
+    void replaceInstruction(
+        Instruction* oldInst, std::unique_ptr<Instruction> newInst) {
+        for (auto & instruction : instructions) {
+            if (instruction.get() == oldInst) {
+                newInst->setParent(this);
+                instruction = std::move(newInst);
+                return;
+            }
+        }
+        throw std::runtime_error("Instruction not found in BasicBlock");
+    }
 
     auto size() const { return instructions.size(); }
 
