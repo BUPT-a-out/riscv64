@@ -30,6 +30,12 @@ auto MagicDivision::computeMagicConstants(int32_t divisor) -> MagicConstants {
         return {-1, 0, false};
     }
 
+    // 检查是否为2的幂
+    if (isPowerOfTwo(divisor)) {
+        int shift_amount = getPowerOfTwoShift(divisor);
+        return {1, shift_amount, false};  // 对于2的幂，使用简单的移位
+    }
+
     // 使用原始算法计算魔数
     int precision = INITIAL_PRECISION;
     const uint64_t two31 = 0x80000000ULL;  // 2**31
@@ -112,6 +118,120 @@ auto MagicDivision::generateLoadImmediate(int64_t value, BasicBlock* parent_bb)
     return new_reg;
 }
 
+auto MagicDivision::isPowerOfTwo(int32_t value) -> bool {
+    if (value <= 0) {
+        return false;
+    }
+    // 检查是否只有一个位被设置
+    auto unsigned_value = static_cast<uint32_t>(value);
+    return (unsigned_value & (unsigned_value - 1U)) == 0U;
+}
+
+auto MagicDivision::getPowerOfTwoShift(int32_t value) -> int {
+    if (!isPowerOfTwo(value)) {
+        throw std::runtime_error("Value is not a power of two");
+    }
+
+    int shift = 0;
+    int temp = value;
+    while (temp > 1) {
+        temp = temp / 2;
+        shift++;
+    }
+    return shift;
+}
+
+auto MagicDivision::generatePowerOfTwoDivision(
+    std::unique_ptr<RegisterOperand> dividend_reg, int32_t divisor,
+    BasicBlock* parent_bb) -> std::unique_ptr<RegisterOperand> {
+    static int next_reg_num = VIRTUAL_REG_START;
+    int shift_amount = getPowerOfTwoShift(divisor);
+
+    // 对于有符号除法，需要处理负数的舍入
+    // 算法：如果被除数为负，先加上 (divisor - 1)，然后再右移
+
+    // 1. 获取符号位：srai sign_reg, dividend, 31
+    auto sign_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
+    auto sign_instr = std::make_unique<Instruction>(Opcode::SRAI, parent_bb);
+    sign_instr->addOperand(std::make_unique<RegisterOperand>(
+        sign_reg->getRegNum(), sign_reg->isVirtual()));
+    sign_instr->addOperand(std::make_unique<RegisterOperand>(
+        dividend_reg->getRegNum(), dividend_reg->isVirtual()));
+    sign_instr->addOperand(std::make_unique<ImmediateOperand>(SIGN_BIT_SHIFT));
+    parent_bb->addInstruction(std::move(sign_instr));
+
+    // 2. 计算调整值：andi adjust_reg, sign_reg, (divisor - 1)
+    auto adjust_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
+    auto andi_instr = std::make_unique<Instruction>(Opcode::ANDI, parent_bb);
+    andi_instr->addOperand(std::make_unique<RegisterOperand>(
+        adjust_reg->getRegNum(), adjust_reg->isVirtual()));
+    andi_instr->addOperand(std::make_unique<RegisterOperand>(
+        sign_reg->getRegNum(), sign_reg->isVirtual()));
+    andi_instr->addOperand(std::make_unique<ImmediateOperand>(divisor - 1));
+    parent_bb->addInstruction(std::move(andi_instr));
+
+    // 3. 加法调整：add temp_reg, dividend, adjust_reg
+    auto temp_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
+    auto add_instr = std::make_unique<Instruction>(Opcode::ADDW, parent_bb);
+    add_instr->addOperand(std::make_unique<RegisterOperand>(
+        temp_reg->getRegNum(), temp_reg->isVirtual()));
+    add_instr->addOperand(std::make_unique<RegisterOperand>(
+        dividend_reg->getRegNum(), dividend_reg->isVirtual()));
+    add_instr->addOperand(std::make_unique<RegisterOperand>(
+        adjust_reg->getRegNum(), adjust_reg->isVirtual()));
+    parent_bb->addInstruction(std::move(add_instr));
+
+    // 4. 算术右移：srai result_reg, temp_reg, shift_amount
+    auto result_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
+    auto srai_instr = std::make_unique<Instruction>(Opcode::SRAI, parent_bb);
+    srai_instr->addOperand(std::make_unique<RegisterOperand>(
+        result_reg->getRegNum(), result_reg->isVirtual()));
+    srai_instr->addOperand(std::make_unique<RegisterOperand>(
+        temp_reg->getRegNum(), temp_reg->isVirtual()));
+    srai_instr->addOperand(std::make_unique<ImmediateOperand>(shift_amount));
+    parent_bb->addInstruction(std::move(srai_instr));
+
+    return result_reg;
+}
+
+auto MagicDivision::generatePowerOfTwoModulo(
+    std::unique_ptr<RegisterOperand> dividend_reg, int32_t divisor,
+    BasicBlock* parent_bb) -> std::unique_ptr<RegisterOperand> {
+    // 先计算除法
+    auto divisor_reg_for_div = std::make_unique<RegisterOperand>(
+        dividend_reg->getRegNum(), dividend_reg->isVirtual());
+    auto quotient_reg = generatePowerOfTwoDivision(
+        std::move(divisor_reg_for_div), divisor, parent_bb);
+
+    // 加载除数到寄存器
+    auto divisor_reg = generateLoadImmediate(divisor, parent_bb);
+
+    // 计算 quotient * divisor
+    static int next_reg_num = VIRTUAL_REG_START;
+    auto product_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
+    auto mul_instr = std::make_unique<Instruction>(Opcode::MULW, parent_bb);
+    mul_instr->addOperand(std::make_unique<RegisterOperand>(
+        product_reg->getRegNum(), product_reg->isVirtual()));
+    mul_instr->addOperand(std::make_unique<RegisterOperand>(
+        quotient_reg->getRegNum(), quotient_reg->isVirtual()));
+    mul_instr->addOperand(std::make_unique<RegisterOperand>(
+        divisor_reg->getRegNum(), divisor_reg->isVirtual()));
+    parent_bb->addInstruction(std::move(mul_instr));
+
+    // 计算 dividend - (quotient * divisor)
+    auto result_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
+    auto sub_instr = std::make_unique<Instruction>(Opcode::SUBW, parent_bb);
+    sub_instr->addOperand(std::make_unique<RegisterOperand>(
+        result_reg->getRegNum(), result_reg->isVirtual()));
+    sub_instr->addOperand(std::make_unique<RegisterOperand>(
+        dividend_reg->getRegNum(), dividend_reg->isVirtual()));
+    sub_instr->addOperand(std::make_unique<RegisterOperand>(
+        product_reg->getRegNum(), product_reg->isVirtual()));
+    parent_bb->addInstruction(std::move(sub_instr));
+
+    return result_reg;
+}
+
 auto MagicDivision::generateMagicDivision(
     std::unique_ptr<MachineOperand> dividend_operand, int32_t divisor,
     BasicBlock* parent_bb) -> std::unique_ptr<RegisterOperand> {
@@ -148,6 +268,12 @@ auto MagicDivision::generateMagicDivision(
         parent_bb->addInstruction(std::move(neg_instr));
 
         return result_reg;
+    }
+
+    // 处理2的幂的特殊情况
+    if (isPowerOfTwo(divisor)) {
+        return generatePowerOfTwoDivision(std::move(dividend_reg), divisor,
+                                          parent_bb);
     }
 
     // 一般情况的魔数除法
@@ -257,6 +383,14 @@ auto MagicDivision::generateMagicModulo(
         dynamic_cast<RegisterOperand*>(dividend_operand.get())->getRegNum();
     auto dividend_is_virtual =
         dynamic_cast<RegisterOperand*>(dividend_operand.get())->isVirtual();
+
+    // 处理2的幂的特殊情况
+    if (isPowerOfTwo(divisor)) {
+        auto dividend_reg = std::make_unique<RegisterOperand>(
+            dividend_reg_num, dividend_is_virtual);
+        return generatePowerOfTwoModulo(std::move(dividend_reg), divisor,
+                                        parent_bb);
+    }
 
     // 先计算 dividend / divisor
     auto quotient_reg =

@@ -44,6 +44,22 @@ class MagicDivision {
     // 生成立即数加载指令
     static auto generateLoadImmediate(int64_t value, BasicBlock* parent_bb)
         -> std::unique_ptr<RegisterOperand>;
+
+    // 检查是否为2的幂
+    static auto isPowerOfTwo(int32_t value) -> bool;
+
+    // 获取2的幂的指数
+    static auto getPowerOfTwoShift(int32_t value) -> int;
+
+    // 生成2的幂的除法指令序列
+    static auto generatePowerOfTwoDivision(
+        std::unique_ptr<RegisterOperand> dividend_reg, int32_t divisor,
+        BasicBlock* parent_bb) -> std::unique_ptr<RegisterOperand>;
+
+    // 生成2的幂的求余指令序列
+    static auto generatePowerOfTwoModulo(
+        std::unique_ptr<RegisterOperand> dividend_reg, int32_t divisor,
+        BasicBlock* parent_bb) -> std::unique_ptr<RegisterOperand>;
 };
 
 }  // namespace riscv64
