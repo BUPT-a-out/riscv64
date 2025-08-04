@@ -1,15 +1,16 @@
 #pragma once
 
 #include <memory>
+#include <queue>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
+#include "ABI.h"
 #include "Instructions/Function.h"
 #include "Instructions/Instruction.h"
 #include "Instructions/MachineOperand.h"
 #include "SpillChainManager.h"
-#include "ABI.h"
 
 namespace riscv64 {
 
@@ -25,8 +26,8 @@ struct LivenessInfo {
 struct InterferenceNode {
     unsigned regNum;
     std::unordered_set<unsigned> neighbors;  // 邻接节点
-    int color = -1;             // 分配的颜色（物理寄存器）
-    bool isPrecolored = false;  // 是否已经预着色（物理寄存器）
+    int color = -1;                          // 分配的颜色（物理寄存器）
+    bool isPrecolored = false;               // 是否已经预着色（物理寄存器）
 
     unsigned coalesceParent;  // 合并的代表元
 
@@ -141,7 +142,8 @@ class RegAllocChaitin {
     // 辅助函数
     bool isPhysicalReg(unsigned reg) const;
     unsigned getPhysicalReg(unsigned virtualReg) const;
-
+    int getLifetimeLength(unsigned reg);
+    
     // ABI约束
     void initializeABIConstraints();
     void setFunctionSpecificConstraints();
@@ -150,6 +152,7 @@ class RegAllocChaitin {
     void setCallSiteConstraints();
     void setPreCallConstraints(BasicBlock* bb, Instruction* callInst);
     void setPostCallConstraints(BasicBlock* bb, Instruction* callInst);
+
 
     void addReservedPhysicalReg(unsigned physicalReg) {
         reservedPhysicalRegs.insert(physicalReg);
@@ -166,6 +169,17 @@ class RegAllocChaitin {
     void printInterferenceGraph() const;
     void printAllocationResult() const;
     void printCoalesceResult() const;
+
+   private:
+    // 乐观着色相关
+    std::unordered_set<unsigned> optimisticNodes;  // 乐观移除的节点
+    bool enableOptimisticColoring = false;          // 启用乐观着色开关
+
+    std::vector<unsigned> getOptimisticSimplificationOrder();
+    bool attemptOptimisticColoring(const std::vector<unsigned>& order);
+    unsigned selectOptimisticSpillCandidate(
+        const std::unordered_set<unsigned>& candidates);
+    double calculateSpillCost(unsigned reg);
 };
 
 }  // namespace riscv64

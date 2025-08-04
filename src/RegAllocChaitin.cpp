@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <climits>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <queue>
 #include <set>
@@ -30,14 +31,7 @@ void RegAllocChaitin::allocateRegisters() {
     // 根据函数特征设置特定约束
     setFunctionSpecificConstraints();
 
-    // 添加调试信息：打印干涉图
-    if (assigningFloat) {
-        printInterferenceGraph();
-    }
-    printInterferenceGraph();
-
     performCoalescing();
-    printInterferenceGraph();
 
     bool success = colorGraph();
 
@@ -314,11 +308,355 @@ void RegAllocChaitin::addInterference(unsigned reg1, unsigned reg2) {
 
 /// Coloring
 bool RegAllocChaitin::colorGraph() {
-    auto order = getSimplificationOrder();
-
-    return attemptColoring(order);
+    if (enableOptimisticColoring) {
+        auto order = getOptimisticSimplificationOrder();
+        return attemptOptimisticColoring(order);
+    } else {
+        auto order = getSimplificationOrder();
+        return attemptColoring(order);
+    }
 }
 
+/// Optimistic
+// 实现乐观简化顺序
+std::vector<unsigned> RegAllocChaitin::getOptimisticSimplificationOrder() {
+    std::vector<unsigned> order;
+    std::unordered_set<unsigned> removed;
+    std::stack<unsigned> stack;
+
+    // 清空乐观节点集合
+    optimisticNodes.clear();
+
+    // 初始化度数缓存
+    initializeDegreeCache();
+
+    // 工作列表：维护当前度数小于K的节点
+    std::queue<unsigned> lowDegreeNodes;
+    std::unordered_set<unsigned> highDegreeNodes;
+
+    // 初始分类节点
+    for (auto& [regNum, node] : interferenceGraph) {
+        if (!node->isPrecolored) {
+            int currentDegree = getCachedDegree(regNum);
+            if (currentDegree < static_cast<int>(availableRegs.size())) {
+                lowDegreeNodes.push(regNum);
+            } else {
+                highDegreeNodes.insert(regNum);
+            }
+        }
+    }
+
+    // 第一阶段：处理低度数节点
+    while (!lowDegreeNodes.empty()) {
+        unsigned regNum = lowDegreeNodes.front();
+        lowDegreeNodes.pop();
+
+        if (removed.find(regNum) != removed.end()) {
+            continue;
+        }
+
+        // 再次检查度数
+        int currentDegree = getCachedDegree(regNum);
+        if (currentDegree >= static_cast<int>(availableRegs.size())) {
+            highDegreeNodes.insert(regNum);
+            continue;
+        }
+
+        // 移除低度数节点
+        stack.push(regNum);
+        removed.insert(regNum);
+
+        // 更新邻居度数，可能产生新的低度数节点
+        if (interferenceGraph.find(regNum) != interferenceGraph.end()) {
+            for (unsigned neighbor : interferenceGraph[regNum]->neighbors) {
+                if (removed.find(neighbor) == removed.end() &&
+                    !interferenceGraph[neighbor]->isPrecolored) {
+                    degreeCache[neighbor]--;
+                    int newDegree = getCachedDegree(neighbor);
+
+                    // 如果邻居从高度数变为低度数
+                    if (newDegree < static_cast<int>(availableRegs.size()) &&
+                        highDegreeNodes.find(neighbor) !=
+                            highDegreeNodes.end()) {
+                        highDegreeNodes.erase(neighbor);
+                        lowDegreeNodes.push(neighbor);
+                    }
+                }
+            }
+        }
+
+        invalidateDegreeCache(regNum);
+    }
+
+    // 第二阶段：乐观处理剩余的高度数节点
+    while (!highDegreeNodes.empty()) {
+        // 选择溢出代价最小的节点进行乐观移除
+        unsigned candidate = selectOptimisticSpillCandidate(highDegreeNodes);
+
+        if (candidate == UINT_MAX) {
+            // 如果没有合适的候选者，选择第一个
+            candidate = *highDegreeNodes.begin();
+        }
+
+        // 乐观移除
+        stack.push(candidate);
+        removed.insert(candidate);
+        optimisticNodes.insert(candidate);  // 标记为乐观节点
+        highDegreeNodes.erase(candidate);
+
+        std::cout << "Optimistically removing high-degree node " << candidate
+                  << " with degree " << getCachedDegree(candidate) << std::endl;
+
+        // 更新邻居度数
+        if (interferenceGraph.find(candidate) != interferenceGraph.end()) {
+            for (unsigned neighbor : interferenceGraph[candidate]->neighbors) {
+                if (removed.find(neighbor) == removed.end() &&
+                    !interferenceGraph[neighbor]->isPrecolored) {
+                    degreeCache[neighbor]--;
+                    int newDegree = getCachedDegree(neighbor);
+
+                    // 检查是否有新的低度数节点产生
+                    if (newDegree < static_cast<int>(availableRegs.size()) &&
+                        highDegreeNodes.find(neighbor) !=
+                            highDegreeNodes.end()) {
+                        highDegreeNodes.erase(neighbor);
+                        lowDegreeNodes.push(neighbor);
+                    }
+                }
+            }
+        }
+
+        invalidateDegreeCache(candidate);
+
+        // 如果产生了新的低度数节点，继续处理
+        while (!lowDegreeNodes.empty()) {
+            unsigned regNum = lowDegreeNodes.front();
+            lowDegreeNodes.pop();
+
+            if (removed.find(regNum) != removed.end()) {
+                continue;
+            }
+
+            int currentDegree = getCachedDegree(regNum);
+            if (currentDegree >= static_cast<int>(availableRegs.size())) {
+                highDegreeNodes.insert(regNum);
+                continue;
+            }
+
+            stack.push(regNum);
+            removed.insert(regNum);
+
+            // 更新邻居度数
+            if (interferenceGraph.find(regNum) != interferenceGraph.end()) {
+                for (unsigned neighbor : interferenceGraph[regNum]->neighbors) {
+                    if (removed.find(neighbor) == removed.end() &&
+                        !interferenceGraph[neighbor]->isPrecolored) {
+                        degreeCache[neighbor]--;
+                        int newDegree = getCachedDegree(neighbor);
+
+                        if (newDegree <
+                                static_cast<int>(availableRegs.size()) &&
+                            highDegreeNodes.find(neighbor) !=
+                                highDegreeNodes.end()) {
+                            highDegreeNodes.erase(neighbor);
+                            lowDegreeNodes.push(neighbor);
+                        }
+                    }
+                }
+            }
+
+            invalidateDegreeCache(regNum);
+        }
+    }
+
+    // 按栈顺序返回
+    while (!stack.empty()) {
+        order.push_back(stack.top());
+        stack.pop();
+    }
+
+    return order;
+}
+
+// 选择乐观溢出候选者（溢出代价最小的）
+unsigned RegAllocChaitin::selectOptimisticSpillCandidate(
+    const std::unordered_set<unsigned>& candidates) {
+    if (candidates.empty()) {
+        return UINT_MAX;
+    }
+
+    // 使用一个小顶堆(优先队列)临时存储所有候选者和溢出代价
+    struct SpillCandidate {
+        unsigned reg;
+        double cost;
+
+        bool operator>(const SpillCandidate& other) const {
+            return cost > other.cost;  // 小顶堆，cost越小越优先
+        }
+    };
+
+    std::priority_queue<SpillCandidate, std::vector<SpillCandidate>,
+                        std::greater<SpillCandidate>>
+        pq;
+
+    // 遍历候选者，实时计算溢出成本并插入堆
+    for (unsigned reg : candidates) {
+        if (ABI::isReservedReg(reg, assigningFloat)) {
+            continue;  // 跳过保留寄存器
+        }
+        double cost = calculateSpillCost(reg);  // 计算溢出代价（您已有实现）
+        pq.push({reg, cost});
+    }
+
+    if (pq.empty()) {
+        return UINT_MAX;
+    }
+
+    return pq.top().reg;
+}
+
+// 计算溢出代价 (简单)
+// TODO: 循环变量优化
+double RegAllocChaitin::calculateSpillCost(unsigned reg) {
+    double cost = 0.0;
+
+    // 基于使用频率计算代价
+    int usageCount = getRegisterUsageCount(reg);
+    cost += usageCount * 10.0;  // 使用次数权重
+
+    // 基于度数计算代价（度数越高，溢出代价相对越低）
+    int degree = getCachedDegree(reg);
+    cost = cost / std::max(1, degree);  // 度数高的节点溢出代价相对较低
+
+    // 生命周期长度权重
+    int lifetimeLength = getLifetimeLength(reg);
+    cost += lifetimeLength * 5.0;
+
+    // ABI约束权重
+    if (isUsedAcrossCalls(reg)) {
+        cost += 50.0;  // 跨调用的寄存器溢出代价更高
+    }
+
+    return cost;
+}
+
+// 乐观着色尝试
+bool RegAllocChaitin::attemptOptimisticColoring(
+    const std::vector<unsigned>& order) {
+    for (unsigned regNum : order) {
+        auto& node = interferenceGraph[regNum];
+        std::unordered_set<int> usedColors;
+
+        // 收集邻居使用的颜色
+        for (unsigned neighbor : node->neighbors) {
+            if (interferenceGraph[neighbor]->color != -1) {
+                usedColors.insert(interferenceGraph[neighbor]->color);
+            }
+        }
+
+        // 尝试着色
+        int selectedColor = -1;
+
+        // 如果是乐观节点，更详细的输出
+        bool isOptimisticNode =
+            (optimisticNodes.find(regNum) != optimisticNodes.end());
+        if (isOptimisticNode) {
+            std::cout << "Attempting optimistic coloring for register "
+                      << regNum << ", neighbors: " << node->neighbors.size()
+                      << ", used colors: " << usedColors.size() << std::endl;
+        }
+
+        // 正常着色流程
+        auto preferredRegs = getABIPreferredRegs(regNum);
+
+        for (unsigned color : preferredRegs) {
+
+            if (usedColors.find(color) == usedColors.end() &&
+                reservedPhysicalRegs.find(color) ==
+                    reservedPhysicalRegs.end() &&
+                std::find(availableRegs.begin(), availableRegs.end(), color) !=
+                    availableRegs.end()) {
+                selectedColor = color;
+                break;
+            }
+        }
+
+        if (selectedColor == -1) {
+            for (unsigned color : availableRegs) {
+                if (usedColors.find(color) == usedColors.end() &&
+                    reservedPhysicalRegs.find(color) ==
+                        reservedPhysicalRegs.end() &&
+                    !ABI::isReservedReg(color, assigningFloat)) {
+                    selectedColor = color;
+                    break;
+                }
+            }
+        }
+
+        if (selectedColor == -1) {
+            // 乐观着色失败
+            if (isOptimisticNode) {
+                std::cout << "Optimistic coloring failed for register "
+                          << regNum << ", selecting for spill" << std::endl;
+            }
+
+            if (!ABI::isReservedReg(regNum, assigningFloat)) {
+                spilledRegs.insert(regNum);
+            } else {
+                std::cerr << "Error: Cannot spill reserved register " << regNum
+                          << std::endl;
+                return false;
+            }
+        } else {
+            // 着色成功
+            if (isOptimisticNode) {
+                std::cout << "Optimistic coloring succeeded for register "
+                          << regNum << " with color " << selectedColor
+                          << std::endl;
+            }
+
+            node->color = selectedColor;
+            virtualToPhysical[regNum] = selectedColor;
+        }
+    }
+
+    // 统计乐观着色的成功率
+    int optimisticSuccess = 0;
+    int optimisticTotal = optimisticNodes.size();
+
+    for (unsigned reg : optimisticNodes) {
+        if (spilledRegs.find(reg) == spilledRegs.end()) {
+            optimisticSuccess++;
+        }
+    }
+
+    if (optimisticTotal > 0) {
+        double successRate =
+            (double)optimisticSuccess / optimisticTotal * 100.0;
+        std::cout << "Optimistic coloring success rate: " << optimisticSuccess
+                  << "/" << optimisticTotal << " (" << successRate << "%)"
+                  << std::endl;
+    }
+
+    return spilledRegs.empty();
+}
+
+// 辅助函数：获取寄存器生命周期长度
+int RegAllocChaitin::getLifetimeLength(unsigned reg) {
+    int length = 0;
+    for (auto& bb : *function) {
+        const auto& liveIn = livenessInfo[bb.get()].liveIn;
+        const auto& liveOut = livenessInfo[bb.get()].liveOut;
+
+        if (liveIn.find(reg) != liveIn.end() ||
+            liveOut.find(reg) != liveOut.end()) {
+            length += bb->size();  // 基本块大小作为生命周期权重
+        }
+    }
+    return length;
+}
+
+/// Simple-Coloring
 std::vector<unsigned> RegAllocChaitin::getSimplificationOrder() {
     std::vector<unsigned> order;
     std::unordered_set<unsigned> removed;
@@ -1050,24 +1388,24 @@ bool RegAllocChaitin::canCoalesce(unsigned src, unsigned dst) {
         }
 
         // Briggs准则：合并后的节点度数要小于K（可用寄存器数量）
-        std::unordered_set<unsigned> combinedNeighbors = srcNode->neighbors;
-        for (unsigned neighbor : dstNode->neighbors) {
-            combinedNeighbors.insert(neighbor);
-        }
-        if (combinedNeighbors.size() >= availableRegs.size()) {
-            return false;
-        }
+        // std::unordered_set<unsigned> combinedNeighbors = srcNode->neighbors;
+        // for (unsigned neighbor : dstNode->neighbors) {
+        //     combinedNeighbors.insert(neighbor);
+        // }
+        // if (combinedNeighbors.size() >= availableRegs.size()) {
+        //     return false;
+        // }
 
-        // George准则：对于每个高度数的邻居，它要么已经与目标寄存器冲突，要么度数小于K
-        for (unsigned neighbor : srcNode->neighbors) {
-            if (interferenceGraph[neighbor]->neighbors.size() >=
-                availableRegs.size()) {
-                if (dstNode->neighbors.find(neighbor) ==
-                    dstNode->neighbors.end()) {
-                    return false;
-                }
-            }
-        }
+        // // George准则：对于每个高度数的邻居，它要么已经与目标寄存器冲突，要么度数小于K
+        // for (unsigned neighbor : srcNode->neighbors) {
+        //     if (interferenceGraph[neighbor]->neighbors.size() >=
+        //         availableRegs.size()) {
+        //         if (dstNode->neighbors.find(neighbor) ==
+        //             dstNode->neighbors.end()) {
+        //             return false;
+        //         }
+        //     }
+        // }
     }
 
     return true;
@@ -1367,6 +1705,12 @@ std::vector<unsigned> RegAllocChaitin::getABIPreferredRegs(
                     preferredRegs.push_back(reg);
                 }
             }
+            for (unsigned reg = 50; reg <= 59; ++reg) {  // fs2-fs11
+                if (std::find(preferredRegs.begin(), preferredRegs.end(),
+                              reg) == preferredRegs.end()) {
+                    preferredRegs.push_back(reg);
+                }
+            }
         } else {
             for (unsigned reg = 5; reg <= 7; ++reg) {  // t0-t2
                 if (std::find(preferredRegs.begin(), preferredRegs.end(),
@@ -1381,6 +1725,16 @@ std::vector<unsigned> RegAllocChaitin::getABIPreferredRegs(
                 }
             }
             for (unsigned reg = 28; reg <= 31; ++reg) {  // t3-t6
+                if (std::find(preferredRegs.begin(), preferredRegs.end(),
+                              reg) == preferredRegs.end()) {
+                    preferredRegs.push_back(reg);
+                }
+            }
+            if (std::find(preferredRegs.begin(), preferredRegs.end(), 9) ==
+                preferredRegs.end()) {
+                preferredRegs.push_back(9);
+            }
+            for (unsigned reg = 18; reg <= 27; ++reg) {  // s2-s11
                 if (std::find(preferredRegs.begin(), preferredRegs.end(),
                               reg) == preferredRegs.end()) {
                     preferredRegs.push_back(reg);
