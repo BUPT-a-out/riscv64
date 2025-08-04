@@ -16,6 +16,7 @@
 #include "IR/Instructions.h"
 #include "IR/Module.h"
 #include "Instructions/All.h"
+#include "MagicDivision.h"
 #include "StackFrameManager.h"
 
 namespace riscv64 {
@@ -2532,6 +2533,23 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     std::make_unique<ImmediateOperand>(result));
                 parent_bb->addInstruction(std::move(instruction));
             } else {
+                // 检查右操作数是否为常量，如果是则尝试魔数除法优化
+                if (rhs->getType() == OperandType::Immediate) {
+                    auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                    auto divisor = static_cast<int32_t>(rhs_imm->getValue());
+
+                    // 尝试使用魔数除法优化
+                    if (MagicDivision::canOptimize(divisor)) {
+                        auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+                        auto result_reg = MagicDivision::generateMagicDivision(
+                            std::move(lhs_reg), divisor, parent_bb);
+
+                        new_reg = std::move(result_reg);
+                        break;
+                    }
+                }
+
+                // 回退到标准除法指令
                 auto lhs_reg = immToReg(std::move(lhs), parent_bb);
                 auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
@@ -2571,6 +2589,23 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     std::make_unique<ImmediateOperand>(result));
                 parent_bb->addInstruction(std::move(instruction));
             } else {
+                // 检查右操作数是否为常量，如果是则尝试魔数取模优化
+                if (rhs->getType() == OperandType::Immediate) {
+                    auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
+                    auto divisor = static_cast<int32_t>(rhs_imm->getValue());
+
+                    // 尝试使用魔数取模优化
+                    if (MagicDivision::canOptimize(divisor)) {
+                        auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+                        auto result_reg = MagicDivision::generateMagicModulo(
+                            std::move(lhs_reg), divisor, parent_bb);
+
+                        new_reg = std::move(result_reg);
+                        break;
+                    }
+                }
+
+                // 回退到标准取模指令
                 auto lhs_reg = immToReg(std::move(lhs), parent_bb);
                 auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
@@ -4909,7 +4944,7 @@ void Visitor::visit(const midend::GlobalVariable* global_var,
                         using T = std::decay_t<decltype(value)>;
                         if constexpr (std::is_same_v<T, std::vector<int32_t>>) {
                             std::cout << "Non-zero int array initializer for "
-                                      << name << " with " << value.size()  
+                                      << name << " with " << value.size()
                                       << " elements: ";
                             for (size_t i = 0;
                                  i < std::min(value.size(), size_t(10)); ++i) {
