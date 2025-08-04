@@ -54,9 +54,7 @@ class ValueReusePass {
     // Core optimization algorithm using dominator tree
     bool traverseDominatorTree(
         const void* node,  // DominatorTree::Node pointer
-        Function* riscv_function,
-        const std::unordered_map<const midend::BasicBlock*, BasicBlock*>&
-            bb_mapping,
+        Function* riscv_function, const midend::Function* midend_function,
         std::unordered_map<const midend::Value*, RegisterOperand*>& valueMap);
 
     // Process individual basic blocks

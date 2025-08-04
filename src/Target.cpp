@@ -27,7 +27,7 @@ std::string RISCV64Target::compileToAssembly(
     if (analysisManager != nullptr) {
         valueReusePass(riscv_module, module, analysisManager);
     } else {
-        std::cout << "No AnalysisManager provided for ValueReusePass, skipped."
+        std::cout << "No AnalysisManager provided for ValueReusePass, skipped. Pass `-O1` param to enable."
                   << std::endl;
     }
 

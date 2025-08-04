@@ -66,28 +66,29 @@ bool ValueReusePass::runOnFunction(
     std::cout << "  Dominator tree root: " << domTree->getRoot()->bb->getName()
               << std::endl;
 
-    // Create mapping from midend basic blocks to RISCV64 basic blocks
-    auto bb_mapping = createBasicBlockMapping(riscv_function, midend_function);
-    if (bb_mapping.empty()) {
-        std::cout << "  Failed to create BB mapping" << std::endl;
-        return false;
-    }
+    // Use the existing basic block mapping from the function
+    // No need to create our own mapping since Function already maintains it
+    std::cout << "  Using existing basic block mapping from Function"
+              << std::endl;
 
     std::cout << "  Starting dominator tree traversal..." << std::endl;
-    
+
     // Core optimization: DFS traversal of dominator tree with value tracking
     std::unordered_map<const midend::Value*, RegisterOperand*> valueMap;
     bool modified = false;
-    
+
     try {
         modified = traverseDominatorTree(domTree->getRoot(), riscv_function,
-                                        bb_mapping, valueMap);
-        std::cout << "  Dominator tree traversal completed successfully" << std::endl;
+                                         midend_function, valueMap);
+        std::cout << "  Dominator tree traversal completed successfully"
+                  << std::endl;
     } catch (const std::exception& e) {
-        std::cout << "  Error during dominator tree traversal: " << e.what() << std::endl;
+        std::cout << "  Error during dominator tree traversal: " << e.what()
+                  << std::endl;
         return false;
     } catch (...) {
-        std::cout << "  Unknown error during dominator tree traversal" << std::endl;
+        std::cout << "  Unknown error during dominator tree traversal"
+                  << std::endl;
         return false;
     }
 
@@ -116,16 +117,14 @@ bool ValueReusePass::runOnFunction(
 
 bool ValueReusePass::traverseDominatorTree(
     const void* node_ptr,  // DominatorTree::Node pointer
-    Function* riscv_function,
-    const std::unordered_map<const midend::BasicBlock*, BasicBlock*>&
-        bb_mapping,
+    Function* riscv_function, const midend::Function* midend_function,
     std::unordered_map<const midend::Value*, RegisterOperand*>& valueMap) {
-    
     if (node_ptr == nullptr) {
-        std::cout << "  Error: null node_ptr passed to traverseDominatorTree" << std::endl;
+        std::cout << "  Error: null node_ptr passed to traverseDominatorTree"
+                  << std::endl;
         return false;
     }
-    
+
     // Cast to the actual DominatorTree::Node type
     using NodeType = midend::DominatorTreeBase<false>::Node;
     const NodeType* node = static_cast<const NodeType*>(node_ptr);
@@ -141,32 +140,35 @@ bool ValueReusePass::traverseDominatorTree(
     // Track definitions made in this block for backtracking
     std::vector<const midend::Value*> definitionsInThisBlock;
 
-    // Find corresponding RISCV64 basic block
-    auto bb_it = bb_mapping.find(node->bb);
-    if (bb_it == bb_mapping.end()) {
-        std::cout << "    No corresponding RISCV64 basic block found"
-                  << std::endl;
+    // Find corresponding RISCV64 basic block using Function's mapping
+    BasicBlock* riscv_bb = nullptr;
+    try {
+        riscv_bb = riscv_function->getBasicBlock(node->bb);
+    } catch (const std::exception& e) {
+        std::cout << "    No corresponding RISCV64 basic block found for "
+                  << node->bb->getName() << ": " << e.what() << std::endl;
         // Still process children
         bool childrenModified = false;
         for (const auto& child : node->children) {
             childrenModified |= traverseDominatorTree(
-                child.get(), riscv_function, bb_mapping, valueMap);
+                child.get(), riscv_function, midend_function, valueMap);
         }
         return childrenModified;
     }
 
-    BasicBlock* riscv_bb = bb_it->second;
     bool blockModified =
         processBasicBlock(riscv_bb, node->bb, valueMap, definitionsInThisBlock);
 
     // Recursively process children in the dominator tree
+    // Children can see and reuse values defined in this block
     bool childrenModified = false;
     for (const auto& child : node->children) {
         childrenModified |= traverseDominatorTree(child.get(), riscv_function,
-                                                  bb_mapping, valueMap);
+                                                  midend_function, valueMap);
     }
 
     // Backtrack: remove definitions made in this block
+    // This ensures that siblings cannot see each other's definitions
     for (const auto* value : definitionsInThisBlock) {
         valueMap.erase(value);
     }
@@ -214,99 +216,101 @@ bool ValueReusePass::processInstruction(
     Instruction* inst, const midend::BasicBlock* midend_bb,
     std::unordered_map<const midend::Value*, RegisterOperand*>& valueMap,
     std::vector<const midend::Value*>& definitionsInThisBlock) {
+    
     Opcode opcode = inst->getOpcode();
+    std::cout << "        Processing instruction: " << inst->toString() << std::endl;
 
-    // Handle different instruction types
     switch (opcode) {
-        case Opcode::LI:
-        case Opcode::ADDI:
-        case Opcode::LW:
-        case Opcode::FLW: {
-            // Try to find corresponding midend value
-            const midend::Value* correspondingValue =
-                findCorrespondingMidendInstruction(inst, midend_bb);
-            if (correspondingValue != nullptr) {
-                // Check if we already have this value in a register
-                auto it = valueMap.find(correspondingValue);
-                if (it != valueMap.end()) {
-                    // Found reusable value
-                    const auto& operands = inst->getOperands();
-                    if (!operands.empty()) {
-                        auto* dest_reg =
-                            dynamic_cast<RegisterOperand*>(operands[0].get());
-                        if (dest_reg != nullptr) {
-                            std::cout
-                                << "        OPTIMIZATION: Reusing value for "
-                                << correspondingValue->getName()
-                                << " from register " << it->second->getRegNum()
-                                << " to register " << dest_reg->getRegNum()
-                                << std::endl;
-
-                            stats_.optimizationOpportunities++;
-                            stats_.virtualRegsReused++;
-
-                            // We should replace this with a move instruction,
-                            // but for now just eliminate it
-                            return true;  // Mark for removal
-                        }
-                    }
-                } else {
-                    // First time seeing this value - record it
-                    const auto& operands = inst->getOperands();
-                    if (!operands.empty()) {
-                        auto* dest_reg =
-                            dynamic_cast<RegisterOperand*>(operands[0].get());
-                        if (dest_reg != nullptr) {
-                            valueMap[correspondingValue] = dest_reg;
-                            definitionsInThisBlock.push_back(
-                                correspondingValue);
-                            std::cout << "        Recording value "
-                                      << correspondingValue->getName()
-                                      << " -> register "
-                                      << dest_reg->getRegNum() << std::endl;
-                        }
-                    }
-                }
-            }
-            break;
-        }
-
-        case Opcode::SW:
-        case Opcode::FSW: {
-            // Store instructions potentially invalidate memory
-            std::cout << "      Store instruction may invalidate memory"
-                      << std::endl;
-            stats_.storesProcessed++;
-            invalidateMemoryValues(valueMap, definitionsInThisBlock);
-            break;
-        }
-
-        case Opcode::CALL: {
-            // Function calls may have side effects and invalidate memory
-            std::cout << "      Call instruction may invalidate memory"
-                      << std::endl;
-            stats_.callsProcessed++;
-            invalidateMemoryValues(valueMap, definitionsInThisBlock);
-            break;
-        }
-
-        default:
-            // For other instructions, check if they redefine any registers
-            // we're tracking
+        case LI: {
+            // 立即数加载指令 - 实现正确的值复用逻辑
             const auto& operands = inst->getOperands();
-            if (!operands.empty()) {
-                auto* dest_reg =
-                    dynamic_cast<RegisterOperand*>(operands[0].get());
-                if (dest_reg != nullptr) {
-                    // This instruction defines a new value in dest_reg
-                    // We don't need to invalidate old mappings since we're
-                    // tracking by Value*, not by register number
+            if (operands.size() >= 2) {
+                auto* dest_reg = dynamic_cast<RegisterOperand*>(operands[0].get());
+                auto* imm_op = dynamic_cast<ImmediateOperand*>(operands[1].get());
+                
+                if (dest_reg != nullptr && imm_op != nullptr) {
+                    int64_t value = imm_op->getValue();
+                    std::cout << "          Load immediate: " << value 
+                              << " -> reg" << dest_reg->getRegNum() << std::endl;
+                    stats_.loadsAnalyzed++;
+                    
+                    // 关键修复：只在寄存器中查找已有的立即数值，不从栈加载
+                    // 查找是否有相同立即数值的指令已经存在于寄存器中
+                    const midend::Value* correspondingValue = findCorrespondingMidendInstruction(inst, midend_bb);
+                    if (correspondingValue != nullptr) {
+                        // 检查是否已经有寄存器保存了相同的值
+                        auto it = valueMap.find(correspondingValue);
+                        if (it != valueMap.end() && it->second != nullptr) {
+                            RegisterOperand* existing_reg = it->second;
+                            
+                            // 确保现有寄存器仍然有效且不是当前目标寄存器
+                            if (existing_reg->getRegNum() != dest_reg->getRegNum()) {
+                                std::cout << "          OPTIMIZATION: Found existing register " 
+                                          << existing_reg->getRegNum() 
+                                          << " with same immediate value " << value 
+                                          << ", could reuse for reg" << dest_reg->getRegNum() << std::endl;
+                                stats_.optimizationOpportunities++;
+                                // 注意：这里我们只统计机会，不实际修改指令
+                                // 避免生成错误的栈加载指令
+                            }
+                        }
+                        
+                        // 无论是否复用，都记录当前定义
+                        valueMap[correspondingValue] = dest_reg;
+                        definitionsInThisBlock.push_back(correspondingValue);
+                        std::cout << "          Recording immediate " << value 
+                                  << " in reg" << dest_reg->getRegNum() << std::endl;
+                    }
                 }
             }
+            break;
+        }
+        
+        case LW:
+        case FLW: {
+            // 内存加载指令
+            const auto& operands = inst->getOperands();
+            if (operands.size() >= 2) {
+                auto* dest_reg = dynamic_cast<RegisterOperand*>(operands[0].get());
+                if (dest_reg != nullptr) {
+                    std::cout << "          Memory load -> reg" << dest_reg->getRegNum() << std::endl;
+                    stats_.loadsAnalyzed++;
+                    
+                    // 为内存加载建立映射
+                    const midend::Value* correspondingValue = findCorrespondingMidendInstruction(inst, midend_bb);
+                    if (correspondingValue != nullptr) {
+                        valueMap[correspondingValue] = dest_reg;
+                        definitionsInThisBlock.push_back(correspondingValue);
+                    }
+                }
+            }
+            break;
+        }
+        
+        case SW:
+        case FSW: {
+            std::cout << "          Store instruction" << std::endl;
+            stats_.storesProcessed++;
+            // Store指令可能使某些内存值失效
+            invalidateMemoryValues(valueMap, definitionsInThisBlock);
+            break;
+        }
+        
+        case CALL: {
+            std::cout << "          Call instruction" << std::endl;
+            stats_.callsProcessed++;
+            // 函数调用可能修改内存，使某些值失效
+            invalidateMemoryValues(valueMap, definitionsInThisBlock);
+            break;
+        }
+        
+        default:
+            // 其他指令暂不处理
             break;
     }
 
-    return false;  // Don't remove this instruction
+    // 不删除指令，只做分析和映射建立
+    return false;
 }
 
 const midend::Value* ValueReusePass::findCorrespondingMidendInstruction(
