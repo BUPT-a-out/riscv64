@@ -8,8 +8,8 @@
 #include <set>
 #include <stack>
 
-#include "StackFrameManager.h"
 #include "SpillCodeOptimizer.h"
+#include "StackFrameManager.h"
 namespace riscv64 {
 
 /// Entry
@@ -26,6 +26,9 @@ void RegAllocChaitin::allocateRegisters() {
     computeLiveness();
 
     buildInterferenceGraph();
+
+    // 根据函数特征设置特定约束
+    setFunctionSpecificConstraints();
 
     // 添加调试信息：打印干涉图
     if (assigningFloat) {
@@ -225,10 +228,7 @@ void RegAllocChaitin::buildInterferenceGraph() {
         std::cout << "\n";
     }
 
-    // 第一步：添加指令级别的冲突关系
-    // TODO: instruction level interference
-
-    // 第二步：构建基于活跃变量分析的冲突边
+    // 构建基于活跃变量分析的冲突边
     for (auto& bb : *function) {
         const LivenessInfo& info = livenessInfo[bb.get()];
         std::unordered_set<unsigned> live = info.liveOut;
@@ -366,7 +366,7 @@ std::vector<unsigned> RegAllocChaitin::getSimplificationOrder() {
                 if (removed.find(neighbor) == removed.end() &&
                     !interferenceGraph[neighbor]->isPrecolored) {
                     // 更新邻居的度数
-                    invalidateDegreeCache(neighbor);
+                    degreeCache[neighbor]--;
                     int deg = getCachedDegree(neighbor);
                     // 如果邻居的度数现在小于K，加入工作列表
                     if (deg < static_cast<int>(availableRegs.size())) {
@@ -383,6 +383,7 @@ std::vector<unsigned> RegAllocChaitin::getSimplificationOrder() {
     for (auto& [regNum, node] : interferenceGraph) {
         if (removed.find(regNum) == removed.end() && !node->isPrecolored) {
             if (!ABI::isReservedReg(regNum, assigningFloat)) {
+                std::cout << "Spill reg " << regNum << " with degree " << getCachedDegree(regNum) << std::endl; 
                 spilledRegs.insert(regNum);
             } else {
                 std::cerr
@@ -1081,14 +1082,9 @@ bool RegAllocChaitin::canCoalesceWithABI(unsigned src, unsigned dst) const {
 
     // 如果其中一个是物理寄存器，检查ABI约束
     if (isPhysicalReg(src) || isPhysicalReg(dst)) {
-        // 调用者保存和被调用者保存寄存器不能合并
+        // 物理寄存器不能合并
         if (isPhysicalReg(src) && isPhysicalReg(dst)) {
-            if (ABI::isCallerSaved(src, assigningFloat) &&
-                ABI::isCalleeSaved(dst, assigningFloat))
-                return false;
-            if (ABI::isCalleeSaved(src, assigningFloat) &&
-                ABI::isCallerSaved(dst, assigningFloat))
-                return false;
+            return false;
         }
 
         // 检查函数调用边界
@@ -1459,9 +1455,6 @@ void RegAllocChaitin::initializeABIConstraints() {
             availableRegs.push_back(reg);
         }
     }
-
-    // 根据函数特征设置特定约束
-    setFunctionSpecificConstraints();
 }
 
 void RegAllocChaitin::setFunctionSpecificConstraints() {
@@ -1511,36 +1504,31 @@ void RegAllocChaitin::setParameterConstraints() {
 
                 if (ABI::isArgumentReg(srcReg, assigningFloat) &&
                     !isPhysicalReg(dstReg)) {
-                    // 强制约束：参数虚拟寄存器必须分配到对应的参数物理寄存器
-                    // addStrongPhysicalConstraint(dstReg, srcReg);
+                    // 强制约束：参数虚拟寄存器不能分配到其他的参数物理寄存器
+
+                    addPhysicalConstraint(dstReg, srcReg);
+                    if (assigningFloat) {
+                        for (unsigned reg = 42; reg <= 49; reg++) {
+                            if (reg != srcReg) {
+                                addInterference(dstReg, reg);
+                            }
+                        }
+                    } else {
+                        for (unsigned reg = 10; reg <= 17; reg++) {
+                            if (reg != srcReg) {
+                                addInterference(dstReg, reg);
+                            }
+                        }
+                    }
                     paramToVirtual[srcReg] = dstReg;
                 }
             }
         }
         if (++paramIndex > 8) break;  // 只处理前8个参数
-        // TODO: maybe 16
-        // TODO: maybe useless code
     }
 
     // 确保未被虚拟寄存器接管的参数寄存器不被分配给其他虚拟寄存器
-    // a0-a7 fa0-fa7
-    if (assigningFloat) {
-        // fa0-fa7 -> 42-49
-        for (unsigned paramReg = 42; paramReg <= 49; ++paramReg) {
-            if (usedParamRegs.count(paramReg) &&
-                !paramToVirtual.count(paramReg)) {
-                addReservedPhysicalReg(paramReg);
-            }
-        }
-    } else {
-        // a0-a7 -> 10-17
-        for (unsigned paramReg = 10; paramReg <= 17; ++paramReg) {
-            if (usedParamRegs.count(paramReg) &&
-                !paramToVirtual.count(paramReg)) {
-                addReservedPhysicalReg(paramReg);
-            }
-        }
-    }
+    // 但事实上指令选择部分都接管了
 }
 
 void RegAllocChaitin::setReturnValueConstraints() {
@@ -1630,7 +1618,7 @@ void RegAllocChaitin::setPreCallConstraints(BasicBlock* bb,
     int paramCount = 0;
 
     for (auto it = std::make_reverse_iterator(callIt);
-         it != bb->rend() && paramCount < 16; ++it) {
+         it != bb->rend() && paramCount < 8; ++it) {
         Instruction* inst = it->get();
         auto definedRegs = getDefinedRegs(inst);
 
