@@ -34,7 +34,7 @@ std::string RegisterOperand::toString(bool use_abi) const {
         }
         return "f" + std::to_string(regNum);
     }
-    if (isVirtual()) {
+    if (isVirtual() || regNum > 64) {
         return "%vreg_" + std::to_string(regNum);
     }
     if (use_abi) {
