@@ -4,6 +4,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "Instructions/MachineOperand.h"
+
 // Forward declarations
 namespace midend {
 class Value;
@@ -96,6 +98,8 @@ class ValueReusePass {
 
    private:
     PassStatistics stats_;
+
+    std::unordered_map<MachineOperand*, RegisterOperand*> availableValuesMap;
 };
 
 }  // namespace riscv64

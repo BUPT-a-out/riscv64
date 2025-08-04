@@ -23,8 +23,145 @@ bool ValueReusePass::runOnFunction(
 
     std::cout << "ValueReusePass: Analyzing function "
               << riscv_function->getName()
-              << " with advanced dominator tree-based optimization"
-              << std::endl;
+              << " with LI+LA optimization for debugging" << std::endl;
+
+    bool changed = false;
+    int optimizationCount = 0;
+
+    // Simple optimization: handle immediate values (LI) and addresses (LA)
+    // within the same basic block, careful about register lifetime
+    for (auto& basic_block : *riscv_function) {
+        std::unordered_map<int64_t, RegisterOperand*> localImmediateMap;
+        std::unordered_map<std::string, RegisterOperand*> localAddressMap;
+        std::unordered_set<std::string>
+            invalidatedRegs;  // Track registers that get overwritten
+
+        for (auto it = basic_block->begin(); it != basic_block->end(); ++it) {
+            auto& instruction = *it;
+
+            // Track register invalidation - if this instruction writes to a
+            // register, remove all value mappings using that register
+            if (!instruction->getOperands().empty()) {
+                auto* destReg = dynamic_cast<RegisterOperand*>(
+                    instruction->getOperands()[0].get());
+                if (destReg != nullptr) {
+                    unsigned destRegNum = destReg->getRegNum();
+
+                    // Remove this register from all mappings
+                    for (auto mapIt = localImmediateMap.begin();
+                         mapIt != localImmediateMap.end();) {
+                        if (mapIt->second->getRegNum() == destRegNum) {
+                            mapIt = localImmediateMap.erase(mapIt);
+                        } else {
+                            ++mapIt;
+                        }
+                    }
+                    for (auto mapIt = localAddressMap.begin();
+                         mapIt != localAddressMap.end();) {
+                        if (mapIt->second->getRegNum() == destRegNum) {
+                            mapIt = localAddressMap.erase(mapIt);
+                        } else {
+                            ++mapIt;
+                        }
+                    }
+                }
+            }
+
+            if (instruction->getOpcode() == Opcode::LI) {
+                // Handle LI instruction
+                if (instruction->getOperands().size() >= 2) {
+                    auto* destReg = dynamic_cast<RegisterOperand*>(
+                        instruction->getOperands()[0].get());
+                    auto* immediateOp = dynamic_cast<ImmediateOperand*>(
+                        instruction->getOperands()[1].get());
+
+                    if (destReg != nullptr && immediateOp != nullptr) {
+                        int64_t immediateValue = immediateOp->getValue();
+
+                        // Check if we already have this immediate value in a
+                        // register
+                        if (localImmediateMap.find(immediateValue) !=
+                            localImmediateMap.end()) {
+                            RegisterOperand* existingReg =
+                                localImmediateMap[immediateValue];
+
+                            // Replace LI with MV instruction
+                            auto mvInstruction =
+                                std::make_unique<Instruction>(Opcode::MV);
+                            mvInstruction->addOperand(
+                                std::make_unique<RegisterOperand>(*destReg));
+                            mvInstruction->addOperand(
+                                std::make_unique<RegisterOperand>(
+                                    *existingReg));
+
+                            // Replace the instruction
+                            it = basic_block->erase(it);
+                            it = basic_block->insert(it,
+                                                     std::move(mvInstruction));
+
+                            optimizationCount++;
+                            changed = true;
+
+                            std::cout << "Replaced LI " << immediateValue
+                                      << " with MV (reusing register)"
+                                      << std::endl;
+                        } else {
+                            // Record this immediate value and its register
+                            localImmediateMap[immediateValue] = destReg;
+                        }
+                    }
+                }
+            } else if (instruction->getOpcode() == Opcode::LA) {
+                // Handle LA instruction - similar to LI but for addresses
+                if (instruction->getOperands().size() >= 2) {
+                    auto* destReg = dynamic_cast<RegisterOperand*>(
+                        instruction->getOperands()[0].get());
+                    auto* labelOp = dynamic_cast<LabelOperand*>(
+                        instruction->getOperands()[1].get());
+
+                    if (destReg != nullptr && labelOp != nullptr) {
+                        std::string labelName = labelOp->getLabelName();
+
+                        // Check if we already have this address in a register
+                        if (localAddressMap.find(labelName) !=
+                            localAddressMap.end()) {
+                            RegisterOperand* existingReg =
+                                localAddressMap[labelName];
+
+                            // Replace LA with MV instruction
+                            auto mvInstruction =
+                                std::make_unique<Instruction>(Opcode::MV);
+                            mvInstruction->addOperand(
+                                std::make_unique<RegisterOperand>(*destReg));
+                            mvInstruction->addOperand(
+                                std::make_unique<RegisterOperand>(
+                                    *existingReg));
+
+                            // Replace the instruction
+                            it = basic_block->erase(it);
+                            it = basic_block->insert(it,
+                                                     std::move(mvInstruction));
+
+                            optimizationCount++;
+                            changed = true;
+
+                            std::cout << "Replaced LA " << labelName
+                                      << " with MV (reusing register)"
+                                      << std::endl;
+                        } else {
+                            // Record this address and its register
+                            localAddressMap[labelName] = destReg;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    std::cout << "ValueReusePass applied " << optimizationCount
+              << " optimizations (LI+LA to MV)" << std::endl;
+
+    return changed;
 
     // Get or compute dominance information for the midend function
     const midend::DominanceInfo* dominanceInfo = nullptr;
@@ -124,6 +261,8 @@ bool ValueReusePass::traverseDominatorTree(
                   << std::endl;
         return false;
     }
+
+    std::unordered_map<MachineOperand*, RegisterOperand*> availableValuesMap;
 
     // Cast to the actual DominatorTree::Node type
     using NodeType = midend::DominatorTreeBase<false>::Node;
@@ -342,36 +481,79 @@ bool ValueReusePass::processInstruction(
                         }
                     }
 
-                    // 创建地址的规范化标识符
+                    // 创建地址的规范化标识符，用作valueMap的key
                     std::string canonicalAddr = "addr:" + addressTarget;
                     std::cout
                         << "          Address canonical: " << canonicalAddr
                         << std::endl;
 
+                    // 创建一个虚拟的midend::Value指针作为地址标识符
+                    static std::unordered_map<std::string,
+                                              std::unique_ptr<char>>
+                        addressKeyMap;
+                    if (addressKeyMap.find(canonicalAddr) ==
+                        addressKeyMap.end()) {
+                        addressKeyMap[canonicalAddr] =
+                            std::make_unique<char>('\0');
+                    }
+                    const midend::Value* addressKey =
+                        reinterpret_cast<const midend::Value*>(
+                            addressKeyMap[canonicalAddr].get());
+
                     // 查找是否有相同地址已经被加载到寄存器
-                    // 这里需要一个特殊的映射方式，因为地址不直接对应 midend
-                    // value 暂时使用简化的处理
-                    static std::unordered_map<std::string, RegisterOperand*>
-                        addressMap;
-                    auto addressIter = addressMap.find(canonicalAddr);
-                    if (addressIter != addressMap.end() &&
-                        addressIter->second != nullptr) {
-                        RegisterOperand* existing_reg = addressIter->second;
+                    auto valueMapIter = valueMap.find(addressKey);
+                    if (valueMapIter != valueMap.end() &&
+                        valueMapIter->second != nullptr) {
+                        RegisterOperand* existing_reg = valueMapIter->second;
                         if (existing_reg->getRegNum() !=
                             dest_reg->getRegNum()) {
                             std::cout << "          OPTIMIZATION: Found "
                                          "existing register "
                                       << existing_reg->getRegNum()
                                       << " with same address " << canonicalAddr
-                                      << ", could reuse for reg"
+                                      << ", replacing with mv for reg"
                                       << dest_reg->getRegNum() << std::endl;
                             stats_.optimizationOpportunities++;
                             stats_.virtualRegsReused++;
+
+                            // 保存寄存器号在清空操作数之前
+                            unsigned int dest_reg_num = dest_reg->getRegNum();
+                            unsigned int existing_reg_num =
+                                existing_reg->getRegNum();
+
+                            // 实际应用优化：将 LA 指令替换为 MV 指令
+                            inst->setOpcode(MV);
+                            inst->clearOperands();
+                            auto dest_operand =
+                                std::make_unique<RegisterOperand>(
+                                    dest_reg_num, false, RegisterType::Integer);
+                            auto source_operand =
+                                std::make_unique<RegisterOperand>(
+                                    existing_reg_num, false,
+                                    RegisterType::Integer);
+                            inst->addOperand(std::move(dest_operand));
+                            inst->addOperand(std::move(source_operand));
+
+                            std::cout << "          Applied optimization: MV r"
+                                      << dest_reg_num << ", r"
+                                      << existing_reg_num << std::endl;
+
+                            // 记录当前定义 - 使用新创建的dest_operand
+                            // 注意：不要使用原来的dest_reg，因为指令已经被修改
+                            valueMap[addressKey] =
+                                dynamic_cast<RegisterOperand*>(
+                                    inst->getOperands()[0].get());
+                            definitionsInThisBlock.push_back(addressKey);
+                            return true;
                         }
                     }
 
                     // 记录当前地址映射
-                    addressMap[canonicalAddr] = dest_reg;
+                    valueMap[addressKey] = dest_reg;
+                    definitionsInThisBlock.push_back(addressKey);
+                    std::cout << "          Recording address " << canonicalAddr
+                              << " in reg" << dest_reg->getRegNum()
+                              << std::endl;
                 }
             }
             break;
@@ -686,19 +868,30 @@ void ValueReusePass::resetState() {
 void ValueReusePass::invalidateMemoryValues(
     std::unordered_map<const midend::Value*, RegisterOperand*>& valueMap,
     std::vector<const midend::Value*>& definitionsInThisBlock) {
-    // For conservativeness, we could invalidate all memory-related values
-    // For simplicity in this implementation, we'll be very conservative
-    // and invalidate everything
+    // Store和Call指令会使内存相关的值失效
+    // 我们需要保守地清除所有可能受影响的值
 
-    std::cout << "        Conservative invalidation of " << valueMap.size()
-              << " tracked values" << std::endl;
+    std::vector<const midend::Value*> toInvalidate;
 
-    // Track what we're invalidating for potential backtracking
+    // 识别需要失效的值（地址加载、内存加载等）
     for (const auto& pair : valueMap) {
-        definitionsInThisBlock.push_back(pair.first);
+        const midend::Value* key = pair.first;
+        // 检查是否是我们创建的特殊键（地址或内存加载）
+        // 由于我们使用了伪造的指针，这里做简单的范围检查
+        if (key != nullptr) {
+            toInvalidate.push_back(key);
+        }
     }
 
-    valueMap.clear();
+    std::cout << "        Conservative invalidation of " << toInvalidate.size()
+              << " tracked values" << std::endl;
+
+    // 移除失效的值，但不要添加到definitionsInThisBlock
+    // 因为这些不是在当前块中定义的新值
+    for (const auto* key : toInvalidate) {
+        valueMap.erase(key);
+    }
+
     stats_.invalidations++;
 }
 
