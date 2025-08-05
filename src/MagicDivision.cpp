@@ -71,9 +71,6 @@ auto MagicDivision::computeMagicConstants(int32_t divisor) -> MagicConstants {
     } while (true);
 
     auto magic = static_cast<int64_t>(quotient2 + 1);
-    if (divisor < 0) {
-        magic = -magic;
-    }
 
     return {magic, precision - SHIFT_32_BITS, magic < 0};
 }
