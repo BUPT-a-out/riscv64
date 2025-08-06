@@ -4,7 +4,6 @@
 #include <unordered_map>
 
 #include "FloatConstantPool.h"
-#include "FrameIndexPass.h"
 #include "IR/Module.h"
 #include "Instructions/MachineOperand.h"
 #include "Visit.h"
@@ -38,11 +37,17 @@ class CodeGenerator {
                                    bool is_virtual = false);
     RegisterOperand* mapValueToReg(const midend::Value* val, unsigned reg_num,
                                    bool is_virtual, RegisterType reg_type);
+
+    // TODO: 这个方法有用吗?
     LabelOperand* mapBBToLabel(const midend::BasicBlock* bb,
                                const std::string& label);
+
     RegisterOperand* getRegForValue(const midend::Value* val) const;
+
+    // TODO: 这个方法有用吗?
     LabelOperand* getLabelForBB(const midend::BasicBlock* bb) const;
-    int getNextRegNum() { return nextRegNum_++; }
+
+    // TODO: private
     int getNextLabelNum() { return nextLabelNum_++; }
     void reset();
 
@@ -59,12 +64,6 @@ class CodeGenerator {
     }
 
     std::unique_ptr<Visitor> visitor_;
-
-    // 运行栈帧布局Pass
-    void runFrameIndexPass(Function* func) {
-        FrameIndexPass framePass(func);
-        framePass.run();
-    }
 
     // 清理函数级别的映射（保留全局变量映射）
     void clearFunctionLevelMappings() { valueToReg_.clear(); }

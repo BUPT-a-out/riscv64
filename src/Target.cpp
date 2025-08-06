@@ -3,7 +3,6 @@
 #include "BasicBlockReordering.h"
 #include "CodeGen.h"
 #include "FrameIndexElimination.h"
-#include "FrameIndexPass.h"
 #include "IR/Function.h"
 #include "RegAllocChaitin.h"
 #include "ValueReusePass.h"
