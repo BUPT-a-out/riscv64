@@ -8,12 +8,14 @@
 #include <vector>
 
 #include "BasicBlock.h"
+// #include "Module.h"
 #include "StackFrameManager.h"
 
 namespace riscv64 {
 
 class StackFrameManager;     // 前向声明
 class BasicBlockReordering;  // 前向声明
+class Module;  // 前向声明
 
 class Function {
    public:
@@ -23,6 +25,11 @@ class Function {
     explicit Function(std::string name)
         : name(std::move(name)),
           stackFrameManager_(std::make_unique<StackFrameManager>(this)) {}
+    
+    explicit Function(std::string name, Module* parent_module)
+        : name(std::move(name)),
+          stackFrameManager_(std::make_unique<StackFrameManager>(this)),
+          parent_module_(parent_module) {}
 
     void addBasicBlock(std::unique_ptr<BasicBlock> block) {
         basic_blocks.push_back(std::move(block));
@@ -124,6 +131,8 @@ class Function {
         return M;
     }
 
+    Module* getParentModule() const { return parent_module_; }
+
     std::string toString() const;
 
    private:
@@ -131,6 +140,7 @@ class Function {
     std::vector<std::unique_ptr<BasicBlock>> basic_blocks;
     std::unique_ptr<StackFrameManager> stackFrameManager_;
     std::unordered_map<const midend::BasicBlock*, BasicBlock*> bbMap_;
+    Module* parent_module_ = nullptr;  // 指向父模块的指针
 };
 
 }  // namespace riscv64

@@ -260,13 +260,43 @@ auto ValueReusePass::modifyInstruction(
         case Opcode::LW:
         case Opcode::LD:
         case Opcode::FLW: {
-        }
+        } break;
         case Opcode::SW:
         case Opcode::SD:
         case Opcode::FSW: {
-        }
+        } break;
         case Opcode::CALL: {
-        }
+            // 如果有副作用，则使缓存的值失效
+            std::cout << "  Processing call instruction: " << inst->toString()
+                      << std::endl;
+            stats_.callsProcessed++;
+
+            // TODO(rikka): 调用中端 API 判断是否有副作用
+            // 这里假设所有调用都有副作用
+            auto func_name = *dynamic_cast<LabelOperand*>(inst->getOperand(0));
+            auto* riscv_func = inst->getParent()->getParent();
+            auto* midend_func = riscv_func->getParentModule()->getMidendFunction(func_name.getLabelName());
+            if (midend_func == nullptr) {
+                std::cout << "  Warning: midend function not found for call "
+                          << func_name.getLabelName() << std::endl;
+                // return false;
+            }
+            
+            // if (midend_func.hasSideEffects()) {
+            //     std::cout << "  Function " << midend_func->getName()
+            //               << " has side effects, invalidating cached values"
+            //               << std::endl;
+            // } else {
+            //     std::cout << "  Function " << midend_func->getName()
+            //               << " has no side effects, keeping cached values"
+            //               << std::endl;
+            // }
+            stats_.invalidations++;
+            valueMap.clear();                // 清空缓存的值
+            definitionsInThisBlock.clear();  // 清空当前块的定义
+            std::cout << "  Invalidating all cached values due to call"
+                      << std::endl;
+        } break;
         default: {
             // 对于其他指令，直接返回 nullptr，表示没有修改
             return false;

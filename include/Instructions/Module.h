@@ -76,6 +76,20 @@ class Module {
         }
     }
 
+    // 函数映射相关
+    void addMidendFunctionMapping(const std::string& name,
+                                  midend::Function* midend_func) {
+        nameToMidendFunctionMap_[name] = midend_func;
+    }
+
+    midend::Function* getMidendFunction(const std::string& name) const {
+        auto it = nameToMidendFunctionMap_.find(name);
+        if (it != nameToMidendFunctionMap_.end()) {
+            return it->second;
+        }
+        return nullptr;  // 如果没有找到，返回 nullptr
+    }
+
     std::string toString() const;
 
    private:
@@ -84,6 +98,8 @@ class Module {
     DataSegment rodata_segment_;
     DataSegment data_segment_;
     DataSegment bss_segment_;
+
+    std::unordered_map<std::string, midend::Function*> nameToMidendFunctionMap_;
 };
 
 }  // namespace riscv64

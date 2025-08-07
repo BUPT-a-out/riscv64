@@ -32,6 +32,7 @@ Module Visitor::visit(const midend::Module* module) {
     }
     for (auto* const func : *module) {
         if (func->isDefinition()) {
+            riscv_module.addMidendFunctionMapping(func->getName(), func);
             visit(func, &riscv_module);
         }
     }
@@ -45,7 +46,7 @@ void Visitor::visit(const midend::Function* func, Module* parent_module) {
     codeGen_->clearFunctionLevelMappings();
 
     // 其他操作...
-    auto riscv_func = std::make_unique<Function>(func->getName());
+    auto riscv_func = std::make_unique<Function>(func->getName(), parent_module);
     auto* func_ptr = riscv_func.get();
     parent_module->addFunction(std::move(riscv_func));
 
