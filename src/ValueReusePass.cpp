@@ -281,14 +281,14 @@ auto ValueReusePass::modifyInstruction(
 
             // TODO(rikka): 调用中端 API 判断是否有副作用
             // 这里假设所有调用都有副作用
-            auto func_name = *dynamic_cast<LabelOperand*>(inst->getOperand(0));
-            auto* riscv_func = inst->getParent()->getParent();
-            auto* midend_func = riscv_func->getParentModule()->getMidendFunction(func_name.getLabelName());
-            if (midend_func == nullptr) {
-                std::cout << "  Warning: midend function not found for call "
-                          << func_name.getLabelName() << std::endl;
-                // return false;
-            }
+            // auto func_name = *dynamic_cast<LabelOperand*>(inst->getOperand(0));
+            // auto* riscv_func = inst->getParent()->getParent();
+            // auto* midend_func = riscv_func->getParentModule()->getMidendFunction(func_name.getLabelName());
+            // if (midend_func == nullptr) {
+            //     std::cout << "  Warning: midend function not found for call "
+            //               << func_name.getLabelName() << std::endl;
+            //     // return false;
+            // }
             
             // if (midend_func.hasSideEffects()) {
             //     std::cout << "  Function " << midend_func->getName()
