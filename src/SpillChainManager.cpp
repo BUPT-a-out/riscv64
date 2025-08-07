@@ -8,8 +8,8 @@
 
 namespace riscv64 {
 
-SpillChainManager::SpillChainManager(unsigned tempRegCounter, bool isFloat)
-    : isFloat(isFloat), tempRegCounter(tempRegCounter) {
+SpillChainManager::SpillChainManager(bool isFloat)
+    : isFloat(isFloat) {
     // 初始化临时寄存器优先级顺序
 
     // 整数优先使用临时寄存器 t0-t6

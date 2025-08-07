@@ -4550,6 +4550,7 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
 }
 
 // 访问常量
+// TODO: 还有用吗
 void Visitor::visit(const midend::Constant* /*constant*/) {}
 
 // 辅助函数：转换LLVM类型到CompilerType
