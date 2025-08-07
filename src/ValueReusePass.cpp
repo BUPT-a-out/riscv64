@@ -264,6 +264,14 @@ auto ValueReusePass::modifyInstruction(
         case Opcode::SW:
         case Opcode::SD:
         case Opcode::FSW: {
+            std::cout << "  Processing store instruction: "
+                      << inst->toString() << std::endl;
+            stats_.storesProcessed++;
+            stats_.invalidations++;
+            valueMap.clear();                // 清空缓存的值
+            definitionsInThisBlock.clear();  // 清空当前块的定义
+            std::cout << "  Invalidating all cached values due to store"
+                      << std::endl;
         } break;
         case Opcode::CALL: {
             // 如果有副作用，则使缓存的值失效
