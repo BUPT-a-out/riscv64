@@ -1237,7 +1237,7 @@ void Visitor::generateParallelCopyForEdge(
             auto value_int = const_int->getSignedValue();
             src_operand = std::make_unique<ImmediateOperand>(value_int);
             is_constant = true;
-        } else if (auto* const_float =
+        } else if (const auto* const_float =
                        midend::dyn_cast<midend::ConstantFP>(incoming_value)) {
             // 处理浮点常量
             auto float_val = const_float->getValue();
@@ -1248,6 +1248,49 @@ void Visitor::generateParallelCopyForEdge(
             converter.f = float_val;
             src_operand = std::make_unique<ImmediateOperand>(converter.i);
             is_constant = true;
+        } else if (const auto* alloca_inst =
+                       midend::dyn_cast<midend::AllocaInst>(incoming_value)) {
+            // 显式处理 AllocaInst
+            // 当 PHI 节点的来源是一个栈分配的地址时，我们必须生成指令来加载它。
+
+            // 获取此 AllocaInst 对应的FrameIndex。
+            // 这需要你的 CodeGen 在处理 AllocaInst 时已经存储了这个映射。
+            // int frame_index = codeGen_->getFrameIndexFor(AI);
+            auto* sfm = parent_func->getStackFrameManager();
+            int existing_id = sfm->getAllocaStackSlotId(alloca_inst);
+            if (existing_id == -1) {
+                // 未分配过
+                throw std::runtime_error(
+                    "AllocaInst not found in stack frame manager: " +
+                    alloca_inst->toString());
+            }
+            int frame_index = existing_id;
+
+            // 2. 为这个地址分配一个临时的虚拟寄存器。
+            auto temp_addr_reg = codeGen_->allocateReg();
+
+            // 3. 创建并插入 FRAME_ADDR 伪指令。
+            //    该指令将在后续阶段被转换为 `addi rd, s0, offset`。
+            auto frameaddr_inst =
+                std::make_unique<Instruction>(Opcode::FRAMEADDR, pred_bb);
+
+            // 操作数1: 目标寄存器 (我们新分配的临时寄存器)
+            frameaddr_inst->addOperand(std::make_unique<RegisterOperand>(
+                temp_addr_reg->getRegNum(), temp_addr_reg->isVirtual(),
+                RegisterType::Integer));
+
+            // 操作数2: 源 (使用你的 FrameIndexOperand)
+            frameaddr_inst->addOperand(
+                std::make_unique<FrameIndexOperand>(frame_index));
+
+            // 将指令插入到前驱块的终结符之前
+            pred_bb->insert(insert_pos, std::move(frameaddr_inst));
+
+            // 4. 现在，并行拷贝的源操作数就是这个刚刚被填充了地址的临时寄存器。
+            src_operand = std::make_unique<RegisterOperand>(
+                temp_addr_reg->getRegNum(), temp_addr_reg->isVirtual(),
+                RegisterType::Integer);
+            is_constant = false;
         } else {
             // 处理寄存器操作数
             auto temp_bb = std::make_unique<BasicBlock>(pred_bb->getParent(),
