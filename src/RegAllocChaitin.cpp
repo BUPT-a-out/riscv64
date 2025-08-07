@@ -17,8 +17,7 @@ namespace riscv64 {
 void RegAllocChaitin::run() {
     initializeABIConstraints();
 
-    spillChainManager = std::make_unique<SpillChainManager>(
-        function->getMaxRegNum() + 100, assigningFloat);
+    spillChainManager = std::make_unique<SpillChainManager>(assigningFloat);
 
     allocateRegisters();
 }

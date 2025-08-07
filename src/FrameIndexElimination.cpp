@@ -34,7 +34,6 @@ void FrameIndexElimination::computeFinalFrameLayout() {
 
 // 低地址端
 
-// TODO: compute float
 void FrameIndexElimination::assignFinalOffsets() {
     // 计算保存寄存器需要的空间
     int savedRegSize = calculateSavedRegisterSize();
@@ -52,15 +51,13 @@ void FrameIndexElimination::assignFinalOffsets() {
         }
     }
 
-    // 计算调用参数所需的栈空间
-    // 这个计算很令人迷惑.
-    int callArgSize = calculateMaxCallArgSize();
+    // 计算调用参数在s0正偏移, 不计算在内
 
-    // 计算总栈帧大小：基础保存寄存器 + 局部变量 + 溢出寄存器 + 调用参数 +
+    // 计算总栈帧大小：基础保存寄存器 + 局部变量 + 溢出寄存器 +
     // 安全空间 重要修复：增加安全空间到总栈帧大小计算中
     int safetySpace = 16;  // 额外的安全空间，确保所有栈对象都在栈帧范围内
     int totalSize =
-        savedRegSize + localVarSize + spillSize + callArgSize + safetySpace;
+        savedRegSize + localVarSize + spillSize + safetySpace;
     layout.totalFrameSize = alignTo(totalSize, 16);  // 16字节对齐
 
     // 计算各区域偏移
@@ -73,8 +70,6 @@ void FrameIndexElimination::assignFinalOffsets() {
     layout.framePointerOffset = layout.totalFrameSize - 16;  // s0
 
     // 其实这两个变量也完全没用到
-    // layout.localVariableAreaOffset = 0;
-    // layout.spillAreaOffset = -localVarSize;
 
     // 为每个Frame Index分配具体偏移 (相对于s0)
     // 重要修复：确保所有栈对象都在安全的内存区域

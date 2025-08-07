@@ -23,8 +23,6 @@ class FrameIndexElimination {
         int totalFrameSize = 0;
         int returnAddressOffset = 0;      // ra相对于sp的偏移
         int framePointerOffset = 0;       // s0相对于sp的偏移
-        int localVariableAreaOffset = 0;  // 局部变量区相对于s0的偏移
-        int spillAreaOffset = 0;          // 溢出区相对于s0的偏移
 
         // FI到最终偏移的映射(相对于s0/fp)
         std::unordered_map<int, int> frameIndexToOffset;

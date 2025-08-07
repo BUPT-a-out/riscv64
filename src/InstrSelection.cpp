@@ -55,6 +55,7 @@ RegisterOperand* CodeGenerator::getRegForValue(const midend::Value* val) const {
                              val->getName());
 }
 
+// TODO: unused
 LabelOperand* CodeGenerator::getLabelForBB(const midend::BasicBlock* bb) const {
     auto it = bbToLabel_.find(bb);
     if (it != bbToLabel_.end()) {
@@ -67,6 +68,7 @@ LabelOperand* CodeGenerator::getLabelForBB(const midend::BasicBlock* bb) const {
 void CodeGenerator::reset() {
     valueToReg_.clear();  // 智能指针会自动释放内存
     bbToLabel_.clear();   // 智能指针会自动释放内存
+    // TODO: 设置值正确吗
     nextRegNum_ = 0;
     nextLabelNum_ = 0;
 }

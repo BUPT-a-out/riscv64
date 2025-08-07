@@ -46,10 +46,14 @@ void Visitor::visit(const midend::Function* func, Module* parent_module) {
     codeGen_->clearFunctionLevelMappings();
 
     // 其他操作...
-    auto riscv_func = std::make_unique<Function>(func->getName(), parent_module);
+    // create rv-function
+    // TODO: extract function
+    auto riscv_func = std::make_unique<Function>(func->getName());
     auto* func_ptr = riscv_func.get();
     parent_module->addFunction(std::move(riscv_func));
 
+    // create BB
+    // TODO: extract function
     for (const auto& bb : *func) {
         // codeGen_->mapBBToLabel(bb, bb->getName());
         auto new_riscv_bb =
@@ -59,6 +63,8 @@ void Visitor::visit(const midend::Function* func, Module* parent_module) {
         func_ptr->mapBasicBlock(bb, bb_ptr);
     }
 
+    // process args
+    // TODO: extract function
     // 第二阶段：在第一个基本块开头处理所有函数参数
     auto first_bb_iter = func->begin();
     if (first_bb_iter != func->end()) {
@@ -89,6 +95,7 @@ void Visitor::visit(const midend::Function* func, Module* parent_module) {
                     new_reg->getRegNum(), new_reg->isVirtual(),
                     is_float_arg ? RegisterType::Float : RegisterType::Integer);
 
+                // TODO: 用continue减少嵌套层次
                 if (is_float_arg) {
                     // 浮点参数的处理
                     auto* source_reg_operand =
@@ -135,6 +142,8 @@ void Visitor::visit(const midend::Function* func, Module* parent_module) {
 
     // 此时 func_ptr 已经包含了所有基本块，开始维护 CFG
     createCFG(func_ptr);
+
+    // TODO: extract function
     // 调试：打印出 CFG 信息
     std::cout << "Function: " << func_ptr->getName() << "\n";
     for (const auto& bb : *func_ptr) {
@@ -166,6 +175,8 @@ void Visitor::createCFG(Function* func) {
         for (const auto& inst : *bb) {
             BasicBlock* successor = nullptr;
             BasicBlock* predecessor = nullptr;
+
+            // TODO: 拆分成三个函数
             switch (inst->getOpcode()) {
                 case Opcode::J: {
                     // 无条件跳转，取第 1 个操作数作为目标基本块
@@ -288,6 +299,7 @@ BasicBlock* Visitor::visit(const midend::BasicBlock* bb,
         if (inst->getOpcode() == midend::Opcode::PHI) {
             // 为PHI节点根据类型分配正确的寄存器
             bool is_float_phi = inst->getType()->isFloatType();
+            // TODO: extract function
             auto phi_reg = is_float_phi ? codeGen_->allocateFloatReg()
                                         : codeGen_->allocateReg();
             codeGen_->mapValueToReg(
@@ -337,7 +349,6 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Instruction* inst,
             break;
         case midend::Opcode::LAnd:
         case midend::Opcode::LOr:
-            // 处理逻辑与和逻辑或操作，需要正确实现短路求值
             return visitLogicalOp(inst, parent_bb);
             break;
         case midend::Opcode::FAdd:
@@ -350,13 +361,11 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Instruction* inst,
         case midend::Opcode::FCmpOLE:
         case midend::Opcode::FCmpOGT:
         case midend::Opcode::FCmpOGE:
-            // 处理浮点算术和比较指令
             return visitFloatBinaryOp(inst, parent_bb);
             break;
         case midend::Opcode::UAdd:
         case midend::Opcode::USub:
         case midend::Opcode::Not:
-            // 处理一元操作指令
             return visitUnaryOp(inst, parent_bb);
             break;
         case midend::Opcode::Load:
@@ -372,7 +381,6 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Instruction* inst,
             visitStoreInst(inst, parent_bb);
             break;
         case midend::Opcode::Ret:
-            // 处理返回指令
             visitRetInstruction(inst, parent_bb);
             break;
         case midend::Opcode::PHI:
@@ -440,6 +448,7 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
             float float_value = imm_operand->getFloatValue();
 
             // 特殊处理浮点零值
+            // TODO: extract function
             if (float_value == 0.0f) {
                 // 分配浮点寄存器
                 auto float_reg = codeGen_->allocateFloatReg();
@@ -576,6 +585,7 @@ std::unique_ptr<RegisterOperand> Visitor::ensureFloatReg(
             is_zero = (imm_operand->getValue() == 0);
         }
 
+        // TODO: extract function
         if (is_zero) {
             // 分配浮点寄存器
             auto float_reg = codeGen_->allocateFloatReg();
@@ -609,6 +619,7 @@ std::unique_ptr<MachineOperand> Visitor::visitCastInst(
         throw std::runtime_error("Not a cast instruction: " + inst->toString());
     }
 
+    // TODO: remove this switch
     switch (cast_inst->getCastOpcode()) {
         case midend::CastInst::Trunc:
         case midend::CastInst::SIToFP:
@@ -723,8 +734,8 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
     const auto* base_ptr = gep_inst->getPointerOperand();
     auto base_addr = visit(base_ptr, parent_bb);
 
+    // TODO: extract function
     std::unique_ptr<RegisterOperand> base_addr_reg;
-
     if (base_addr->getType() == OperandType::FrameIndex) {
         // 处理基于栈帧的地址
         auto get_base_addr_inst =
@@ -800,6 +811,7 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
         auto index_reg = immToReg(std::move(index_operand), parent_bb);
 
         // 计算 index * stride
+        // TODO: extract function: reg calculateOffset(BB parent, reg index_reg, uint stride)
         std::unique_ptr<RegisterOperand> offset_reg;
 
         if (stride == 1) {
@@ -3851,6 +3863,7 @@ std::unique_ptr<MachineOperand> Visitor::visitLogicalOp(
         // 如果左操作数为假，结果已经是0，跳过右操作数
 
         // 生成唯一标签
+        // TODO: extract function
         auto skip_label =
             "logical_and_skip_" + std::to_string(codeGen_->getNextLabelNum());
 
@@ -4086,6 +4099,7 @@ void Visitor::visitRetInstruction(const midend::Instruction* ret_inst,
 }
 
 // 封装 getRegForValue
+// TODO: 修改getRegForValue, 直接返回optional
 std::optional<RegisterOperand*> Visitor::findRegForValue(
     const midend::Value* value) {
     try {
@@ -4136,6 +4150,7 @@ std::unique_ptr<MachineOperand> Visitor::funcArgToReg(
     }
 
     // 前8个参数位置使用寄存器
+    // TODO: 8个整数+8个浮点.
     if (current_arg_position < 8) {
         std::string reg_name;
         if (is_current_float) {
@@ -4180,6 +4195,7 @@ std::unique_ptr<MachineOperand> Visitor::funcArgToReg(
         const auto* arg = arg_iter->get();
         int arg_pos = std::distance(function->arg_begin(), arg_iter);
 
+        // TODO: 修正计算
         if (arg_pos < 8) {
             continue;  // 跳过寄存器参数
         }
@@ -4288,6 +4304,7 @@ void Visitor::generateMemoryInstruction(
     }
 }
 
+// TODO: 拆分函数
 std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
                                                BasicBlock* parent_bb) {
     // 处理值的访问
@@ -4342,6 +4359,7 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
                 global_addr_reg->getRegNum(), global_addr_reg->isVirtual());
         } else {
             // 对于标量类型的全局变量，生成加载指令来获取值
+            // TODO: extract function
             bool is_float_value = global_var->getValueType()->isFloatType();
             auto value_reg = is_float_value ? codeGen_->allocateFloatReg()
                                             : codeGen_->allocateReg();
@@ -4425,6 +4443,7 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
 
         // 正常的整数常量处理
         // 判断范围，是否在 [-2048, 2047] 之间
+        // TODO: 复用isValidImmediateOffset(int64_t offset)
         auto* int_const = midend::cast<midend::ConstantInt>(value);
         auto value_int = int_const->getSignedValue();
         std::cout << "DEBUG: Processing integer constant: " << value_int
@@ -4575,6 +4594,7 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
 }
 
 // 访问常量
+// TODO: 还有用吗
 void Visitor::visit(const midend::Constant* /*constant*/) {}
 
 // 辅助函数：转换LLVM类型到CompilerType
@@ -4629,6 +4649,8 @@ CompilerType Visitor::convertLLVMTypeToCompilerType(
 }
 
 // 辅助函数：转换LLVM初始化器到ConstantInitializer
+// TODO: extract function: init array
+// TODO: use template<typename T, typename ConstantType>
 ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
     const midend::Value* init, const midend::Type* type) {
     std::cout << "Converting initializer: " << init->toString()
@@ -4983,6 +5005,7 @@ void Visitor::visit(const midend::GlobalVariable* global_var,
                 initializer = ZeroInitializer{};
             } else {
                 // 打印非零初始化的详细信息
+                // TODO: extract function
                 std::visit(
                     [&name](const auto& value) {
                         using T = std::decay_t<decltype(value)>;

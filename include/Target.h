@@ -36,10 +36,7 @@ class RISCV64Target {
     // 保留原有方法以兼容
     Module& reorderInstructionsPass(riscv64::Module& module);
     Module& basicBlockSchedulingPass(riscv64::Module& module);
-
-    // 废弃的方法（使用frameIndexEliminationPass代替）
-    [[deprecated("Use frameIndexEliminationPass instead")]] Module&
-    frameIndexPass(riscv64::Module& module);
+    
 };
 
 }  // namespace riscv64
