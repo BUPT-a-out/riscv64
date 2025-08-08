@@ -14,7 +14,7 @@ namespace riscv64 {
 constexpr int INITIAL_PRECISION = 31;
 constexpr int SHIFT_32_BITS = 32;
 constexpr int SIGN_BIT_SHIFT = 31;
-constexpr int VIRTUAL_REG_START = 1000;
+constexpr int VIRTUAL_REG_START = 10000;
 constexpr uint32_t SIGN_BIT_MASK = 0x80000000U;
 
 auto MagicDivision::computeMagicConstants(int32_t divisor) -> MagicConstants {
