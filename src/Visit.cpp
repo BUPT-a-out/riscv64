@@ -65,67 +65,49 @@ void Visitor::visit(const midend::Function* func, Module* parent_module) {
 
     // process args
     // TODO: extract function
-    // 第二阶段：在第一个基本块开头处理所有函数参数
+    // 第二阶段：在第一个基本块开头处理所有函数参数，顺序：先寄存器参数，再栈参数
     auto first_bb_iter = func->begin();
     if (first_bb_iter != func->end()) {
         auto* first_riscv_bb = func_ptr->getBasicBlock(*first_bb_iter);
         if (first_riscv_bb != nullptr) {
-            // 预先为所有参数分配虚拟寄存器并生成转移指令
+            // 1. 先处理前8个参数（寄存器传递）
+            int arg_idx = 0;
             for (auto arg_it = func->arg_begin(); arg_it != func->arg_end();
-                 arg_it++) {
+                 ++arg_it, ++arg_idx) {
+                if (arg_idx >= 8) break;
                 const auto* argument = arg_it->get();
                 bool is_float_arg = argument->getType()->isFloatType();
-
-                // 根据参数类型分配正确的寄存器类型
-                std::unique_ptr<RegisterOperand> new_reg;
-                if (is_float_arg) {
-                    new_reg = codeGen_->allocateFloatReg();
-                } else {
-                    new_reg = codeGen_->allocateReg();
-                }
-
+                std::unique_ptr<RegisterOperand> new_reg =
+                    is_float_arg ? codeGen_->allocateFloatReg()
+                                 : codeGen_->allocateReg();
                 codeGen_->mapValueToReg(argument, new_reg->getRegNum(),
                                         new_reg->isVirtual());
-
-                // 获取参数的源寄存器或栈位置
                 auto source_reg = funcArgToReg(argument, first_riscv_bb);
-
-                // 生成参数转移指令
                 auto dest_reg = std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual(),
                     is_float_arg ? RegisterType::Float : RegisterType::Integer);
-
-                // TODO: 用continue减少嵌套层次
                 if (is_float_arg) {
-                    // 浮点参数的处理
                     auto* source_reg_operand =
                         dynamic_cast<RegisterOperand*>(source_reg.get());
-                    if (source_reg_operand) {
-                        // 如果源是浮点寄存器，使用浮点移动指令
-                        if (source_reg_operand->isFloatRegister()) {
-                            auto fmov_inst = std::make_unique<Instruction>(
-                                Opcode::FMOV_S, first_riscv_bb);
-                            fmov_inst->addOperand(std::move(dest_reg));
-                            fmov_inst->addOperand(std::move(source_reg));
-                            first_riscv_bb->addInstruction(
-                                std::move(fmov_inst));
-                        } else {
-                            // 如果源是整数寄存器（从栈加载），需要特殊处理
-                            storeOperandToReg(std::move(source_reg),
-                                              std::move(dest_reg),
-                                              first_riscv_bb);
-                        }
+                    if (source_reg_operand &&
+                        source_reg_operand->isFloatRegister()) {
+                        auto fmov_inst = std::make_unique<Instruction>(
+                            Opcode::FMOV_S, first_riscv_bb);
+                        fmov_inst->addOperand(std::move(dest_reg));
+                        fmov_inst->addOperand(std::move(source_reg));
+                        first_riscv_bb->addInstruction(std::move(fmov_inst));
                     } else {
-                        // 其他情况（立即数等）
                         storeOperandToReg(std::move(source_reg),
                                           std::move(dest_reg), first_riscv_bb);
                     }
                 } else {
-                    // 整数/指针参数，使用原有逻辑
                     storeOperandToReg(std::move(source_reg),
                                       std::move(dest_reg), first_riscv_bb);
                 }
             }
+            // 2.
+            // 栈参数（第9个及以后）延迟处理：不在此处发射加载指令，改为在首次使用时再加载
+            //    这样可以保证在入口处先完成对寄存器参数的保存，再访问栈参数，避免顺序不一致。
         }
     }
 
@@ -811,7 +793,8 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
         auto index_reg = immToReg(std::move(index_operand), parent_bb);
 
         // 计算 index * stride
-        // TODO: extract function: reg calculateOffset(BB parent, reg index_reg, uint stride)
+        // TODO: extract function: reg calculateOffset(BB parent, reg index_reg,
+        // uint stride)
         std::unique_ptr<RegisterOperand> offset_reg;
 
         if (stride == 1) {
@@ -4330,6 +4313,61 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         return std::make_unique<RegisterOperand>(
             foundReg.value()->getRegNum(), foundReg.value()->isVirtual(),
             is_float_value ? RegisterType::Float : RegisterType::Integer);
+    }
+
+    // 延迟处理：如果是函数参数，且尚无映射，根据其位置决定从寄存器或栈获取
+    if (auto* arg = midend::dyn_cast<midend::Argument>(value)) {
+        auto* function = arg->getParent();
+        int arg_pos = 0;
+        for (auto it = function->arg_begin(); it != function->arg_end();
+             ++it, ++arg_pos) {
+            if (it->get() == arg) break;
+        }
+
+        bool is_float = arg->getType()->isFloatType();
+        if (arg_pos < 8) {
+            // 物理寄存器传参：直接返回物理寄存器操作数（如果之前未映射）
+            std::string reg_name = is_float ? ("fa" + std::to_string(arg_pos))
+                                            : ("a" + std::to_string(arg_pos));
+            unsigned reg_num = ABI::getRegNumFromABIName(reg_name);
+            return std::make_unique<RegisterOperand>(
+                reg_num, false,
+                is_float ? RegisterType::Float : RegisterType::Integer);
+        } else {
+            // 栈传参：在首次使用时加载
+            // 计算此参数在调用者栈帧中的偏移（按8字节对齐累积）
+            auto getArgSize = [](const midend::Type* ty) -> size_t {
+                if (ty->isIntegerType() || ty->isFloatType()) return 4;
+                if (ty->isPointerType()) return 8;
+                return 4;
+            };
+            int64_t arg_offset = 0;
+            for (auto it = function->arg_begin(); it != function->arg_end();
+                 ++it) {
+                const auto* a = it->get();
+                int pos = std::distance(function->arg_begin(), it);
+                if (pos < 8) continue;
+                if (a == arg) break;
+                size_t sz = getArgSize(a->getType());
+                arg_offset += (sz + 7) & ~7;
+            }
+
+            // 为该参数分配一个虚拟寄存器并加载
+            auto vreg = is_float ? codeGen_->allocateFloatReg()
+                                 : codeGen_->allocateReg();
+            Opcode load_op = is_float ? Opcode::FLW : Opcode::LW;
+            generateMemoryInstruction(
+                load_op,
+                std::make_unique<RegisterOperand>(
+                    vreg->getRegNum(), vreg->isVirtual(),
+                    is_float ? RegisterType::Float : RegisterType::Integer),
+                std::make_unique<RegisterOperand>("s0"), arg_offset, parent_bb);
+            // 建立映射，后续可直接复用
+            codeGen_->mapValueToReg(arg, vreg->getRegNum(), vreg->isVirtual());
+            return std::make_unique<RegisterOperand>(
+                vreg->getRegNum(), vreg->isVirtual(),
+                is_float ? RegisterType::Float : RegisterType::Integer);
+        }
     }
 
     // 检查是否是全局变量
