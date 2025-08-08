@@ -306,8 +306,42 @@ auto ValueReusePass::modifyInstruction(
                       << std::endl;
         } break;
         default: {
-            // 对于其他指令，直接返回 nullptr，表示没有修改
-            return false;
+            // 对于其他指令，如果第一个操作数(rd) 已经出现过，清除对应的缓存
+            if (inst->getOprandCount() >= 1 && inst->getOperand(0)->isReg()) {
+                auto* dest_reg =
+                    dynamic_cast<RegisterOperand*>(inst->getOperand(0));
+                // 查找相等的操作数而不是指针相等
+                auto it = std::find_if(
+                    valueMap.begin(), valueMap.end(),
+                    [dest_reg](const auto& pair) {
+                        auto* cached_reg = pair.second;
+                        return *cached_reg == *dest_reg;
+                    });
+
+                if (it != valueMap.end()) {
+                    std::cout << "  Invalidating cached value for register "
+                              << dest_reg->toString() << std::endl;
+                    // Find and erase from definitionsInThisBlock by value
+                    auto def_it = std::find_if(
+                        definitionsInThisBlock.begin(),
+                        definitionsInThisBlock.end(),
+                        [&it](MachineOperand* op) {
+                            if (auto* cached_reg =
+                                    dynamic_cast<RegisterOperand*>(op)) {
+                                if (auto* it_reg =
+                                        dynamic_cast<RegisterOperand*>(
+                                            it->first)) {
+                                    return *cached_reg == *it_reg;
+                                }
+                            }
+                            return false;
+                        });
+                    if (def_it != definitionsInThisBlock.end()) {
+                        definitionsInThisBlock.erase(def_it);
+                    }
+                    valueMap.erase(it);
+                }
+            }
         }
     }
     return false;  // 如果没有修改，返回空
