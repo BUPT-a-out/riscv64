@@ -25,6 +25,8 @@ target("riscv64")
     set_languages("c++17")
     
     add_files("src/*.cpp")
+    add_files("src/**/*.cpp")
+
     
     add_includedirs("include", {public = true})
     
