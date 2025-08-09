@@ -4,6 +4,7 @@
 #include "CodeGen.h"
 #include "FrameIndexElimination.h"
 #include "IR/Function.h"
+#include "RAGreedy/SlotIndexes.h"
 #include "RegAllocChaitin.h"
 #include "ValueReusePass.h"
 #include "Visit.h"
@@ -32,6 +33,9 @@ std::string RISCV64Target::compileToAssembly(
 
     initialFrameIndexPass(riscv_module);  // 第一阶段
     basicBlockReorderingPass(riscv_module);  // 第1.7阶段：基本块重排优化
+
+    slotIndexWrapperPass(riscv_module);
+
     registerAllocationPass(riscv_module);     // 第二阶段
     frameIndexEliminationPass(riscv_module);  // 第三阶段
 
@@ -145,6 +149,21 @@ Module& RISCV64Target::basicBlockReorderingPass(riscv64::Module& module) {
     }
 
     std::cout << "=== Basic Block Reordering Completed ===" << std::endl;
+    std::cout << module.toString() << std::endl;
+
+    return module;
+}
+
+Module& RISCV64Target::slotIndexWrapperPass(riscv64::Module& module) {
+    std::cout << "\n=== Phase 2.0: SlotIndexGeneration ===" << std::endl;
+
+    SlotIndexesWrapperPass wrapper;
+    for (auto& function : module) {
+        wrapper.runOnFunction(function.get());
+        auto& SI = wrapper.getSI();
+        SI.print(std::cout);
+    }
+
     std::cout << module.toString() << std::endl;
 
     return module;
