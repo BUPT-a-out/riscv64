@@ -2199,6 +2199,8 @@ void TestRunner::executeCodeGeneration(const std::string& testCaseName,
             << std::endl;
         std::cout << riscvModule.toString() << std::endl;
 
+        target.slotIndexWrapperPass(riscvModule);
+
         // 执行寄存器分配pass
         std::cout << "\n--- Running Register Allocation Pass ---" << std::endl;
         auto& allocatedModule = target.registerAllocationPass(riscvModule);
