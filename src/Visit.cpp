@@ -4212,13 +4212,16 @@ std::unique_ptr<MachineOperand> Visitor::funcArgToReg(
     }
 
     // 使用新的辅助函数生成加载指令
+    // 栈参数基地址为 s0 (函数进入后 s0 指向调用前的旧 sp)，第9个参数从 0(s0)
+    // 开始
+    int64_t final_offset = 0 + arg_offset;
     generateMemoryInstruction(
         load_opcode,
         std::make_unique<RegisterOperand>(
             arg_reg->getRegNum(), arg_reg->isVirtual(),
             is_current_float ? RegisterType::Float : RegisterType::Integer),
         std::make_unique<RegisterOperand>("s0"),  // 使用帧指针
-        arg_offset, parent_bb);
+        final_offset, parent_bb);
 
     return std::make_unique<RegisterOperand>(
         arg_reg->getRegNum(), arg_reg->isVirtual(),
@@ -4333,41 +4336,58 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
             return std::make_unique<RegisterOperand>(
                 reg_num, false,
                 is_float ? RegisterType::Float : RegisterType::Integer);
-        } else {
-            // 栈传参：在首次使用时加载
-            // 计算此参数在调用者栈帧中的偏移（按8字节对齐累积）
-            auto getArgSize = [](const midend::Type* ty) -> size_t {
-                if (ty->isIntegerType() || ty->isFloatType()) return 4;
-                if (ty->isPointerType()) return 8;
-                return 4;
-            };
-            int64_t arg_offset = 0;
-            for (auto it = function->arg_begin(); it != function->arg_end();
-                 ++it) {
-                const auto* a = it->get();
-                int pos = std::distance(function->arg_begin(), it);
-                if (pos < 8) continue;
-                if (a == arg) break;
-                size_t sz = getArgSize(a->getType());
-                arg_offset += (sz + 7) & ~7;
-            }
-
-            // 为该参数分配一个虚拟寄存器并加载
-            auto vreg = is_float ? codeGen_->allocateFloatReg()
-                                 : codeGen_->allocateReg();
-            Opcode load_op = is_float ? Opcode::FLW : Opcode::LW;
-            generateMemoryInstruction(
-                load_op,
-                std::make_unique<RegisterOperand>(
-                    vreg->getRegNum(), vreg->isVirtual(),
-                    is_float ? RegisterType::Float : RegisterType::Integer),
-                std::make_unique<RegisterOperand>("s0"), arg_offset, parent_bb);
-            // 建立映射，后续可直接复用
-            codeGen_->mapValueToReg(arg, vreg->getRegNum(), vreg->isVirtual());
-            return std::make_unique<RegisterOperand>(
-                vreg->getRegNum(), vreg->isVirtual(),
-                is_float ? RegisterType::Float : RegisterType::Integer);
+        }  
+        
+        // 栈传参：在首次使用时加载
+        // 计算此参数在调用者栈帧中的偏移（按8字节对齐累积）
+        auto getArgSize = [](const midend::Type* ty) -> size_t {
+            if (ty->isIntegerType() || ty->isFloatType()) return 4;
+            if (ty->isPointerType()) return 8;
+            return 4;
+        };
+        int64_t arg_offset = 0;
+        for (auto it = function->arg_begin(); it != function->arg_end(); ++it) {
+            const auto* a = it->get();
+            int pos = std::distance(function->arg_begin(), it);
+            if (pos < 8) continue;
+            if (a == arg) break;
+            size_t sz = getArgSize(a->getType());
+            arg_offset += (sz + 7) & ~7;
         }
+
+        // 根据 RISC-V 调用约定，s0 指向保存的旧 s0 位置；s0+0 为旧 s0，s0+8
+        // 为 ra。 来自调用者的第一个栈参数从 s0+16 开始向高地址增长。
+        // 因此第9个参数的有效基地址偏移是 16，再加上前面栈参数的累积偏移。
+        const int64_t base_stack_arg_offset =
+            0;  // s0 指向旧 sp, 第一个栈参数偏移0
+        int64_t final_offset = base_stack_arg_offset + arg_offset;
+
+        bool is_pointer = arg->getType()->isPointerType();
+
+        // 为该参数分配一个虚拟寄存器并加载
+        auto vreg =
+            is_float ? codeGen_->allocateFloatReg() : codeGen_->allocateReg();
+        Opcode load_op;
+        if (is_float) {
+            load_op = Opcode::FLW;  // 传入的是 float
+                                    // 值本身（目前数组退化时为指针，走
+                                    // pointer 分支）
+        } else if (is_pointer) {
+            load_op = Opcode::LD;  // 指针 64-bit
+        } else {
+            load_op = Opcode::LW;  // 普通 32-bit 值
+        }
+        generateMemoryInstruction(
+            load_op,
+            std::make_unique<RegisterOperand>(
+                vreg->getRegNum(), vreg->isVirtual(),
+                is_float ? RegisterType::Float : RegisterType::Integer),
+            std::make_unique<RegisterOperand>("s0"), final_offset, parent_bb);
+        // 建立映射，后续可直接复用
+        codeGen_->mapValueToReg(arg, vreg->getRegNum(), vreg->isVirtual());
+        return std::make_unique<RegisterOperand>(
+            vreg->getRegNum(), vreg->isVirtual(),
+            is_float ? RegisterType::Float : RegisterType::Integer);
     }
 
     // 检查是否是全局变量
