@@ -1134,10 +1134,7 @@ void Visitor::generateCopyInstruction(
             bb->insert(insert_pos, std::move(fmv_inst));
         } else {
             // 整数寄存器立即数加载
-            constexpr int64_t IMM_MIN = -2048;
-            constexpr int64_t IMM_MAX = 2047;
-
-            if (value >= IMM_MIN && value <= IMM_MAX) {
+            if (isValidImmediateOffset(value)) {
                 // 使用 addi rd, x0, imm
                 auto addi_inst =
                     std::make_unique<Instruction>(Opcode::ADDI, bb);
@@ -1231,10 +1228,8 @@ void Visitor::processDeferredPhiNode(const midend::Instruction* inst,
         if (auto* const_int =
                 midend::dyn_cast<midend::ConstantInt>(incoming_value)) {
             auto value_int = const_int->getSignedValue();
-            constexpr int64_t IMM_MIN = -2048;
-            constexpr int64_t IMM_MAX = 2047;
 
-            if (value_int >= IMM_MIN && value_int <= IMM_MAX) {
+            if (isValidImmediateOffset(value_int)) {
                 value_operand = std::make_unique<ImmediateOperand>(value_int);
             } else {
                 // 对于大常量，生成li指令
@@ -4116,15 +4111,12 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
 
         // 正常的整数常量处理
         // 判断范围，是否在 [-2048, 2047] 之间
-        // TODO: 复用isValidImmediateOffset(int64_t offset)
         auto* int_const = midend::cast<midend::ConstantInt>(value);
         auto value_int = int_const->getSignedValue();
         std::cout << "DEBUG: Processing integer constant: " << value_int
                   << std::endl;
-        constexpr int64_t IMM_MIN = -2048;
-        constexpr int64_t IMM_MAX = 2047;
         auto signed_value = static_cast<int64_t>(value_int);
-        if (signed_value >= IMM_MIN && signed_value <= IMM_MAX) {
+        if (isValidImmediateOffset(signed_value)) {
             std::cout << "DEBUG: Returning immediate operand: " << value_int
                       << std::endl;
             return std::make_unique<ImmediateOperand>(value_int);
