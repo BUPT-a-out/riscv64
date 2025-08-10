@@ -85,6 +85,10 @@ class Visitor {
     void visit(const midend::Constant* constant);
     void visit(const midend::GlobalVariable* var, Module* parent_module);
 
+    void preProcessFuncArgs(const midend::Function* midend_func,
+                            midend::BasicBlock* midend_bb,
+                            Function* riscv_func);
+
     ConstantInitializer convertLLVMInitializerToConstantInitializer(
         const midend::Value* init, const midend::Type* type);
     CompilerType convertLLVMTypeToCompilerType(const midend::Type* llvm_type);
