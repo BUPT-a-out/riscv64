@@ -75,6 +75,11 @@ class Visitor {
 
     void assignVirtRegsToFuncArgs(midend::Function* func);
 
+    // 返回一个新的寄存器操作数
+    std::unique_ptr<RegisterOperand> cloneRegister(RegisterOperand* reg_op);
+    std::unique_ptr<RegisterOperand> cloneRegister(RegisterOperand* reg_op,
+                                                   bool is_float);
+
     void createCFG(Function* func);
 
     void visit(const midend::Constant* constant);
