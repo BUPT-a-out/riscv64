@@ -129,4 +129,8 @@ class Visitor {
                                    int64_t offset, BasicBlock* parent_bb);
 };
 
+namespace CFG {
+void print(Function* func);
+} // namespace CFG
+
 }  // namespace riscv64
