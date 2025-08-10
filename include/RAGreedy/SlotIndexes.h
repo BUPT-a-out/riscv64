@@ -16,6 +16,7 @@ class SlotIndexes;
 /// SlotIndex - 指令索引的封装类
 class SlotIndex {
     friend class SlotIndexes;
+    friend class LiveInterval;
 
     enum Slot {
         /// 基本块边界槽位
@@ -211,6 +212,7 @@ class SlotIndexes {
 
     void reanalyze(Function& F) {
         clear();
+        func = &F;
         analyze(F);
     }
 

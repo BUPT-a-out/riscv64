@@ -100,8 +100,8 @@ void SlotIndexes::clear() {
 }
 
 void SlotIndexes::analyze(Function& F) {
-    func = &F;
     clear();
+    func = &F;
 
     unsigned CurIndex = 0;
 
@@ -113,7 +113,7 @@ void SlotIndexes::analyze(Function& F) {
         // 为基本块中的每条指令分配索引
         for (auto& Instr : *BB) {
             IndexListEntry* Entry = createEntry(Instr.get(), CurIndex);
-            SlotIndex InstrIdx(Entry, SlotIndex::Slot_Block);
+            SlotIndex InstrIdx(Entry, SlotIndex::Slot_RegisterOperand);
             instr2iMap[Instr.get()] = InstrIdx;
             CurIndex += SlotIndex::InstrDist;
         }

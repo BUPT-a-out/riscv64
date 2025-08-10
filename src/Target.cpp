@@ -4,6 +4,7 @@
 #include "CodeGen.h"
 #include "FrameIndexElimination.h"
 #include "IR/Function.h"
+#include "RAGreedy/LiveIntervals.h"
 #include "RAGreedy/SlotIndexes.h"
 #include "RegAllocChaitin.h"
 #include "ValueReusePass.h"
@@ -162,6 +163,10 @@ Module& RISCV64Target::slotIndexWrapperPass(riscv64::Module& module) {
         wrapper.runOnFunction(function.get());
         auto& SI = wrapper.getSI();
         SI.print(std::cout);
+
+        auto LIS = std::make_unique<LiveIntervals>(function.get(), &SI);
+        LIS->analyze(*function);
+        LIS->print(std::cout);
     }
 
     std::cout << module.toString() << std::endl;
