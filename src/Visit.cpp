@@ -293,89 +293,86 @@ std::unique_ptr<MachineOperand> Visitor::visitCastInst(
         throw std::runtime_error("Not a cast instruction: " + inst->toString());
     }
 
-    switch (cast_inst->getCastOpcode()) {
-        auto* dest_type = cast_inst->getDestType();
-        auto* src_type = cast_inst->getSrcType();
-        if (dest_type == nullptr || src_type == nullptr) {
-            throw std::runtime_error("Invalid operands for trunc cast");
-        }
-        if (dest_type->isIntegerType()) {
-            // i32 -> i1
-            if (dest_type->getBitWidth() == 1 && src_type->getBitWidth() > 1) {
-                // use sltiu rd, rs1, imm
-                auto new_reg = codeGen_->allocateIntReg();
-                auto* new_reg_ptr = new_reg.get();
-                auto src_operand = visit(cast_inst->getOperand(0), parent_bb);
-                auto rs1 = immToReg(std::move(src_operand), parent_bb);
-                auto instruction =
-                    std::make_unique<Instruction>(Opcode::SLTIU, parent_bb);
-                instruction->addOperand(std::move(new_reg));  // rd
-                instruction->addOperand(std::move(rs1));      // rs1
-                instruction->addOperand(
-                    std::make_unique<ImmediateOperand>(1));  // imm
-
-                parent_bb->addInstruction(std::move(instruction));
-                return std::make_unique<RegisterOperand>(
-                    new_reg_ptr->getRegNum(), new_reg_ptr->isVirtual());
-            }
-
-            if (dest_type->getBitWidth() == 32 &&
-                src_type->getBitWidth() == 1) {
-                // i1 -> i32
-                return immToReg(visit(cast_inst->getOperand(0), parent_bb),
-                                parent_bb);
-            }
-
-            if (src_type->isFloatType()) {
-                // f32 -> int (truncate towards zero)
-                auto new_reg = codeGen_->allocateIntReg();
-                auto* new_reg_ptr = new_reg.get();
-                auto src_operand = visit(cast_inst->getOperand(0), parent_bb);
-
-                auto instruction =
-                    std::make_unique<Instruction>(Opcode::FCVT_W_S, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
-                    new_reg_ptr->getRegNum(), new_reg_ptr->isVirtual(),
-                    RegisterType::Integer));  // rd (integer)
-                instruction->addOperand(std::move(src_operand));  // rs1 (float)
-                instruction->addOperand(
-                    std::make_unique<LabelOperand>("rtz"));  // rtz, 截断到零
-                parent_bb->addInstruction(std::move(instruction));
-                return std::make_unique<RegisterOperand>(
-                    new_reg_ptr->getRegNum(), new_reg_ptr->isVirtual(),
-                    RegisterType::Integer);
-            }
-        }
-
-        if (dest_type->isFloatType()) {
-            // int -> f32
-            if (src_type->isIntegerType()) {
-                auto new_reg = codeGen_->allocateFloatReg();
-                auto* new_reg_ptr = new_reg.get();
-                auto src_operand = visit(cast_inst->getOperand(0), parent_bb);
-
-                // 确保源操作数是整数寄存器类型
-                auto src_reg = immToReg(std::move(src_operand), parent_bb);
-
-                auto instruction =
-                    std::make_unique<Instruction>(Opcode::FCVT_S_W, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
-                    new_reg_ptr->getRegNum(), new_reg_ptr->isVirtual(),
-                    RegisterType::Float));  // rd (float)
-                instruction->addOperand(std::make_unique<RegisterOperand>(
-                    src_reg->getRegNum(), src_reg->isVirtual(),
-                    RegisterType::Integer));  // rs1 (integer)
-                parent_bb->addInstruction(std::move(instruction));
-                return std::make_unique<RegisterOperand>(
-                    new_reg_ptr->getRegNum(), new_reg_ptr->isVirtual(),
-                    RegisterType::Float);
-            }
-        }
-
-        throw std::runtime_error(
-            "Unsupported trunc cast type: " + dest_type->toString() + " -> " +
-            src_type->toString());
+    auto* dest_type = cast_inst->getDestType();
+    auto* src_type = cast_inst->getSrcType();
+    if (dest_type == nullptr || src_type == nullptr) {
+        throw std::runtime_error("Invalid operands for trunc cast");
     }
+    if (dest_type->isIntegerType()) {
+        // i32 -> i1
+        if (dest_type->getBitWidth() == 1 && src_type->getBitWidth() > 1) {
+            // use sltiu rd, rs1, imm
+            auto new_reg = codeGen_->allocateIntReg();
+            auto* new_reg_ptr = new_reg.get();
+            auto src_operand = visit(cast_inst->getOperand(0), parent_bb);
+            auto rs1 = immToReg(std::move(src_operand), parent_bb);
+            auto instruction =
+                std::make_unique<Instruction>(Opcode::SLTIU, parent_bb);
+            instruction->addOperand(std::move(new_reg));  // rd
+            instruction->addOperand(std::move(rs1));      // rs1
+            instruction->addOperand(
+                std::make_unique<ImmediateOperand>(1));  // imm
+
+            parent_bb->addInstruction(std::move(instruction));
+            return std::make_unique<RegisterOperand>(new_reg_ptr->getRegNum(),
+                                                     new_reg_ptr->isVirtual());
+        }
+
+        if (dest_type->getBitWidth() == 32 && src_type->getBitWidth() == 1) {
+            // i1 -> i32
+            return immToReg(visit(cast_inst->getOperand(0), parent_bb),
+                            parent_bb);
+        }
+
+        if (src_type->isFloatType()) {
+            // f32 -> int (truncate towards zero)
+            auto new_reg = codeGen_->allocateIntReg();
+            auto* new_reg_ptr = new_reg.get();
+            auto src_operand = visit(cast_inst->getOperand(0), parent_bb);
+
+            auto instruction =
+                std::make_unique<Instruction>(Opcode::FCVT_W_S, parent_bb);
+            instruction->addOperand(std::make_unique<RegisterOperand>(
+                new_reg_ptr->getRegNum(), new_reg_ptr->isVirtual(),
+                RegisterType::Integer));                      // rd (integer)
+            instruction->addOperand(std::move(src_operand));  // rs1 (float)
+            instruction->addOperand(
+                std::make_unique<LabelOperand>("rtz"));  // rtz, 截断到零
+            parent_bb->addInstruction(std::move(instruction));
+            return std::make_unique<RegisterOperand>(new_reg_ptr->getRegNum(),
+                                                     new_reg_ptr->isVirtual(),
+                                                     RegisterType::Integer);
+        }
+    }
+
+    if (dest_type->isFloatType()) {
+        // int -> f32
+        if (src_type->isIntegerType()) {
+            auto new_reg = codeGen_->allocateFloatReg();
+            auto* new_reg_ptr = new_reg.get();
+            auto src_operand = visit(cast_inst->getOperand(0), parent_bb);
+
+            // 确保源操作数是整数寄存器类型
+            auto src_reg = immToReg(std::move(src_operand), parent_bb);
+
+            auto instruction =
+                std::make_unique<Instruction>(Opcode::FCVT_S_W, parent_bb);
+            instruction->addOperand(std::make_unique<RegisterOperand>(
+                new_reg_ptr->getRegNum(), new_reg_ptr->isVirtual(),
+                RegisterType::Float));  // rd (float)
+            instruction->addOperand(std::make_unique<RegisterOperand>(
+                src_reg->getRegNum(), src_reg->isVirtual(),
+                RegisterType::Integer));  // rs1 (integer)
+            parent_bb->addInstruction(std::move(instruction));
+            return std::make_unique<RegisterOperand>(new_reg_ptr->getRegNum(),
+                                                     new_reg_ptr->isVirtual(),
+                                                     RegisterType::Float);
+        }
+    }
+
+    throw std::runtime_error(
+        "Unsupported trunc cast type: " + dest_type->toString() + " -> " +
+        src_type->toString());
 }
 
 // 修复 visitGEPInst 方法，支持全局变量作为基地址
