@@ -118,6 +118,21 @@ class RegisterOperand : public MachineOperand {
                regType == other.regType;
     }
 
+    bool operator<(const RegisterOperand& other) const {
+        // 首先按 regNum 排序
+        if (regNum != other.regNum) {
+            return regNum < other.regNum;
+        }
+
+        // regNum 相同时，按 is_virtual 排序 (false < true)
+        if (is_virtual != other.is_virtual) {
+            return is_virtual < other.is_virtual;
+        }
+
+        // regNum 和 is_virtual 都相同时，按 regType 排序
+        return regType < other.regType;
+    }
+
    private:
     unsigned regNum;
     bool is_virtual;
