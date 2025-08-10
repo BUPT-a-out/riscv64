@@ -78,8 +78,7 @@ void Visitor::visit(const midend::Function* func, Module* parent_module) {
                 const auto* argument = arg_it->get();
                 bool is_float_arg = argument->getType()->isFloatType();
                 std::unique_ptr<RegisterOperand> new_reg =
-                    is_float_arg ? codeGen_->allocateFloatReg()
-                                 : codeGen_->allocateReg();
+                    codeGen_->allocateReg(is_float_arg);
                 codeGen_->mapValueToReg(argument, new_reg->getRegNum(),
                                         new_reg->isVirtual());
                 auto source_reg = funcArgToReg(argument, first_riscv_bb);
@@ -282,8 +281,7 @@ BasicBlock* Visitor::visit(const midend::BasicBlock* bb,
             // 为PHI节点根据类型分配正确的寄存器
             bool is_float_phi = inst->getType()->isFloatType();
             // TODO: extract function
-            auto phi_reg = is_float_phi ? codeGen_->allocateFloatReg()
-                                        : codeGen_->allocateReg();
+            auto phi_reg = codeGen_->allocateReg(is_float_phi);
             codeGen_->mapValueToReg(
                 inst, phi_reg->getRegNum(), phi_reg->isVirtual(),
                 is_float_phi ? RegisterType::Float : RegisterType::Integer);
@@ -404,7 +402,7 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
         }
 
         // 生成一个新的寄存器，并使用 FRAMEADDR 指令获取帧地址
-        auto new_reg = codeGen_->allocateReg();
+        auto new_reg = codeGen_->allocateIntReg();
         auto instruction =
             std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
         instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -458,7 +456,7 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
             std::string label = pool->getOrCreateFloatConstant(float_value);
 
             // 分配临时整数寄存器用于地址计算
-            auto addr_reg = codeGen_->allocateReg();
+            auto addr_reg = codeGen_->allocateIntReg();
 
             // 生成 lui 指令：加载高20位地址
             auto lui_inst =
@@ -508,7 +506,7 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
 
         // 生成一个新的寄存器，并将立即数加载到该寄存器中
         auto instruction = std::make_unique<Instruction>(Opcode::LI, parent_bb);
-        auto new_reg = codeGen_->allocateReg();  // 分配一个新的寄存器
+        auto new_reg = codeGen_->allocateIntReg();  // 分配一个新的寄存器
         auto reg_num = new_reg->getRegNum();
         auto is_virtual = new_reg->isVirtual();
         instruction->addOperand(std::move(new_reg));  // rd
@@ -616,7 +614,7 @@ std::unique_ptr<MachineOperand> Visitor::visitCastInst(
                 if (dest_type->getBitWidth() == 1 &&
                     src_type->getBitWidth() > 1) {
                     // use sltiu rd, rs1, imm
-                    auto new_reg = codeGen_->allocateReg();
+                    auto new_reg = codeGen_->allocateIntReg();
                     auto* new_reg_ptr = new_reg.get();
                     auto src_operand =
                         visit(cast_inst->getOperand(0), parent_bb);
@@ -642,7 +640,7 @@ std::unique_ptr<MachineOperand> Visitor::visitCastInst(
 
                 if (src_type->isFloatType()) {
                     // f32 -> int (truncate towards zero)
-                    auto new_reg = codeGen_->allocateReg();
+                    auto new_reg = codeGen_->allocateIntReg();
                     auto* new_reg_ptr = new_reg.get();
                     auto src_operand =
                         visit(cast_inst->getOperand(0), parent_bb);
@@ -722,7 +720,7 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
         // 处理基于栈帧的地址
         auto get_base_addr_inst =
             std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
-        base_addr_reg = codeGen_->allocateReg();
+        base_addr_reg = codeGen_->allocateIntReg();
         get_base_addr_inst->addOperand(std::make_unique<RegisterOperand>(
             base_addr_reg->getRegNum(), base_addr_reg->isVirtual()));  // rd
         get_base_addr_inst->addOperand(std::move(base_addr));          // FI
@@ -809,7 +807,7 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
                 shift_amount++;
             }
 
-            offset_reg = codeGen_->allocateReg();
+            offset_reg = codeGen_->allocateIntReg();
             auto slli_inst =
                 std::make_unique<Instruction>(Opcode::SLLI, parent_bb);
             slli_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -820,7 +818,7 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
             parent_bb->addInstruction(std::move(slli_inst));
         } else {
             // 一般情况，使用乘法
-            auto stride_reg = codeGen_->allocateReg();
+            auto stride_reg = codeGen_->allocateIntReg();
             auto li_stride_inst =
                 std::make_unique<Instruction>(Opcode::LI, parent_bb);
             li_stride_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -829,7 +827,7 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
                 static_cast<std::int64_t>(stride)));
             parent_bb->addInstruction(std::move(li_stride_inst));
 
-            offset_reg = codeGen_->allocateReg();
+            offset_reg = codeGen_->allocateIntReg();
             auto mul_inst =
                 std::make_unique<Instruction>(Opcode::MUL, parent_bb);
             mul_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -845,7 +843,7 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
             total_offset_reg = std::move(offset_reg);
         } else {
             // 累加：total_offset += offset
-            auto new_total_offset_reg = codeGen_->allocateReg();
+            auto new_total_offset_reg = codeGen_->allocateIntReg();
             auto add_inst =
                 std::make_unique<Instruction>(Opcode::ADD, parent_bb);
             add_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -868,7 +866,7 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
     }
 
     // 计算最终地址：基地址 + 总偏移量
-    auto final_addr_reg = codeGen_->allocateReg();
+    auto final_addr_reg = codeGen_->allocateIntReg();
     auto final_add_inst = std::make_unique<Instruction>(Opcode::ADD, parent_bb);
     final_add_inst->addOperand(std::make_unique<RegisterOperand>(
         final_addr_reg->getRegNum(), final_addr_reg->isVirtual()));
@@ -959,7 +957,7 @@ std::unique_ptr<MachineOperand> Visitor::visitCallInst(
             parent_bb->addInstruction(std::move(stack_alloc_inst));
         } else {
             auto li_inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
-            auto li_reg = codeGen_->allocateReg();
+            auto li_reg = codeGen_->allocateIntReg();
             li_inst->addOperand(std::make_unique<RegisterOperand>(
                 li_reg->getRegNum(), li_reg->isVirtual()));
             li_inst->addOperand(std::make_unique<ImmediateOperand>(
@@ -1089,8 +1087,7 @@ std::unique_ptr<MachineOperand> Visitor::visitCallInst(
         bool is_float_return = called_func->getReturnType()->isFloatType();
         std::string return_reg = is_float_return ? "fa0" : "a0";
 
-        auto new_reg = is_float_return ? codeGen_->allocateFloatReg()
-                                       : codeGen_->allocateReg();
+        auto new_reg = codeGen_->allocateReg(is_float_return);
         auto dest_reg = std::make_unique<RegisterOperand>(
             new_reg->getRegNum(), new_reg->isVirtual(),
             is_float_return ? RegisterType::Float : RegisterType::Integer);
@@ -1125,8 +1122,7 @@ std::unique_ptr<MachineOperand> Visitor::visitPhiInst(
     // 只分配寄存器，不生成指令
     // 实际的PHI指令处理将在processDeferredPhiNode中完成
     bool is_float_phi = inst->getType()->isFloatType();
-    auto phi_reg =
-        is_float_phi ? codeGen_->allocateFloatReg() : codeGen_->allocateReg();
+    auto phi_reg = codeGen_->allocateReg(is_float_phi);
 
     // 记录PHI的映射
     codeGen_->mapValueToReg(
@@ -1262,7 +1258,7 @@ void Visitor::generateParallelCopyForEdge(
             int frame_index = existing_id;
 
             // 2. 为这个地址分配一个临时的虚拟寄存器。
-            auto temp_addr_reg = codeGen_->allocateReg();
+            auto temp_addr_reg = codeGen_->allocateIntReg();
 
             // 3. 创建并插入 FRAME_ADDR 伪指令。
             //    该指令将在后续阶段被转换为 `addi rd, s0, offset`。
@@ -1388,11 +1384,7 @@ void Visitor::scheduleRegisterCopies(
 
         // 根据寄存器类型分配临时寄存器
         std::unique_ptr<RegisterOperand> temp_reg;
-        if (is_float) {
-            temp_reg = codeGen_->allocateFloatReg();
-        } else {
-            temp_reg = codeGen_->allocateReg();
-        }
+        temp_reg = codeGen_->allocateReg(is_float);
         temp_reg_map[reg] = temp_reg->getRegNum();
 
         // 生成保存指令: temp_reg <- original_reg
@@ -1447,7 +1439,7 @@ void Visitor::generateCopyInstruction(
         if (dest_reg->isFloatRegister()) {
             // 浮点寄存器立即数加载：li temp_reg, imm; fmv.w.x dest_reg,
             // temp_reg
-            auto temp_reg = codeGen_->allocateReg();  // 分配临时整数寄存器
+            auto temp_reg = codeGen_->allocateIntReg();  // 分配临时整数寄存器
 
             // 先加载立即数到临时整数寄存器
             auto li_inst = std::make_unique<Instruction>(Opcode::LI, bb);
@@ -1572,7 +1564,7 @@ void Visitor::processDeferredPhiNode(const midend::Instruction* inst,
                 value_operand = std::make_unique<ImmediateOperand>(value_int);
             } else {
                 // 对于大常量，生成li指令
-                auto temp_reg = codeGen_->allocateReg();
+                auto temp_reg = codeGen_->allocateIntReg();
                 auto li_inst =
                     std::make_unique<Instruction>(Opcode::LI, incoming_bb);
                 li_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -1588,7 +1580,7 @@ void Visitor::processDeferredPhiNode(const midend::Instruction* inst,
         } else if (auto* const_float =
                        midend::dyn_cast<midend::ConstantFP>(incoming_value)) {
             // 处理浮点常量
-            auto temp_reg = codeGen_->allocateReg();
+            auto temp_reg = codeGen_->allocateIntReg();
             auto float_val = const_float->getValue();
 
             // 生成浮点常量加载指令
@@ -1697,7 +1689,7 @@ void Visitor::visitBranchInst(const midend::Instruction* inst,
         // 生成条件跳转指令
         // 为了避免PHI节点处理时覆盖条件寄存器，我们保存条件值到临时寄存器
         auto condition_reg = immToReg(std::move(condition), parent_bb);
-        auto temp_condition_reg = codeGen_->allocateReg();
+        auto temp_condition_reg = codeGen_->allocateIntReg();
 
         // 保存条件值到临时寄存器
         auto mv_inst = std::make_unique<Instruction>(Opcode::MV, parent_bb);
@@ -1859,7 +1851,7 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
         }
 
         // 生成frameaddr指令来获取栈地址（每次都使用新的寄存器）
-        auto frame_addr_reg = codeGen_->allocateReg();
+        auto frame_addr_reg = codeGen_->allocateIntReg();
         auto store_frame_addr_inst =
             std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
         store_frame_addr_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -1929,7 +1921,7 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
                    midend::dyn_cast<midend::GlobalVariable>(pointer_operand)) {
         // 是全局变量
         // 生成全局变量地址加载指令
-        auto global_addr_reg = codeGen_->allocateReg();
+        auto global_addr_reg = codeGen_->allocateIntReg();
         auto global_addr_inst =
             std::make_unique<Instruction>(Opcode::LA, parent_bb);
         global_addr_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -1998,7 +1990,7 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
         }
 
         // 生成frameaddr指令来获取栈地址（每次都使用新的寄存器）
-        auto frame_addr_reg = codeGen_->allocateReg();
+        auto frame_addr_reg = codeGen_->allocateIntReg();
         auto load_frame_addr_inst =
             std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
         load_frame_addr_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -2009,8 +2001,7 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
 
         // 根据load指令的返回类型选择寄存器和加载指令
         bool is_float_load = load_inst->getType()->isFloatType();
-        auto new_reg = is_float_load ? codeGen_->allocateFloatReg()
-                                     : codeGen_->allocateReg();
+        auto new_reg = codeGen_->allocateReg(is_float_load);
         Opcode load_opcode = is_float_load ? Opcode::FLW : Opcode::LW;
 
         // 使用正确的加载指令
@@ -2047,8 +2038,7 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
 
         // 根据load指令的返回类型选择寄存器和加载指令
         bool is_float_load = load_inst->getType()->isFloatType();
-        auto new_reg = is_float_load ? codeGen_->allocateFloatReg()
-                                     : codeGen_->allocateReg();
+        auto new_reg = codeGen_->allocateReg(is_float_load);
         Opcode load_opcode = is_float_load ? Opcode::FLW : Opcode::LW;
 
         // 使用正确的加载指令
@@ -2073,7 +2063,7 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
                    midend::dyn_cast<midend::GlobalVariable>(pointer_operand)) {
         // 是全局变量
         // 生成全局变量地址加载指令
-        auto global_addr_reg = codeGen_->allocateReg();
+        auto global_addr_reg = codeGen_->allocateIntReg();
         auto global_addr_inst =
             std::make_unique<Instruction>(Opcode::LA, parent_bb);
         global_addr_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -2084,8 +2074,7 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
 
         // 根据load指令的返回类型选择寄存器和加载指令
         bool is_float_load = load_inst->getType()->isFloatType();
-        auto new_reg = is_float_load ? codeGen_->allocateFloatReg()
-                                     : codeGen_->allocateReg();
+        auto new_reg = codeGen_->allocateReg(is_float_load);
         Opcode load_opcode = is_float_load ? Opcode::FLW : Opcode::LW;
 
         // 使用正确的加载指令
@@ -2153,7 +2142,7 @@ std::unique_ptr<MachineOperand> Visitor::visitUnaryOp(
                 new_reg = ensureFloatReg(std::move(temp_operand), parent_bb);
             } else {
                 // 对于整数一元加号，将立即数加载到整数寄存器
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2197,7 +2186,7 @@ std::unique_ptr<MachineOperand> Visitor::visitUnaryOp(
             } else {
                 // 常量折叠整数取负，但结果分配到寄存器
                 int32_t result = -imm_operand->getValue();
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2238,7 +2227,7 @@ std::unique_ptr<MachineOperand> Visitor::visitUnaryOp(
                                                      RegisterType::Float);
         } else {
             // 整数取负：使用 sub 指令: 0 - operand
-            auto new_reg = codeGen_->allocateReg();
+            auto new_reg = codeGen_->allocateIntReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::SUB, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2271,7 +2260,7 @@ std::unique_ptr<MachineOperand> Visitor::visitUnaryOp(
         auto operand_reg = immToReg(std::move(operand), parent_bb);
 
         // Generate sltiu instruction: operand sltiu 1
-        auto new_reg = codeGen_->allocateReg();
+        auto new_reg = codeGen_->allocateIntReg();
         auto instruction =
             std::make_unique<Instruction>(Opcode::SLTIU, parent_bb);
         instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2361,7 +2350,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 } else {
                     // 常量折叠整数加法，但结果分配到寄存器
                     int32_t result = lhs_imm->getValue() + rhs_imm->getValue();
-                    new_reg = codeGen_->allocateReg();
+                    new_reg = codeGen_->allocateIntReg();
                     auto instruction =
                         std::make_unique<Instruction>(Opcode::LI, parent_bb);
                     instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2397,7 +2386,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 if (lhs->getType() == OperandType::Immediate ||
                     rhs->getType() == OperandType::Immediate) {
                     // 使用 addi 指令
-                    new_reg = codeGen_->allocateReg();
+                    new_reg = codeGen_->allocateIntReg();
                     auto instruction =
                         std::make_unique<Instruction>(Opcode::ADDIW, parent_bb);
 
@@ -2419,7 +2408,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     parent_bb->addInstruction(std::move(instruction));
                 } else {
                     // 使用 add 指令
-                    new_reg = codeGen_->allocateReg();
+                    new_reg = codeGen_->allocateIntReg();
                     auto instruction =
                         std::make_unique<Instruction>(Opcode::ADDW, parent_bb);
                     instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2449,7 +2438,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 } else {
                     int64_t result = lhs_imm->getValue() - rhs_imm->getValue();
                     // 分配寄存器并生成 li 指令
-                    new_reg = codeGen_->allocateReg();
+                    new_reg = codeGen_->allocateIntReg();
                     auto instruction =
                         std::make_unique<Instruction>(Opcode::LI, parent_bb);
                     instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2474,7 +2463,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 // 处理右侧立即数：a - imm => addi a, -imm
                 if (rhs->getType() == OperandType::Immediate) {
                     auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
-                    new_reg = codeGen_->allocateReg();
+                    new_reg = codeGen_->allocateIntReg();
                     auto instruction =
                         std::make_unique<Instruction>(Opcode::ADDIW, parent_bb);
                     instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2488,7 +2477,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     auto lhs_reg = immToReg(std::move(lhs), parent_bb);
                     auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
-                    new_reg = codeGen_->allocateReg();
+                    new_reg = codeGen_->allocateIntReg();
                     auto instruction =
                         std::make_unique<Instruction>(Opcode::SUBW, parent_bb);
                     instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2519,7 +2508,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 int64_t result = lhs_imm->getValue() * rhs_imm->getValue();
 
                 // 分配寄存器并生成 li 指令
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2531,7 +2520,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto lhs_reg = immToReg(std::move(lhs), parent_bb);
                 auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::MULW, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2563,7 +2552,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 int64_t result = lhs_imm->getValue() / rhs_imm->getValue();
 
                 // 分配寄存器并生成 li 指令
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2592,7 +2581,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto lhs_reg = immToReg(std::move(lhs), parent_bb);
                 auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::DIVW, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2619,7 +2608,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 int64_t result = lhs_imm->getValue() % rhs_imm->getValue();
 
                 // 分配寄存器并生成 li 指令
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2648,7 +2637,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto lhs_reg = immToReg(std::move(lhs), parent_bb);
                 auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::REMW, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2674,7 +2663,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             // 处理立即数操作数，利用交换律使用 andi
             if (lhs->getType() == OperandType::Immediate ||
                 rhs->getType() == OperandType::Immediate) {
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::ANDI, parent_bb);
 
@@ -2698,7 +2687,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto lhs_reg = immToReg(std::move(lhs), parent_bb);
                 auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::AND, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2724,7 +2713,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             // 处理立即数操作数，利用交换律使用 ori
             if (lhs->getType() == OperandType::Immediate ||
                 rhs->getType() == OperandType::Immediate) {
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::ORI, parent_bb);
 
@@ -2748,7 +2737,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto lhs_reg = immToReg(std::move(lhs), parent_bb);
                 auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::OR, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2774,7 +2763,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             // 处理立即数操作数，利用交换律使用 xori
             if (lhs->getType() == OperandType::Immediate ||
                 rhs->getType() == OperandType::Immediate) {
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::XORI, parent_bb);
 
@@ -2798,7 +2787,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto lhs_reg = immToReg(std::move(lhs), parent_bb);
                 auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::XOR, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2824,7 +2813,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             // 处理右侧立即数：使用 slli
             if (rhs->getType() == OperandType::Immediate) {
                 auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::SLLIW, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2837,7 +2826,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto lhs_reg = immToReg(std::move(lhs), parent_bb);
                 auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::SLLW, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2864,7 +2853,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             // 处理右侧立即数：使用 srai
             if (rhs->getType() == OperandType::Immediate) {
                 auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::SRAIW, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2877,7 +2866,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto lhs_reg = immToReg(std::move(lhs), parent_bb);
                 auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 // 使用算术右移（保持符号位）
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::SRAW, parent_bb);
@@ -2907,7 +2896,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 // 常量折叠比较，但结果分配到寄存器
                 int32_t result =
                     (lhs_imm->getValue() > rhs_imm->getValue()) ? 1 : 0;
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2929,7 +2918,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             if (rhs->getType() == OperandType::Immediate) {
                 auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
                 // a > imm 等价于 !(a <= imm) 等价于 !(a < (imm+1))
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto slti_inst =
                     std::make_unique<Instruction>(Opcode::SLTI, parent_bb);
                 slti_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -2940,7 +2929,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 parent_bb->addInstruction(std::move(slti_inst));
 
                 // 对结果取反
-                auto result_reg = codeGen_->allocateReg();
+                auto result_reg = codeGen_->allocateIntReg();
                 auto xori_inst =
                     std::make_unique<Instruction>(Opcode::XORI, parent_bb);
                 xori_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -2958,7 +2947,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
                 // 使用 sgt 指令
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::SGT, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -2980,7 +2969,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 // 常量折叠比较，但结果分配到寄存器
                 int32_t result =
                     (lhs_imm->getValue() == rhs_imm->getValue()) ? 1 : 0;
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -3009,7 +2998,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                                                              : rhs.get()));
 
                 // a == imm 等价于 (a - imm) == 0
-                auto sub_reg = codeGen_->allocateReg();
+                auto sub_reg = codeGen_->allocateIntReg();
                 auto addi_inst =
                     std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
                 addi_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -3021,7 +3010,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     -imm_operand->getValue()));  // -imm
                 parent_bb->addInstruction(std::move(addi_inst));
 
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto seqz_inst =
                     std::make_unique<Instruction>(Opcode::SEQZ, parent_bb);
                 seqz_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -3034,7 +3023,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
                 // 使用 xor 指令计算差值，然后用 seqz 指令检查是否为0
-                auto xor_reg = codeGen_->allocateReg();
+                auto xor_reg = codeGen_->allocateIntReg();
                 auto xor_inst =
                     std::make_unique<Instruction>(Opcode::XOR, parent_bb);
                 xor_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -3043,7 +3032,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 xor_inst->addOperand(std::move(rhs_reg));          // rs2
                 parent_bb->addInstruction(std::move(xor_inst));
 
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto seqz_inst =
                     std::make_unique<Instruction>(Opcode::SEQZ, parent_bb);
                 seqz_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -3063,7 +3052,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 // 常量折叠比较，但结果分配到寄存器
                 int32_t result =
                     (lhs_imm->getValue() != rhs_imm->getValue()) ? 1 : 0;
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -3092,7 +3081,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                                                             : rhs.get());
 
                 // a != imm 等价于 (a - imm) != 0
-                auto sub_reg = codeGen_->allocateReg();
+                auto sub_reg = codeGen_->allocateIntReg();
                 auto addi_inst =
                     std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
                 addi_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -3104,7 +3093,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     -imm_operand->getValue()));  // -imm
                 parent_bb->addInstruction(std::move(addi_inst));
 
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto snez_inst =
                     std::make_unique<Instruction>(Opcode::SNEZ, parent_bb);
                 snez_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -3117,7 +3106,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
                 // 使用 xor 指令计算差值，然后用 snez 指令检查是否非0
-                auto xor_reg = codeGen_->allocateReg();
+                auto xor_reg = codeGen_->allocateIntReg();
                 auto xor_inst =
                     std::make_unique<Instruction>(Opcode::XOR, parent_bb);
                 xor_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -3126,7 +3115,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 xor_inst->addOperand(std::move(rhs_reg));          // rs2
                 parent_bb->addInstruction(std::move(xor_inst));
 
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto snez_inst =
                     std::make_unique<Instruction>(Opcode::SNEZ, parent_bb);
                 snez_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -3153,7 +3142,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 // 常量折叠比较，但结果分配到寄存器
                 int32_t result =
                     (lhs_imm->getValue() < rhs_imm->getValue()) ? 1 : 0;
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -3171,7 +3160,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                                                          RegisterType::Integer);
             }
 
-            new_reg = codeGen_->allocateReg();
+            new_reg = codeGen_->allocateIntReg();
             if (rhs->getType() == OperandType::Immediate) {
                 auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
                 auto slti_inst =
@@ -3209,7 +3198,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 // 常量折叠比较，但结果分配到寄存器
                 int32_t result =
                     (lhs_imm->getValue() <= rhs_imm->getValue()) ? 1 : 0;
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -3231,7 +3220,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
             // 使用 sgt 指令然后取反: !(lhs > rhs) = (lhs <= rhs)
-            auto sgt_reg = codeGen_->allocateReg();
+            auto sgt_reg = codeGen_->allocateIntReg();
             auto sgt_inst =
                 std::make_unique<Instruction>(Opcode::SGT, parent_bb);
             sgt_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -3240,7 +3229,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             sgt_inst->addOperand(std::move(rhs_reg));          // rs2
             parent_bb->addInstruction(std::move(sgt_inst));
 
-            new_reg = codeGen_->allocateReg();
+            new_reg = codeGen_->allocateIntReg();
             auto seqz_inst =
                 std::make_unique<Instruction>(Opcode::SEQZ, parent_bb);
             seqz_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -3259,7 +3248,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 // 常量折叠比较，但结果分配到寄存器
                 int32_t result =
                     (lhs_imm->getValue() >= rhs_imm->getValue()) ? 1 : 0;
-                new_reg = codeGen_->allocateReg();
+                new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
                 instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -3281,7 +3270,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
             // 使用 slt 指令然后取反: !(lhs < rhs) = (lhs >= rhs)
-            auto slt_reg = codeGen_->allocateReg();
+            auto slt_reg = codeGen_->allocateIntReg();
             auto slt_inst =
                 std::make_unique<Instruction>(Opcode::SLT, parent_bb);
             slt_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -3290,7 +3279,7 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             slt_inst->addOperand(std::move(rhs_reg));          // rs2
             parent_bb->addInstruction(std::move(slt_inst));
 
-            new_reg = codeGen_->allocateReg();
+            new_reg = codeGen_->allocateIntReg();
             auto seqz_inst =
                 std::make_unique<Instruction>(Opcode::SEQZ, parent_bb);
             seqz_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -3478,7 +3467,7 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
             auto rhs_reg = ensureFloatReg(std::move(rhs), parent_bb);
 
             // 使用 feq.s 指令
-            new_reg = codeGen_->allocateReg();  // 比较结果是整数
+            new_reg = codeGen_->allocateIntReg();  // 比较结果是整数
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FEQ_S, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -3507,7 +3496,7 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
             auto rhs_reg = ensureFloatReg(std::move(rhs), parent_bb);
 
             // 先使用 feq.s 指令得到相等结果，然后取反
-            new_reg = codeGen_->allocateReg();
+            new_reg = codeGen_->allocateIntReg();
             auto feq_inst =
                 std::make_unique<Instruction>(Opcode::FEQ_S, parent_bb);
             feq_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -3518,7 +3507,7 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
             parent_bb->addInstruction(std::move(feq_inst));
 
             // 使用 seqz 指令取反（如果相等结果为0，则设置为1；否则设置为0）
-            auto result_reg = codeGen_->allocateReg();
+            auto result_reg = codeGen_->allocateIntReg();
             auto seqz_inst =
                 std::make_unique<Instruction>(Opcode::SEQZ, parent_bb);
             seqz_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -3550,7 +3539,7 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
             auto rhs_reg = ensureFloatReg(std::move(rhs), parent_bb);
 
             // 使用 flt.s 指令
-            new_reg = codeGen_->allocateReg();
+            new_reg = codeGen_->allocateIntReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FLT_S, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -3579,7 +3568,7 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
             auto rhs_reg = ensureFloatReg(std::move(rhs), parent_bb);
 
             // 使用 fle.s 指令
-            new_reg = codeGen_->allocateReg();
+            new_reg = codeGen_->allocateIntReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FLE_S, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -3608,7 +3597,7 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
             auto rhs_reg = ensureFloatReg(std::move(rhs), parent_bb);
 
             // RISC-V 没有直接的 fgt.s 指令，使用 flt.s 但交换操作数
-            new_reg = codeGen_->allocateReg();
+            new_reg = codeGen_->allocateIntReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FLT_S, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -3638,7 +3627,7 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
             auto rhs_reg = ensureFloatReg(std::move(rhs), parent_bb);
 
             // RISC-V 没有直接的 fge.s 指令，使用 fle.s 但交换操作数
-            new_reg = codeGen_->allocateReg();
+            new_reg = codeGen_->allocateIntReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FLE_S, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -3668,7 +3657,7 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
             auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
             // 使用 flt.s 但交换操作数来实现大于比较
-            new_reg = codeGen_->allocateReg();
+            new_reg = codeGen_->allocateIntReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FLT_S, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -3698,7 +3687,7 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
             auto rhs_reg = ensureFloatReg(std::move(rhs), parent_bb);
 
             // 使用 flt.s 指令实现小于比较
-            new_reg = codeGen_->allocateReg();
+            new_reg = codeGen_->allocateIntReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FLT_S, parent_bb);
             instruction->addOperand(std::make_unique<RegisterOperand>(
@@ -3819,14 +3808,14 @@ std::unique_ptr<MachineOperand> Visitor::visitLogicalOp(
     }
 
     // 为最终结果分配寄存器
-    auto result_reg = codeGen_->allocateReg();
+    auto result_reg = codeGen_->allocateIntReg();
 
     // 先计算左操作数并转换为布尔值
     auto lhs = visit(inst->getOperand(0), parent_bb);
     auto lhs_reg = immToReg(std::move(lhs), parent_bb);
 
     // 将左操作数转换为布尔值（0或1）
-    auto lhs_bool_reg = codeGen_->allocateReg();
+    auto lhs_bool_reg = codeGen_->allocateIntReg();
     auto lhs_snez_inst = std::make_unique<Instruction>(Opcode::SNEZ, parent_bb);
     lhs_snez_inst->addOperand(std::make_unique<RegisterOperand>(
         lhs_bool_reg->getRegNum(), lhs_bool_reg->isVirtual()));
@@ -3861,7 +3850,7 @@ std::unique_ptr<MachineOperand> Visitor::visitLogicalOp(
         auto rhs = visit(inst->getOperand(1), parent_bb);
         auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
-        auto rhs_bool_reg = codeGen_->allocateReg();
+        auto rhs_bool_reg = codeGen_->allocateIntReg();
         auto rhs_snez_inst =
             std::make_unique<Instruction>(Opcode::SNEZ, parent_bb);
         rhs_snez_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -3901,7 +3890,7 @@ std::unique_ptr<MachineOperand> Visitor::visitLogicalOp(
         auto rhs = visit(inst->getOperand(1), parent_bb);
         auto rhs_reg = immToReg(std::move(rhs), parent_bb);
 
-        auto rhs_bool_reg = codeGen_->allocateReg();
+        auto rhs_bool_reg = codeGen_->allocateIntReg();
         auto rhs_snez_inst =
             std::make_unique<Instruction>(Opcode::SNEZ, parent_bb);
         rhs_snez_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -3950,7 +3939,7 @@ void Visitor::storeOperandToReg(
 
                 if (reg_dest && reg_dest->isFloatRegister()) {
                     // 浮点寄存器：需要先加载到整数寄存器，再移动到浮点寄存器
-                    auto temp_reg = codeGen_->allocateReg();
+                    auto temp_reg = codeGen_->allocateIntReg();
 
                     // 1. li temp_reg, imm
                     auto li_inst =
@@ -4198,7 +4187,7 @@ std::unique_ptr<MachineOperand> Visitor::funcArgToReg(
     if (is_current_float) {
         arg_reg = codeGen_->allocateFloatReg();
     } else {
-        arg_reg = codeGen_->allocateReg();
+        arg_reg = codeGen_->allocateIntReg();
     }
 
     // 根据参数类型选择加载指令
@@ -4243,7 +4232,7 @@ std::unique_ptr<RegisterOperand> Visitor::handleLargeOffset(
     }
 
     // 偏移量超出范围，需要使用临时寄存器计算地址
-    auto temp_reg = codeGen_->allocateReg();
+    auto temp_reg = codeGen_->allocateIntReg();
 
     // 将偏移量加载到临时寄存器
     auto li_inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
@@ -4253,7 +4242,7 @@ std::unique_ptr<RegisterOperand> Visitor::handleLargeOffset(
     parent_bb->addInstruction(std::move(li_inst));
 
     // 计算最终地址：base + offset
-    auto addr_reg = codeGen_->allocateReg();
+    auto addr_reg = codeGen_->allocateIntReg();
     auto add_inst = std::make_unique<Instruction>(Opcode::ADD, parent_bb);
     add_inst->addOperand(std::make_unique<RegisterOperand>(
         addr_reg->getRegNum(), addr_reg->isVirtual()));
@@ -4336,8 +4325,8 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
             return std::make_unique<RegisterOperand>(
                 reg_num, false,
                 is_float ? RegisterType::Float : RegisterType::Integer);
-        }  
-        
+        }
+
         // 栈传参：在首次使用时加载
         // 计算此参数在调用者栈帧中的偏移（按8字节对齐累积）
         auto getArgSize = [](const midend::Type* ty) -> size_t {
@@ -4365,8 +4354,7 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         bool is_pointer = arg->getType()->isPointerType();
 
         // 为该参数分配一个虚拟寄存器并加载
-        auto vreg =
-            is_float ? codeGen_->allocateFloatReg() : codeGen_->allocateReg();
+        auto vreg = codeGen_->allocateReg(is_float);
         Opcode load_op;
         if (is_float) {
             load_op = Opcode::FLW;  // 传入的是 float
@@ -4399,7 +4387,7 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
                   << std::endl;
 
         // 1. 生成LA指令来获取地址
-        auto global_addr_reg = codeGen_->allocateReg();
+        auto global_addr_reg = codeGen_->allocateIntReg();
         auto global_addr_inst =
             std::make_unique<Instruction>(Opcode::LA, parent_bb);
         global_addr_inst->addOperand(std::make_unique<RegisterOperand>(
@@ -4419,8 +4407,7 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
             // 对于标量类型的全局变量，生成加载指令来获取值
             // TODO: extract function
             bool is_float_value = global_var->getValueType()->isFloatType();
-            auto value_reg = is_float_value ? codeGen_->allocateFloatReg()
-                                            : codeGen_->allocateReg();
+            auto value_reg = codeGen_->allocateReg(is_float_value);
             Opcode load_opcode = is_float_value ? Opcode::FLW : Opcode::LW;
 
             auto load_inst =
@@ -4474,7 +4461,7 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
             }
 
             // 对于非零浮点值，使用 LI + FMV_W_X 序列
-            auto int_reg = codeGen_->allocateReg();
+            auto int_reg = codeGen_->allocateIntReg();
             auto li_inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
             li_inst->addOperand(std::make_unique<RegisterOperand>(
                 int_reg->getRegNum(), int_reg->isVirtual()));
@@ -4515,7 +4502,7 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
             return std::make_unique<ImmediateOperand>(value_int);
         }
         // 如果不在范围内，分配一个新的寄存器
-        auto new_reg = codeGen_->allocateReg();
+        auto new_reg = codeGen_->allocateIntReg();
         // codeGen_->mapValueToReg(value, new_reg->getRegNum(),
         //                         new_reg->isVirtual());
         auto inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
@@ -4567,7 +4554,7 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         int32_t bit_pattern = converter.i;
 
         // 1. 分配整数寄存器用于加载位模式
-        auto int_reg = codeGen_->allocateReg();
+        auto int_reg = codeGen_->allocateIntReg();
         auto li_inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
         li_inst->addOperand(std::make_unique<RegisterOperand>(
             int_reg->getRegNum(), int_reg->isVirtual()));  // rd

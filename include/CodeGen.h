@@ -51,12 +51,15 @@ class CodeGenerator {
     int getNextLabelNum() { return nextLabelNum_++; }
     void reset();
 
-    std::unique_ptr<RegisterOperand> allocateReg();
-    RegisterOperand* getOrAllocateReg(const midend::Value* val);
+    std::unique_ptr<RegisterOperand> allocateIntReg();
+    RegisterOperand* getOrAllocateIntReg(const midend::Value* val);
     LabelOperand* getBBLabel(const midend::BasicBlock* bb);
 
     std::unique_ptr<RegisterOperand> allocateFloatReg();
     RegisterOperand* getOrAllocateFloatReg(const midend::Value* val);
+
+    std::unique_ptr<RegisterOperand> allocateReg(bool is_float = false);
+    RegisterOperand* getOrAllocateReg(const midend::Value* val, bool is_float = false);
 
     // 浮点常量池相关方法
     FloatConstantPool* getFloatConstantPool() {

@@ -6,14 +6,15 @@ namespace riscv64 {
 
 // TODO: extract function: allocateReg(bool isFloat)
 // TODO: rename function: allocateIntReg
-std::unique_ptr<RegisterOperand> CodeGenerator::allocateReg() {
+std::unique_ptr<RegisterOperand> CodeGenerator::allocateIntReg() {
     return std::make_unique<RegisterOperand>(nextRegNum_++,
                                              true);  // 分配一个新的虚拟寄存器
 }
 
 // TODO: rename getOrAllocateIntReg
-// TODO: 合并getOrAllocateIntegerReg和getOrAllocateFloatReg 为 getOrAllocateReg(Value* val, bool isFloat)
-RegisterOperand* CodeGenerator::getOrAllocateReg(const midend::Value* val) {
+// TODO: 合并getOrAllocateIntegerReg和getOrAllocateFloatReg 为
+// getOrAllocateReg(Value* val, bool isFloat)
+RegisterOperand* CodeGenerator::getOrAllocateIntReg(const midend::Value* val) {
     auto it = valueToReg_.find(val);
     if (it != valueToReg_.end()) {
         return it->second.get();
@@ -22,13 +23,13 @@ RegisterOperand* CodeGenerator::getOrAllocateReg(const midend::Value* val) {
     // 检查是否是常量
     if (auto* constant = dynamic_cast<const midend::Constant*>(val)) {
         // 对于立即数，可能需要先加载到寄存器
-        auto reg = allocateReg();
+        auto reg = allocateIntReg();
         auto* regPtr = reg.get();
         valueToReg_[val] = std::move(reg);
         return regPtr;
     }
 
-    auto reg = allocateReg();
+    auto reg = allocateIntReg();
     auto* regPtr = reg.get();
     valueToReg_[val] = std::move(reg);
     return regPtr;
@@ -58,6 +59,21 @@ RegisterOperand* CodeGenerator::getOrAllocateFloatReg(
     auto* regPtr = reg.get();
     valueToReg_[val] = std::move(reg);
     return regPtr;
+}
+
+std::unique_ptr<RegisterOperand> CodeGenerator::allocateReg(bool is_float) {
+    if (is_float) {
+        return allocateFloatReg();
+    }
+    return allocateIntReg();
+}
+
+RegisterOperand* CodeGenerator::getOrAllocateReg(const midend::Value* val,
+                                                 bool is_float) {
+    if (is_float) {
+        return getOrAllocateFloatReg(val);
+    }
+    return getOrAllocateIntReg(val);
 }
 
 }  // namespace riscv64
