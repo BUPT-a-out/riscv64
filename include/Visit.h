@@ -57,6 +57,8 @@ class Visitor {
                          BasicBlock* parent_bb);
     std::unique_ptr<RegisterOperand> immToReg(
         std::unique_ptr<MachineOperand> operand, BasicBlock* parent_bb);
+    std::unique_ptr<RegisterOperand> floatImmToReg(
+        std::unique_ptr<ImmediateOperand> operand, BasicBlock* parent_bb);
     std::unique_ptr<RegisterOperand> ensureFloatReg(
         std::unique_ptr<MachineOperand> operand, BasicBlock* parent_bb);
     std::unique_ptr<MachineOperand> visitCallInst(
