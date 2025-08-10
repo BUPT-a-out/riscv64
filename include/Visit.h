@@ -77,6 +77,16 @@ class Visitor {
 
     void assignVirtRegsToFuncArgs(midend::Function* func);
 
+    template <typename T, typename ConstantType>
+    std::vector<T> processTypedArray(
+        const midend::ConstantArray* const_array, const midend::Type* type,
+        T default_value, std::function<T(const ConstantType*)> extractor);
+
+    template <typename T>
+    std::vector<T> processMultiDimArray(
+        const midend::ConstantArray* const_array, const midend::Type* type,
+        const midend::Type* element_type, T default_value);
+
     // 返回一个新的寄存器操作数
     std::unique_ptr<RegisterOperand> cloneRegister(RegisterOperand* reg_op);
     std::unique_ptr<RegisterOperand> cloneRegister(RegisterOperand* reg_op,
