@@ -419,28 +419,57 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
         throw std::runtime_error("Strides size mismatch with indices count");
     }
 
-    // 检查是否所有索引都为常量0，如果是则直接返回基地址
-    bool all_indices_zero = true;
+    // 检查是否所有索引都为常量，如果是则直接计算出最终偏移量
+    bool all_indices_const = true;
+    int const_total_indice = 0;
     for (unsigned i = 0; i < gep_inst->getNumIndices(); ++i) {
         auto* index_value = gep_inst->getIndex(i);
         if (auto* const_int =
                 midend::dyn_cast<midend::ConstantInt>(index_value)) {
-            if (const_int->getSignedValue() != 0) {
-                all_indices_zero = false;
-                break;
-            }
+            const_total_indice += const_int->getSignedValue() * strides[i];
         } else {
-            all_indices_zero = false;
+            all_indices_const = false;
             break;
         }
     }
 
-    if (all_indices_zero) {
+    if (all_indices_const) {
         // 所有索引都为0，直接返回基地址
-        codeGen_->mapValueToReg(inst, base_addr_reg->getRegNum(),
-                                base_addr_reg->isVirtual());
-        return std::make_unique<RegisterOperand>(base_addr_reg->getRegNum(),
-                                                 base_addr_reg->isVirtual());
+        if (const_total_indice == 0) {
+            codeGen_->mapValueToReg(inst, base_addr_reg->getRegNum(),
+                                    base_addr_reg->isVirtual());
+            return cloneRegister(base_addr_reg.get());
+        }
+
+        auto final_addr_reg = codeGen_->allocateIntReg();
+        
+        // 如果在立即数范围内，使用 ADDI 指令优化
+        if (isValidImmediateOffset(const_total_indice)) {
+            auto addi_inst =
+                std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
+            addi_inst->addOperand(cloneRegister(final_addr_reg.get()));
+            addi_inst->addOperand(cloneRegister(base_addr_reg.get()));
+            addi_inst->addOperand(
+                std::make_unique<ImmediateOperand>(const_total_indice));
+            parent_bb->addInstruction(std::move(addi_inst));
+        } else {
+            // 偏移量超出立即数范围，使用 LI + ADD 序列
+            auto total_offset_reg = immToReg(
+                std::make_unique<ImmediateOperand>(const_total_indice), parent_bb);
+
+            auto final_add_inst =
+                std::make_unique<Instruction>(Opcode::ADD, parent_bb);
+            final_add_inst->addOperand(cloneRegister(final_addr_reg.get()));
+            final_add_inst->addOperand(cloneRegister(base_addr_reg.get()));
+            final_add_inst->addOperand(std::move(total_offset_reg));
+            parent_bb->addInstruction(std::move(final_add_inst));
+        }
+
+        // 建立GEP指令结果到寄存器的映射
+        codeGen_->mapValueToReg(inst, final_addr_reg->getRegNum(),
+                                final_addr_reg->isVirtual());
+
+        return cloneRegister(final_addr_reg.get());
     }
 
     // 计算总偏移量，采用更直接的策略
