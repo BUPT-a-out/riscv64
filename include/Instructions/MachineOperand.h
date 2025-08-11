@@ -285,3 +285,20 @@ class LabelOperand : public MachineOperand {
 };
 
 }  // namespace riscv64
+
+
+// 为 RegisterOperand 定义哈希函数
+namespace std {
+    template <>
+    struct hash<riscv64::RegisterOperand> {
+        std::size_t operator()(const riscv64::RegisterOperand& reg) const {
+            // 将三个字段组合成一个哈希值
+            std::size_t h1 = std::hash<unsigned>{}(reg.getRegNum());
+            std::size_t h2 = std::hash<bool>{}(reg.isVirtual());
+            std::size_t h3 = std::hash<int>{}(static_cast<int>(reg.getRegisterType()));
+            
+            // 使用位移和异或来组合哈希值
+            return h1 ^ (h2 << 1) ^ (h3 << 2);
+        }
+    };
+}
