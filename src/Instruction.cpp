@@ -773,7 +773,8 @@ std::vector<unsigned> Instruction::getDefinedIntegerRegs() const {
         case BLT:
         case BGE:
         case BLTU:
-        case BGEU: {
+        case BGEU:
+        case BNEZ: {
             break;
         }
 
