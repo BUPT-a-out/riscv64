@@ -10,7 +10,6 @@
 #include "Instructions/Function.h"
 #include "Instructions/Instruction.h"
 #include "Instructions/MachineOperand.h"
-#include "SpillChainManager.h"
 
 namespace riscv64 {
 
@@ -68,8 +67,6 @@ class RegAllocChaitin {
     std::unordered_set<unsigned> coalescedRegs;
     std::unordered_map<unsigned, unsigned> coalesceMap;  // 映射到代表元
 
-    std::unique_ptr<SpillChainManager> spillChainManager;
-
     // 维护度数缓存，避免重复计算
     std::unordered_map<unsigned, int> degreeCache;
     void initializeDegreeCache();
@@ -87,6 +84,7 @@ class RegAllocChaitin {
     void run();
 
    private:
+    unsigned selectAvailablePhysicalDataReg(Instruction* inst);
     void allocateRegisters();
     // 活跃性分析
     void computeLiveness();

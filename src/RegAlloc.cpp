@@ -4,16 +4,11 @@
 
 namespace riscv64 {
 
-// TODO: extract function: allocateReg(bool isFloat)
-// TODO: rename function: allocateIntReg
 std::unique_ptr<RegisterOperand> CodeGenerator::allocateIntReg() {
     return std::make_unique<RegisterOperand>(nextRegNum_++,
                                              true);  // 分配一个新的虚拟寄存器
 }
 
-// TODO: rename getOrAllocateIntReg
-// TODO: 合并getOrAllocateIntegerReg和getOrAllocateFloatReg 为
-// getOrAllocateReg(Value* val, bool isFloat)
 RegisterOperand* CodeGenerator::getOrAllocateIntReg(const midend::Value* val) {
     auto it = valueToReg_.find(val);
     if (it != valueToReg_.end()) {

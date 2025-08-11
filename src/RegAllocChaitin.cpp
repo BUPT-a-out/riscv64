@@ -17,9 +17,33 @@ namespace riscv64 {
 void RegAllocChaitin::run() {
     initializeABIConstraints();
 
-    spillChainManager = std::make_unique<SpillChainManager>(assigningFloat);
-
     allocateRegisters();
+}
+
+unsigned RegAllocChaitin::selectAvailablePhysicalDataReg(Instruction* inst) {
+    // 整数优先使用临时寄存器 t0-t6
+    std::vector<unsigned> tempIntegerPriority = {6,  7,  28,
+                                                 29, 30, 31};  // t1-t2, t3-t6
+    // t0 固定作为地址寄存器, 先避开
+
+    // 浮点优先使用临时寄存器 ft0-ft7
+    std::vector<unsigned> tempFloatPriority = {
+        32, 33, 34, 35, 36, 37, 38, 39, 60, 61, 62, 63};  // ft0-ft7 ft8-ft11
+
+    auto regPriority = assigningFloat ? tempFloatPriority : tempIntegerPriority;
+
+    auto usedInInst =
+        assigningFloat ? inst->getUsedFloatRegs() : inst->getUsedIntegerRegs();
+
+    // 选择第一个不冲突且未使用的物理寄存器
+    for (unsigned physReg : regPriority) {
+        if (std::find(usedInInst.begin(), usedInInst.end(), physReg) ==
+            usedInInst.end()) {
+            return physReg;
+        }
+    }
+
+    return 0;  // 没有可用寄存器
 }
 
 void RegAllocChaitin::allocateRegisters() {
@@ -569,7 +593,6 @@ bool RegAllocChaitin::attemptOptimisticColoring(
         auto preferredRegs = getABIPreferredRegs(regNum);
 
         for (unsigned color : preferredRegs) {
-
             if (usedColors.find(color) == usedColors.end() &&
                 reservedPhysicalRegs.find(color) ==
                     reservedPhysicalRegs.end() &&
@@ -720,7 +743,8 @@ std::vector<unsigned> RegAllocChaitin::getSimplificationOrder() {
     for (auto& [regNum, node] : interferenceGraph) {
         if (removed.find(regNum) == removed.end() && !node->isPrecolored) {
             if (!ABI::isReservedReg(regNum, assigningFloat)) {
-                std::cout << "Spill reg " << regNum << " with degree " << getCachedDegree(regNum) << std::endl; 
+                std::cout << "Spill reg " << regNum << " with degree "
+                          << getCachedDegree(regNum) << std::endl;
                 spilledRegs.insert(regNum);
             } else {
                 std::cerr
@@ -882,8 +906,7 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
             if (std::find(usedRegs.begin(), usedRegs.end(), reg) !=
                 usedRegs.end()) {
                 // 分配数据寄存器
-                unsigned dataReg =
-                    spillChainManager->selectAvailablePhysicalDataReg(inst);
+                unsigned dataReg = selectAvailablePhysicalDataReg(inst);
 
                 // 分配临时寄存器用于地址计算
                 unsigned addrReg = 5;  // t0
@@ -928,8 +951,7 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
             if (std::find(definedRegs.begin(), definedRegs.end(), reg) !=
                 definedRegs.end()) {
                 // 分配数据寄存器
-                unsigned dataReg =
-                    spillChainManager->selectAvailablePhysicalDataReg(inst);
+                unsigned dataReg = selectAvailablePhysicalDataReg(inst);
 
                 // 更新原指令中的寄存器引用
                 updateRegisterInInstruction(inst, reg, dataReg, assigningFloat);
@@ -1395,7 +1417,8 @@ bool RegAllocChaitin::canCoalesce(unsigned src, unsigned dst) {
         //     return false;
         // }
 
-        // // George准则：对于每个高度数的邻居，它要么已经与目标寄存器冲突，要么度数小于K
+        // //
+        // George准则：对于每个高度数的邻居，它要么已经与目标寄存器冲突，要么度数小于K
         // for (unsigned neighbor : srcNode->neighbors) {
         //     if (interferenceGraph[neighbor]->neighbors.size() >=
         //         availableRegs.size()) {
