@@ -4,6 +4,7 @@
 #include <iostream>
 #include <set>
 
+// TODO: preserve emergency  stack slot
 namespace riscv64 {
 
 void FrameIndexElimination::run() {
