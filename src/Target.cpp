@@ -8,6 +8,7 @@
 #include "RAGreedy/SlotIndexes.h"
 #include "RegAllocChaitin.h"
 #include "ValueReusePass.h"
+#include "ConstantFoldingPass.h"
 #include "Visit.h"
 
 namespace riscv64 {
@@ -33,9 +34,10 @@ std::string RISCV64Target::compileToAssembly(
     }
 
     initialFrameIndexPass(riscv_module);  // 第一阶段
+    constantFoldingPass(riscv_module);  // 第1.6阶段：常量折叠优化
     basicBlockReorderingPass(riscv_module);  // 第1.7阶段：基本块重排优化
 
-    slotIndexWrapperPass(riscv_module);
+    // slotIndexWrapperPass(riscv_module);
 
     registerAllocationPass(riscv_module);     // 第二阶段
     frameIndexEliminationPass(riscv_module);  // 第三阶段
@@ -96,6 +98,25 @@ Module RISCV64Target::instructionSelectionPass(const midend::Module& module) {
     auto riscv_module = codegen.visitor_->visit(&module);
     std::cout << module.toString() << std::endl;
     return riscv_module;
+}
+
+Module& RISCV64Target::constantFoldingPass(riscv64::Module& module) {
+    std::cout << "\n=== Phase 1.6: Constant Folding ===" << std::endl;
+
+    for (auto& function : module) {
+        if (function->empty()) continue;
+
+        std::cout << "Processing function: " << function->getName()
+                  << std::endl;
+
+        ConstantFolding pass;
+        pass.runOnFunction(function.get());
+    }
+
+    std::cout << "=== Constant Folding Completed ===" << std::endl;
+    std::cout << module.toString() << std::endl;
+
+    return module;
 }
 
 Module& RISCV64Target::initialFrameIndexPass(riscv64::Module& module) {
