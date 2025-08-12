@@ -332,40 +332,6 @@ void LiveInterval::join(LiveInterval &Other) {
 
 /// LiveIntervals
 
-// void LiveIntervals::analyze(Function &fn) {
-//     if (!Indexes) {
-//         throw std::runtime_error("LIS should have non-empty SI");
-//     }
-
-//     // 逆转后序遍历得到逆后序
-//     auto postOrderBlocks = fn.getPostOrder();
-//     std::reverse(postOrderBlocks.begin(), postOrderBlocks.end());
-
-//     // 3. 为每个虚拟寄存器创建活跃区间
-//     std::set<unsigned> AllRegs;
-//     for (BasicBlock *BB : postOrderBlocks) {
-//         for (auto &I : *BB) {
-//             // TODO: float
-//             auto usedRegs = I->getUsedIntegerRegs();
-//             auto definedRegs = I->getDefinedIntegerRegs();
-
-//             AllRegs.insert(usedRegs.begin(), usedRegs.end());
-//             AllRegs.insert(definedRegs.begin(), definedRegs.end());
-//         }
-//     }
-
-//     // 4. 计算每个寄存器的活跃区间
-//     for (unsigned regNum : AllRegs) {
-//         if (regNum >= 64) {
-//             RegisterOperand reg(regNum);
-
-//             LiveInterval &LI = createAndComputeVirtRegInterval(reg);
-
-//             VirtRegIntervals[reg] = &LI;
-//         }
-//     }
-// }
-
 void LiveIntervals::analyze(Function &fn) {
     if (!Indexes) {
         throw std::runtime_error("LIS should have non-empty SI");

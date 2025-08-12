@@ -1,7 +1,8 @@
 #include <memory>
 #include <unordered_map>
 #include <vector>
-#include "LiveIntervalUnion.h" // 假设仍使用此结构，若无可自行实现或替代
+
+#include "LiveIntervalUnion.h"
 #include "LiveIntervals.h"
 #include "VirtRegMap.h"
 
@@ -19,11 +20,10 @@ class LiveRegMatrix {
     // 对应每个寄存器索引的查询缓存
     std::vector<std::unique_ptr<LiveIntervalUnion::Query>> Queries;
 
-    LiveRegMatrix() = default;
-
     void releaseMemory();
 
    public:
+    LiveRegMatrix() = default;
     LiveRegMatrix(LiveRegMatrix &&) = default;
 
     void init(Function &F, LiveIntervals &liveIntervals,

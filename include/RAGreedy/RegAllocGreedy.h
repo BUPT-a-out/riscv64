@@ -1,40 +1,86 @@
 #pragma once
 
+#include <queue>
+#include <set>
+
 #include "Instructions/Function.h"
 #include "RAGreedy/LiveIntervals.h"
+#include "RAGreedy/LiveRegMatrix.h"
+#include "RAGreedy/VirtRegMap.h"
 
 namespace riscv64 {
 class RegAllocGreedy {
    private:
     Function *function;
+    LiveIntervals *LIS;
+    VirtRegMap *VRM;
+    LiveRegMatrix *Matrix;
+
+    // 缺少的关键数据成员：
+    std::priority_queue<std::pair<unsigned, LiveInterval*>> Queue;  // 分配队列
+    std::vector<LiveInterval *> unassignedRegs;                // 未分配的寄存器
+    // std::set<unsigned> allocatedPhysRegs;  // 已分配的物理寄存器
 
    public:
-    explicit RegAllocGreedy(Function *func) : function(func) {};
+    explicit RegAllocGreedy(Function *func, LiveIntervals *LIS)
+        : function(func), LIS(LIS) {};
     void run(void);
 
    private:
+    // 初始化方法
+    void init();
+    void seedLiveRegs();
+
+    // 寄存器分配辅助方法
+    std::vector<unsigned> getAllocationOrder(const LiveInterval &VirtReg);
+    bool checkInterference(const LiveInterval &VirtReg, unsigned PhysReg);
+    unsigned calculateSpillCost(const LiveInterval &VirtReg);
+
+    // 分割相关方法
+    bool canSplit(const LiveInterval &VirtReg);
+    std::vector<LiveInterval *> splitInterval(const LiveInterval &VirtReg);
+
+    // 驱逐相关方法
+    std::vector<LiveInterval *> getEvictionCandidates(unsigned PhysReg);
+    bool shouldEvict(const LiveInterval &Evictee, const LiveInterval &Evictor);
+
     void allocateRegisters();
-    // void selectOrSplit(LI, Regs);
+    void selectOrSplit(LiveInterval *LI, std::vector<unsigned> regs);
 
-    void enqueue(LiveInterval* li);
-    LiveInterval* dequeue();
+    void enqueue(LiveInterval *li);
+    LiveInterval *dequeue();
 
-    // MCRegister tryAssign(const LiveInterval &, AllocationOrder &,
-    //                      SmallVectorImpl<Register> &, const SmallVirtRegSet &);
-    // MCRegister tryEvict(const LiveInterval &, AllocationOrder &,
-    //                     SmallVectorImpl<Register> &, uint8_t,
-    //                     const SmallVirtRegSet &);
-    // MCRegister tryRegionSplit(const LiveInterval &, AllocationOrder &,
-    //                           SmallVectorImpl<Register> &);
-    // MCRegister tryBlockSplit(const LiveInterval &, AllocationOrder &,
-    //                          SmallVectorImpl<Register> &);
-    // MCRegister tryLocalSplit(const LiveInterval &, AllocationOrder &,
-    //                          SmallVectorImpl<Register> &);
-    // MCRegister tryLastChanceRecoloring(const LiveInterval &, AllocationOrder &,
-    //                                    SmallVectorImpl<Register> &,
-    //                                    SmallVirtRegSet &, RecoloringStack &,
-    //                                    unsigned);
+    unsigned tryAssign(const LiveInterval &,
+                       std::vector<unsigned> allocationOrder,
+                       std::vector<unsigned> &newVRegs,
+                       std::set<unsigned> fixedRegs);
 
+    unsigned tryEvict(const LiveInterval &,
+                      std::vector<unsigned> allocationOrder,
+                      std::vector<unsigned> &newVRegs, unsigned costPerUseLimit,
+                      std::set<unsigned> fixedRegs);
+
+    unsigned tryRegionSplit(const LiveInterval &,
+                            std::vector<unsigned> allocationOrder,
+                            std::vector<unsigned> &newVRegs);
+
+    unsigned tryBlockSplit(const LiveInterval &,
+                           std::vector<unsigned> allocationOrder,
+                           std::vector<unsigned> &newVRegs);
+
+    unsigned tryLocalSplit(const LiveInterval &,
+                           std::vector<unsigned> allocationOrder,
+                           std::vector<unsigned> &newVRegs);
+
+    unsigned tryLastChanceRecoloring(
+        const LiveInterval &VirtReg, std::vector<unsigned> allocationOrder,
+        std::vector<unsigned> &NewVRegs,
+        std::unordered_set<unsigned> &FixedRegisters,
+        std::vector<std::pair<const LiveInterval *, unsigned>> &RecolorStack,
+        unsigned Depth);
+
+   public:
+    void print(std::ostream &OS) const;
 };
 
 }  // namespace riscv64

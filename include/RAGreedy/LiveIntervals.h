@@ -312,6 +312,16 @@ class LiveIntervals {
     LiveInterval &getInterval(RegisterOperand Reg);
     const LiveInterval &getInterval(RegisterOperand Reg) const;
 
+    std::vector<LiveInterval *> getAllLiveIntervals() {
+        std::vector<LiveInterval *> intervals;
+
+        for (const auto &pair : VirtRegIntervals) {
+            intervals.push_back(pair.second);
+        }
+
+        return intervals;
+    }
+
     // 检查是否已有区间
     bool hasInterval(RegisterOperand Reg) const;
 
@@ -375,16 +385,6 @@ class LiveIntervals {
 
     // 替换指令
     SlotIndex ReplaceInstructionInMaps(Instruction &I, Instruction &NewI);
-    // // 获取寄存器单元的活跃范围
-    // LiveInterval &getRegUnit(unsigned Unit);
-
-    // // 获取已缓存的寄存器单元
-    // LiveInterval *getCachedRegUnit(unsigned Unit);
-    // const LiveInterval *getCachedRegUnit(unsigned Unit) const;
-
-    // // 移除寄存器单元
-    // void removeRegUnit(unsigned Unit);
-    // void removeAllRegUnitsForPhysReg(RegisterOperand RegOp);
 
     // 移除物理寄存器定义
     void removePhysRegDefAt(RegisterOperand RegOp, SlotIndex Pos);

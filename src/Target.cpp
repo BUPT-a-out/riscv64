@@ -2,13 +2,14 @@
 
 #include "BasicBlockReordering.h"
 #include "CodeGen.h"
+#include "ConstantFoldingPass.h"
 #include "FrameIndexElimination.h"
 #include "IR/Function.h"
 #include "RAGreedy/LiveIntervals.h"
+#include "RAGreedy/RegAllocGreedy.h"
 #include "RAGreedy/SlotIndexes.h"
 #include "RegAllocChaitin.h"
 #include "ValueReusePass.h"
-#include "ConstantFoldingPass.h"
 #include "Visit.h"
 
 namespace riscv64 {
@@ -29,15 +30,16 @@ std::string RISCV64Target::compileToAssembly(
     if (analysisManager != nullptr) {
         valueReusePass(riscv_module, module, analysisManager);
     } else {
-        std::cout << "No AnalysisManager provided for ValueReusePass, skipped. Pass `-O1` param to enable."
+        std::cout << "No AnalysisManager provided for ValueReusePass, skipped. "
+                     "Pass `-O1` param to enable."
                   << std::endl;
     }
 
-    initialFrameIndexPass(riscv_module);  // 第一阶段
-    constantFoldingPass(riscv_module);  // 第1.6阶段：常量折叠优化
+    initialFrameIndexPass(riscv_module);     // 第一阶段
+    constantFoldingPass(riscv_module);       // 第1.6阶段：常量折叠优化
     basicBlockReorderingPass(riscv_module);  // 第1.7阶段：基本块重排优化
 
-    // slotIndexWrapperPass(riscv_module);
+    slotIndexWrapperPass(riscv_module);
 
     registerAllocationPass(riscv_module);     // 第二阶段
     frameIndexEliminationPass(riscv_module);  // 第三阶段
@@ -176,6 +178,7 @@ Module& RISCV64Target::basicBlockReorderingPass(riscv64::Module& module) {
     return module;
 }
 
+// TODO: rename fn
 Module& RISCV64Target::slotIndexWrapperPass(riscv64::Module& module) {
     std::cout << "\n=== Phase 2.0: SlotIndexGeneration ===" << std::endl;
 
@@ -188,6 +191,10 @@ Module& RISCV64Target::slotIndexWrapperPass(riscv64::Module& module) {
         auto LIS = std::make_unique<LiveIntervals>(function.get(), &SI);
         LIS->analyze(*function);
         LIS->print(std::cout);
+
+        auto RAGreedy = RegAllocGreedy(function.get(), LIS.get());
+        RAGreedy.run();
+        RAGreedy.print(std::cout);
     }
 
     std::cout << module.toString() << std::endl;
