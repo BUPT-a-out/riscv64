@@ -269,8 +269,7 @@ void LiveInterval::print(std::ostream &OS) const {
        << ": ";
     for (const auto &seg : segments_) {
         OS << "[" << seg.start << "," << seg.end << ":VN" << seg.valno->id
-        << (seg.valno->isPHIDef() ? "phi" : "")
-           << ") ";
+           << (seg.valno->isPHIDef() ? "phi" : "") << ") ";
     }
 }
 
@@ -373,56 +372,57 @@ void LiveIntervals::analyze(Function &fn) {
     }
 
     function = &fn;
-    
+
     // 1. 为 RegisterOperand 定义比较函数和哈希函数（如果还没有的话）
     struct RegInfo {
-        std::unordered_set<BasicBlock*> defBlocks;
-        std::unordered_set<BasicBlock*> useBlocks;
-        std::map<BasicBlock*, std::vector<SlotIndex>> defsInBB;
-        std::unordered_set<BasicBlock*> liveIn;
-        std::unordered_set<BasicBlock*> liveOut;
+        std::unordered_set<BasicBlock *> defBlocks;
+        std::unordered_set<BasicBlock *> useBlocks;
+        std::map<BasicBlock *, std::vector<SlotIndex>> defsInBB;
+        std::unordered_set<BasicBlock *> liveIn;
+        std::unordered_set<BasicBlock *> liveOut;
     };
-    
+
     std::map<RegisterOperand, RegInfo> regInfoMap;
-    std::map<RegisterOperand, std::map<SlotIndex, VNInfo*>> regDefToVNInfo;
-    
+    std::map<RegisterOperand, std::map<SlotIndex, VNInfo *>> regDefToVNInfo;
+
     // 2. 单次遍历收集所有RegisterOperand的def/use信息
     for (auto &BB : fn) {
-        std::unordered_set<RegisterOperand> defsInThisBB; // 追踪本BB已定义的寄存器
-        
+        std::unordered_set<RegisterOperand>
+            defsInThisBB;  // 追踪本BB已定义的寄存器
+
         for (auto &I : *BB) {
             SlotIndex instrIdx = getInstructionIndex(*I);
-            
+
             // 处理使用的寄存器（必须在处理定义之前）
             auto usedRegs = I->getUsedIntegerRegs();
             for (unsigned regNum : usedRegs) {
-                if (regNum >= 64) { // 只处理虚拟寄存器
+                if (regNum >= 64) {  // 只处理虚拟寄存器
                     RegisterOperand reg(regNum);
-                    RegInfo& info = regInfoMap[reg];
-                    
+                    RegInfo &info = regInfoMap[reg];
+
                     // 只有在该基本块还没有定义这个寄存器时，才算作use
                     if (defsInThisBB.find(reg) == defsInThisBB.end()) {
                         info.useBlocks.insert(BB.get());
                     }
                 }
             }
-            
+
             // 处理定义的寄存器
             auto definedRegs = I->getDefinedIntegerRegs();
             for (unsigned regNum : definedRegs) {
-                if (regNum >= 64) { // 只处理虚拟寄存器
+                if (regNum >= 64) {  // 只处理虚拟寄存器
                     RegisterOperand reg(regNum);
-                    RegInfo& info = regInfoMap[reg];
+                    RegInfo &info = regInfoMap[reg];
                     info.defBlocks.insert(BB.get());
                     info.defsInBB[BB.get()].push_back(instrIdx);
                     defsInThisBB.insert(reg);
-                    
+
                     // 确保LiveInterval存在
                     if (VirtRegIntervals.find(reg) == VirtRegIntervals.end()) {
                         LiveInterval &LI = createEmptyInterval(reg);
                         VirtRegIntervals[reg] = &LI;
                     }
-                    
+
                     // 创建VNInfo
                     LiveInterval &LI = *VirtRegIntervals[reg];
                     VNInfo *VNI = LI.createValueAt(instrIdx);
@@ -431,35 +431,37 @@ void LiveIntervals::analyze(Function &fn) {
             }
         }
     }
-    
+
     // 3. 使用经典活跃性分析算法（类似computeLiveness的高效方法）
     auto postOrder = fn.getPostOrder();
-    std::reverse(postOrder.begin(), postOrder.end()); // 转为RPO
-    
+    std::reverse(postOrder.begin(), postOrder.end());  // 转为RPO
+
     // 为每个寄存器单独进行活跃性分析
-    for (auto& [reg, regInfo] : regInfoMap) {
+    for (auto &[reg, regInfo] : regInfoMap) {
         bool changed = true;
         while (changed) {
             changed = false;
-            
-            for (BasicBlock* BB : postOrder) {
+
+            for (BasicBlock *BB : postOrder) {
                 // 计算新的liveOut
                 bool newLiveOut = false;
-                for (BasicBlock* succ : BB->getSuccessors()) {
+                for (BasicBlock *succ : BB->getSuccessors()) {
                     if (regInfo.liveIn.count(succ)) {
                         newLiveOut = true;
                         break;
                     }
                 }
-                
+
                 // 计算新的liveIn: use[BB] ∪ (liveOut[BB] - def[BB])
-                bool newLiveIn = regInfo.useBlocks.count(BB) || 
-                               (newLiveOut && !regInfo.defBlocks.count(BB));
-                
+                bool newLiveIn = regInfo.useBlocks.count(BB) ||
+                                 (newLiveOut && !regInfo.defBlocks.count(BB));
+
                 // 检查变化
-                bool liveOutChanged = (regInfo.liveOut.count(BB) > 0) != newLiveOut;
-                bool liveInChanged = (regInfo.liveIn.count(BB) > 0) != newLiveIn;
-                
+                bool liveOutChanged =
+                    (regInfo.liveOut.count(BB) > 0) != newLiveOut;
+                bool liveInChanged =
+                    (regInfo.liveIn.count(BB) > 0) != newLiveIn;
+
                 if (liveOutChanged || liveInChanged) {
                     changed = true;
                     if (newLiveOut) {
@@ -467,7 +469,7 @@ void LiveIntervals::analyze(Function &fn) {
                     } else {
                         regInfo.liveOut.erase(BB);
                     }
-                    
+
                     if (newLiveIn) {
                         regInfo.liveIn.insert(BB);
                     } else {
@@ -477,29 +479,30 @@ void LiveIntervals::analyze(Function &fn) {
             }
         }
     }
-    
+
     // 4. 辅助函数：判断是否需要PHI节点
-    auto needsPHI = [&](const RegisterOperand& reg, BasicBlock *BB) -> bool {
-        const RegInfo& info = regInfoMap[reg];
+    auto needsPHI = [&](const RegisterOperand &reg, BasicBlock *BB) -> bool {
+        const RegInfo &info = regInfoMap[reg];
         if (BB->getPredecessors().size() <= 1) return false;
         if (!info.liveIn.count(BB)) return false;
-        
+
         int reachingDefs = 0;
         for (BasicBlock *Pred : BB->getPredecessors()) {
             if (info.defBlocks.count(Pred) || info.liveIn.count(Pred)) {
                 reachingDefs++;
-                if (reachingDefs > 1) return true; // 早期退出优化
+                if (reachingDefs > 1) return true;  // 早期退出优化
             }
         }
         return false;
     };
-    
+
     // 5. 辅助函数：查找到达定义
-    std::function<VNInfo*(const RegisterOperand&, BasicBlock*)> findReachingDef = 
-        [&](const RegisterOperand& reg, BasicBlock *BB) -> VNInfo* {
-        const RegInfo& info = regInfoMap[reg];
+    std::function<VNInfo *(const RegisterOperand &, BasicBlock *)>
+        findReachingDef =
+            [&](const RegisterOperand &reg, BasicBlock *BB) -> VNInfo * {
+        const RegInfo &info = regInfoMap[reg];
         auto preds = BB->getPredecessors();
-        
+
         if (preds.size() == 1) {
             BasicBlock *Pred = *preds.begin();
             auto it = info.defsInBB.find(Pred);
@@ -511,7 +514,7 @@ void LiveIntervals::analyze(Function &fn) {
                 return findReachingDef(reg, Pred);
             }
         }
-        
+
         // 多前驱情况，找任意一个有定义的前驱
         for (BasicBlock *Pred : preds) {
             auto it = info.defsInBB.find(Pred);
@@ -522,24 +525,24 @@ void LiveIntervals::analyze(Function &fn) {
         }
         return nullptr;
     };
-    
+
     // 6. 批量构建所有寄存器的活跃区间
-    for (auto& [reg, regInfo] : regInfoMap) {
+    for (auto &[reg, regInfo] : regInfoMap) {
         LiveInterval &LI = *VirtRegIntervals[reg];
-        
+
         for (auto &BB : fn) {
             // 优化：跳过与该寄存器无关的基本块
-            if (!regInfo.liveIn.count(BB.get()) && 
+            if (!regInfo.liveIn.count(BB.get()) &&
                 !regInfo.defBlocks.count(BB.get())) {
                 continue;
             }
-            
+
             SlotIndex bbStart = getBBStartIdx(BB.get());
             SlotIndex bbEnd = getBBEndIdx(BB.get());
-            
+
             VNInfo *activeVNI = nullptr;
             SlotIndex segmentStart;
-            
+
             // Live-in处理
             if (regInfo.liveIn.count(BB.get())) {
                 if (needsPHI(reg, BB.get())) {
@@ -556,22 +559,24 @@ void LiveIntervals::analyze(Function &fn) {
                 }
                 segmentStart = bbStart;
             }
-            
+
             // 处理基本块内的每个定义
             auto it = regInfo.defsInBB.find(BB.get());
             if (it != regInfo.defsInBB.end()) {
                 for (SlotIndex defPoint : it->second) {
                     // 结束前一个段
-                    if (activeVNI && segmentStart.isValid()) {
-                        LI.addSegment(LiveInterval::Segment(segmentStart, defPoint, activeVNI));
+                    if (activeVNI && segmentStart.isValid() &&
+                        segmentStart < defPoint) {
+                        LI.addSegment(LiveInterval::Segment(
+                            segmentStart, defPoint, activeVNI));
                     }
-                    
+
                     // 开始新段
                     activeVNI = regDefToVNInfo[reg][defPoint];
                     segmentStart = defPoint;
                 }
             }
-            
+
             // 处理段的结束
             if (activeVNI && segmentStart.isValid()) {
                 SlotIndex segmentEnd;
@@ -584,18 +589,21 @@ void LiveIntervals::analyze(Function &fn) {
                         SlotIndex instrIdx = getInstructionIndex(*I);
                         if (instrIdx >= segmentStart) {
                             auto usedRegs = I->getUsedIntegerRegs();
-                            if (std::find(usedRegs.begin(), usedRegs.end(), reg.getRegNum()) != usedRegs.end()) {
+                            if (std::find(usedRegs.begin(), usedRegs.end(),
+                                          reg.getRegNum()) != usedRegs.end()) {
                                 segmentEnd = instrIdx.getNextSlot();
                             }
                         }
                     }
                 }
-                LI.addSegment(LiveInterval::Segment(segmentStart, segmentEnd, activeVNI));
+                if (segmentStart < segmentEnd) {
+                    LI.addSegment(LiveInterval::Segment(segmentStart,
+                                                        segmentEnd, activeVNI));
+                }
             }
         }
     }
 }
-
 
 void LiveIntervals::clear() {
     // 清理所有活跃区间
@@ -637,15 +645,17 @@ LiveInterval &LiveIntervals::createEmptyInterval(RegisterOperand Reg) {
 }
 
 // TODO: float
-LiveInterval &LiveIntervals::createAndComputeVirtRegInterval(RegisterOperand Reg) {
+LiveInterval &LiveIntervals::createAndComputeVirtRegInterval(
+    RegisterOperand Reg) {
     LiveInterval &LI = createEmptyInterval(Reg);
 
     // 1. 收集所有定义点
-    std::map<SlotIndex, VNInfo*> DefToVNInfo;
+    std::map<SlotIndex, VNInfo *> DefToVNInfo;
     for (auto &BB : *function) {
         for (auto &I : *BB) {
             auto definedRegs = I->getDefinedIntegerRegs();
-            if (std::find(definedRegs.begin(), definedRegs.end(), Reg.getRegNum()) != definedRegs.end()) {
+            if (std::find(definedRegs.begin(), definedRegs.end(),
+                          Reg.getRegNum()) != definedRegs.end()) {
                 SlotIndex defIdx = getInstructionIndex(*I);
                 VNInfo *VNI = LI.createValueAt(defIdx);
                 DefToVNInfo[defIdx] = VNI;
@@ -654,33 +664,35 @@ LiveInterval &LiveIntervals::createAndComputeVirtRegInterval(RegisterOperand Reg
     }
 
     // 2. 计算每个基本块的def/use信息
-    std::map<BasicBlock*, bool> Def, Use, LiveIn, LiveOut;
-    std::map<BasicBlock*, std::vector<SlotIndex>> DefsInBB;
+    std::map<BasicBlock *, bool> Def, Use, LiveIn, LiveOut;
+    std::map<BasicBlock *, std::vector<SlotIndex>> DefsInBB;
 
     for (auto &BB : *function) {
         bool hasDef = false;
         bool hasUse = false;
         std::vector<SlotIndex> defs;
-        
+
         for (auto &I : *BB) {
             SlotIndex instrIdx = getInstructionIndex(*I);
-            
+
             // 检查使用（在所有定义之前的使用）
             if (!hasDef) {
                 auto usedRegs = I->getUsedIntegerRegs();
-                if (std::find(usedRegs.begin(), usedRegs.end(), Reg.getRegNum()) != usedRegs.end()) {
+                if (std::find(usedRegs.begin(), usedRegs.end(),
+                              Reg.getRegNum()) != usedRegs.end()) {
                     hasUse = true;
                 }
             }
-            
+
             // 检查定义（可能有多个）
             auto definedRegs = I->getDefinedIntegerRegs();
-            if (std::find(definedRegs.begin(), definedRegs.end(), Reg.getRegNum()) != definedRegs.end()) {
+            if (std::find(definedRegs.begin(), definedRegs.end(),
+                          Reg.getRegNum()) != definedRegs.end()) {
                 hasDef = true;
                 defs.push_back(instrIdx);
             }
         }
-        
+
         Def[BB.get()] = hasDef;
         Use[BB.get()] = hasUse;
         DefsInBB[BB.get()] = defs;
@@ -717,7 +729,7 @@ LiveInterval &LiveIntervals::createAndComputeVirtRegInterval(RegisterOperand Reg
     auto needsPHI = [&](BasicBlock *BB) -> bool {
         if (BB->getPredecessors().size() <= 1) return false;
         if (!LiveIn[BB]) return false;
-        
+
         // 检查是否有多个前驱都有到达该基本块的定义
         int reachingDefs = 0;
         for (BasicBlock *Pred : BB->getPredecessors()) {
@@ -730,7 +742,8 @@ LiveInterval &LiveIntervals::createAndComputeVirtRegInterval(RegisterOperand Reg
     };
 
     // 5. 改进的找到达定义函数
-    std::function<VNInfo*(BasicBlock*)> findReachingDef = [&](BasicBlock *BB) -> VNInfo* {
+    std::function<VNInfo *(BasicBlock *)> findReachingDef =
+        [&](BasicBlock *BB) -> VNInfo * {
         // 如果只有一个前驱，直接找那个前驱的定义
         auto preds = BB->getPredecessors();
         if (preds.size() == 1) {
@@ -745,7 +758,7 @@ LiveInterval &LiveIntervals::createAndComputeVirtRegInterval(RegisterOperand Reg
                 return findReachingDef(Pred);
             }
         }
-        
+
         // 多个前驱的情况，随便找一个（PHI情况下会被覆盖）
         for (BasicBlock *Pred : preds) {
             if (Def[Pred] && !DefsInBB[Pred].empty()) {
@@ -786,10 +799,12 @@ LiveInterval &LiveIntervals::createAndComputeVirtRegInterval(RegisterOperand Reg
         // 处理基本块内的每个定义
         for (SlotIndex defPoint : DefsInBB[BB.get()]) {
             // 结束前一个段
-            if (activeVNI && segmentStart.isValid()) {
-                LI.addSegment(LiveInterval::Segment(segmentStart, defPoint, activeVNI));
+            if (activeVNI && segmentStart.isValid() &&
+                segmentStart < defPoint) {
+                LI.addSegment(
+                    LiveInterval::Segment(segmentStart, defPoint, activeVNI));
             }
-            
+
             // 开始新段
             activeVNI = DefToVNInfo[defPoint];
             segmentStart = defPoint;
@@ -807,13 +822,17 @@ LiveInterval &LiveIntervals::createAndComputeVirtRegInterval(RegisterOperand Reg
                     SlotIndex instrIdx = getInstructionIndex(*I);
                     if (instrIdx >= segmentStart) {
                         auto usedRegs = I->getUsedIntegerRegs();
-                        if (std::find(usedRegs.begin(), usedRegs.end(), Reg.getRegNum()) != usedRegs.end()) {
+                        if (std::find(usedRegs.begin(), usedRegs.end(),
+                                      Reg.getRegNum()) != usedRegs.end()) {
                             segmentEnd = instrIdx.getNextSlot();
                         }
                     }
                 }
             }
-            LI.addSegment(LiveInterval::Segment(segmentStart, segmentEnd, activeVNI));
+            if (segmentStart < segmentEnd) {
+                LI.addSegment(
+                    LiveInterval::Segment(segmentStart, segmentEnd, activeVNI));
+            }
         }
     }
 
@@ -950,8 +969,10 @@ bool LiveIntervals::shrinkToUses(LiveInterval *li,
         // 如果有使用或者定义本身也是使用，创建段
         if (hasUse || std::find(UsePoints.begin(), UsePoints.end(), defIdx) !=
                           UsePoints.end()) {
-            NewSegments.push_back(
-                LiveInterval::Segment(segStart, segEnd, defVNI));
+            if (segStart < segEnd) {
+                NewSegments.push_back(
+                    LiveInterval::Segment(segStart, segEnd, defVNI));
+            }
         } else {
             // 这个定义没有使用，标记值为未使用
             defVNI->markUnused();
@@ -978,8 +999,10 @@ bool LiveIntervals::shrinkToUses(LiveInterval *li,
             }
 
             if (hasUse) {
-                NewSegments.push_back(
-                    LiveInterval::Segment(phiIdx, segEnd, VNIPtr.get()));
+                if (phiIdx < segEnd) {
+                    NewSegments.push_back(
+                        LiveInterval::Segment(phiIdx, segEnd, VNIPtr.get()));
+                }
             } else {
                 VNIPtr->markUnused();
                 Changed = true;
@@ -1102,8 +1125,10 @@ void LiveIntervals::shrinkToUses(LiveInterval::SubRange &SR,
             // 如果有使用，或者定义点本身也是使用点，创建段
             if (hasUse || std::find(UsePoints.begin(), UsePoints.end(),
                                     defIdx) != UsePoints.end()) {
-                NewSegments.push_back(
-                    LiveInterval::Segment(segStart, segEnd, &VNI));
+                if (segStart < segEnd) {
+                    NewSegments.push_back(
+                        LiveInterval::Segment(segStart, segEnd, &VNI));
+                }
             } else {
                 // 没有使用，标记为未使用
                 VNI.markUnused();
@@ -1129,7 +1154,7 @@ void LiveIntervals::shrinkToUses(LiveInterval::SubRange &SR,
                 }
             }
 
-            if (hasUse) {
+            if (hasUse && segStart < segEnd) {
                 NewSegments.push_back(
                     LiveInterval::Segment(segStart, segEnd, &VNI));
             } else {
