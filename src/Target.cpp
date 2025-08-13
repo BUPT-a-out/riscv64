@@ -7,6 +7,7 @@
 #include "IR/Function.h"
 #include "RAGreedy/LiveIntervals.h"
 #include "RAGreedy/RegAllocGreedy.h"
+#include "RAGreedy/RegisterRewriter.h"
 #include "RAGreedy/SlotIndexes.h"
 #include "RegAllocChaitin.h"
 #include "ValueReusePass.h"
@@ -39,7 +40,7 @@ std::string RISCV64Target::compileToAssembly(
     constantFoldingPass(riscv_module);       // 第1.6阶段：常量折叠优化
     basicBlockReorderingPass(riscv_module);  // 第1.7阶段：基本块重排优化
 
-    slotIndexWrapperPass(riscv_module);
+    // slotIndexWrapperPass(riscv_module);
 
     registerAllocationPass(riscv_module);     // 第二阶段
     frameIndexEliminationPass(riscv_module);  // 第三阶段
@@ -195,6 +196,10 @@ Module& RISCV64Target::slotIndexWrapperPass(riscv64::Module& module) {
         auto RAGreedy = RegAllocGreedy(function.get(), LIS.get());
         RAGreedy.run();
         RAGreedy.print(std::cout);
+
+        auto rewriter = RegisterRewriter(function.get(), RAGreedy.getVRM());
+        rewriter.rewrite();
+
     }
 
     std::cout << module.toString() << std::endl;

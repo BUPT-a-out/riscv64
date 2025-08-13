@@ -146,28 +146,54 @@ unsigned LiveIntervalUnion::Query::collectInterferingVRegs(
     }
 
     // 使用LiveInterval的segments接口进行干扰检测
-    for (auto segment: LI->segments()) {
-
-        for (auto unionIt = LiveUnion->Segments.begin();
-             unionIt != LiveUnion->Segments.end(); ++unionIt) {
-            // 检查重叠
-            if (segment.start < unionIt->first &&
-                segment.end > unionIt->first) {
-                auto VReg = unionIt->second;
-                if (std::find(InterferingVRegs.begin(), InterferingVRegs.end(),
-                              VReg) == InterferingVRegs.end()) {
-                    InterferingVRegs.push_back(VReg);
+    auto liSegments = LI->segments();
+    for (size_t i = SegmentIdx; i < liSegments.size(); ++i) {
+        const auto& segment = liSegments[i];
+        
+        // 从当前位置开始遍历union中的区间
+        while (LiveUnionI != LiveUnion->Segments.end()) {
+            const auto& unionSlot = LiveUnionI->first;
+            const auto& unionInterval = LiveUnionI->second;
+            
+            // 如果union区间的起始点在当前segment结束之后，跳出内层循环
+            if (unionSlot >= segment.end) {
+                break;
+            }
+            
+            // 检查union中的LiveInterval与当前segment是否有重叠
+            bool hasOverlap = false;
+            for (const auto& unionSeg : unionInterval->segments()) {
+                // 完整的区间重叠检测
+                if (segment.start < unionSeg.end && unionSeg.start < segment.end) {
+                    hasOverlap = true;
+                    break;
+                }
+            }
+            
+            if (hasOverlap) {
+                // 检查是否已经在干扰列表中
+                if (!isSeenInterference(unionInterval)) {
+                    InterferingVRegs.push_back(unionInterval);
                     if (InterferingVRegs.size() >= MaxInterferingRegs) {
+                        // 保存当前状态以便下次继续
+                        SegmentIdx = i;
                         return InterferingVRegs.size();
                     }
                 }
             }
+            
+            ++LiveUnionI;
         }
+        
+        // 重置union迭代器为下一个segment做准备
+        LiveUnionI = LiveUnion->Segments.begin();
     }
 
+    // 所有segment都检查完毕
     SeenAllInterferences = true;
     return InterferingVRegs.size();
 }
+
 
 bool LiveIntervalUnion::Query::isSeenInterference(
     std::shared_ptr<const LiveInterval> VirtReg) const {

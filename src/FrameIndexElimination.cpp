@@ -33,7 +33,10 @@ void FrameIndexElimination::computeFinalFrameLayout() {
 // alloca对象
 // spill寄存器
 
+// 4 * 8 字节应急区
 // 低地址端
+// TODO： 应急也许放在顶上，考虑和栈上参数的冲突。
+// TODO： 也许用不到应急，
 
 void FrameIndexElimination::assignFinalOffsets() {
     // 计算保存寄存器需要的空间
@@ -51,12 +54,14 @@ void FrameIndexElimination::assignFinalOffsets() {
         }
     }
 
+    // 应对溢出时寄存器高压情况
+    int emergencySpace = 4 * 8; 
+
     // 计算调用参数在s0正偏移, 不计算在内
 
     // 计算总栈帧大小：基础保存寄存器 + 局部变量 + 溢出寄存器 +
-    // 安全空间 重要修复：增加安全空间到总栈帧大小计算中
     int safetySpace = 16;  // 额外的安全空间，确保所有栈对象都在栈帧范围内
-    int totalSize = savedRegSize + localVarSize + spillSize + safetySpace;
+    int totalSize = savedRegSize + localVarSize + spillSize + safetySpace + emergencySpace;
     layout.totalFrameSize = alignTo(totalSize, 16);  // 16字节对齐
 
     // 计算各区域偏移
@@ -64,14 +69,13 @@ void FrameIndexElimination::assignFinalOffsets() {
     // 我们会把fp即s0指向栈帧的高地址端
     // 我们最后将fp作为基址
 
-    // 这两个offset是相对sp的, 但是实际上在代码里完全没用到
+    // 这两个offset是相对sp的, 但是实际上在代码里完全没用到，仅仅用来打印
     layout.returnAddressOffset = layout.totalFrameSize - 8;  // ra
     layout.framePointerOffset = layout.totalFrameSize - 16;  // s0
 
     // 其实这两个变量也完全没用到
 
     // 为每个Frame Index分配具体偏移 (相对于s0)
-    // 重要修复：确保所有栈对象都在安全的内存区域
     // s0 指向栈帧顶部，所有栈对象都应该在 s0 以下的位置
 
     // 保存寄存器区域在栈帧顶部附近，预留空间给保存的寄存器

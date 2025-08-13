@@ -16,15 +16,16 @@ class RegAllocGreedy {
     VirtRegMap *VRM;
     LiveRegMatrix *Matrix;
 
-    // 缺少的关键数据成员：
+    unsigned stackSlotNum_ = 0;
+
     std::priority_queue<std::pair<unsigned, LiveInterval*>> Queue;  // 分配队列
     std::vector<LiveInterval *> unassignedRegs;                // 未分配的寄存器
-    // std::set<unsigned> allocatedPhysRegs;  // 已分配的物理寄存器
 
    public:
     explicit RegAllocGreedy(Function *func, LiveIntervals *LIS)
         : function(func), LIS(LIS) {};
     void run(void);
+    VirtRegMap* getVRM() { return VRM; }
 
    private:
     // 初始化方法
@@ -78,6 +79,9 @@ class RegAllocGreedy {
         std::unordered_set<unsigned> &FixedRegisters,
         std::vector<std::pair<const LiveInterval *, unsigned>> &RecolorStack,
         unsigned Depth);
+
+    bool isUsedAsArgument(unsigned virtualReg) const;
+    bool isUsedAcrossCalls(unsigned virtualReg) const;
 
    public:
     void print(std::ostream &OS) const;

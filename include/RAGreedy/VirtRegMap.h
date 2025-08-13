@@ -85,6 +85,23 @@ class VirtRegMap {
     /// 打印调试信息
     void dump() const;
 
+    std::vector<StackSlot> getAllStackSlots() const {
+        std::unordered_set<StackSlot> uniqueSlots;
+
+        // 遍历所有虚拟寄存器到栈槽的映射
+        for (const auto& pair : virt2StackSlotMap_) {
+            if (pair.second != NO_STACK_SLOT) {
+                uniqueSlots.insert(pair.second);
+            }
+        }
+
+        // 转换为vector并排序
+        std::vector<StackSlot> result(uniqueSlots.begin(), uniqueSlots.end());
+        std::sort(result.begin(), result.end());
+
+        return result;
+    }
+
    private:
     // 关联的函数
     Function& function_;
