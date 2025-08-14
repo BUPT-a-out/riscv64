@@ -27,6 +27,7 @@ class ConstantFolding {
    private:
     // 将虚拟寄存器映射到一个已知的常量值
     std::map<unsigned int, int64_t> virtualRegisterConstants;
+    std::vector<Instruction*> instructionsToRemove;
 };
 
 }  // namespace riscv64

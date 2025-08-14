@@ -12,7 +12,7 @@ void ConstantFolding::runOnBasicBlock(BasicBlock* basicBlock) {
     // Perform constant folding on the given basic block
     // init
     virtualRegisterConstants.clear();
-    // instructionsToRemove.clear();
+    instructionsToRemove.clear();
 
     for (auto& inst : *basicBlock) {
         handleInstruction(inst.get(), basicBlock);
