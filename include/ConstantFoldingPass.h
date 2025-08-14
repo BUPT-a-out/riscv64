@@ -3,6 +3,7 @@
 #include "Instructions/All.h"
 
 namespace riscv64 {
+
 class ConstantFolding {
    public:
     ConstantFolding() = default;
@@ -13,8 +14,17 @@ class ConstantFolding {
 
     // 尝试折叠
     void foldInstruction(Instruction* inst, BasicBlock* parent_bb);
+
     // 尝试窥孔优化
     void peepholeOptimize(Instruction* inst, BasicBlock* parent_bb);
+    // 模式匹配
+    void foldToITypeInst(Instruction* inst, BasicBlock* parent_bb);
+    void algebraicIdentitySimplify(Instruction* inst, BasicBlock* parent_bb);
+    void strengthReduction(Instruction* inst, BasicBlock* parent_bb);
+    void bitwiseOperationSimplify(Instruction* inst, BasicBlock* parent_bb);
+    void instructionReassociateAndCombine(Instruction* inst,
+                                          BasicBlock* parent_bb);
+
     // 尝试常量传播
     void constantPropagate(Instruction* inst, BasicBlock* parent_bb);
 

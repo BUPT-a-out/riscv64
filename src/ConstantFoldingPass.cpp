@@ -17,6 +17,12 @@ void ConstantFolding::runOnBasicBlock(BasicBlock* basicBlock) {
     for (auto& inst : *basicBlock) {
         handleInstruction(inst.get(), basicBlock);
     }
+
+    for (auto* inst : instructionsToRemove) {
+        // Remove the instruction from the basic block
+        basicBlock->removeInstruction(inst);
+        std::cout << "Removed instruction: " << inst->toString() << std::endl;
+    }
 }
 
 void ConstantFolding::handleInstruction(Instruction* inst,
@@ -77,10 +83,43 @@ void ConstantFolding::foldInstruction(Instruction* inst,
 }
 
 void ConstantFolding::peepholeOptimize(Instruction* inst,
-                                       BasicBlock* parent_bb) {}
+                                       BasicBlock* parent_bb) {
+    foldToITypeInst(inst, parent_bb);
+    algebraicIdentitySimplify(inst, parent_bb);
+    strengthReduction(inst, parent_bb);
+    bitwiseOperationSimplify(inst, parent_bb);
+    instructionReassociateAndCombine(inst, parent_bb);
+}
+
+void ConstantFolding::foldToITypeInst(Instruction* inst,
+                                      BasicBlock* parent_bb) {
+    ;
+}
+
+void ConstantFolding::algebraicIdentitySimplify(Instruction* inst,
+                                                BasicBlock* parent_bb) {
+    ;
+}
+
+void ConstantFolding::strengthReduction(Instruction* inst,
+                                        BasicBlock* parent_bb) {
+    ;
+}
+
+void ConstantFolding::bitwiseOperationSimplify(Instruction* inst,
+                                               BasicBlock* parent_bb) {
+    ;
+}
+
+void ConstantFolding::instructionReassociateAndCombine(Instruction* inst,
+                                                       BasicBlock* parent_bb) {
+    ;
+}
 
 void ConstantFolding::constantPropagate(Instruction* inst,
-                                        BasicBlock* parent_bb) {}
+                                        BasicBlock* parent_bb) {
+    ;
+}
 
 std::optional<int64_t> ConstantFolding::calculateInstructionValue(
     Opcode op, std::vector<int64_t>& source_operands) {

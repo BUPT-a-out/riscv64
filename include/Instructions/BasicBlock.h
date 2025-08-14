@@ -61,6 +61,16 @@ class BasicBlock {
         throw std::runtime_error("Instruction not found in BasicBlock");
     }
 
+    void removeInstruction(Instruction* inst) {
+        for (auto it = instructions.begin(); it != instructions.end(); ++it) {
+            if (it->get() == inst) {
+                instructions.erase(it);
+                return;
+            }
+        }
+        throw std::runtime_error("Instruction not found in BasicBlock");
+    }
+
     auto size() const { return instructions.size(); }
 
     const std::string& getLabel() const { return label; }
