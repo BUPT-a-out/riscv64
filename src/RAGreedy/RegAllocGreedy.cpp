@@ -280,6 +280,7 @@ std::vector<unsigned> RegAllocGreedy::getAllocationOrder(
     return preferredRegs;
 }
 
+// TODO: try to remove this kind of, low perf code
 bool RegAllocGreedy::isUsedAsArgument(unsigned virtualReg) const {
     // 检查虚拟寄存器是否在函数调用中用作参数
     for (auto &bb : *function) {

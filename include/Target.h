@@ -31,7 +31,7 @@ class RISCV64Target {
     Module& basicBlockReorderingPass(
         riscv64::Module& module);  // 阶段1.7：基本块重排优化
 
-    Module& slotIndexWrapperPass(riscv64::Module& module);
+    Module& RAGreedyPass(riscv64::Module& module);
 
     Module& registerAllocationPass(
         riscv64::Module& module);  // 阶段2：寄存器分配

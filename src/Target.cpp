@@ -40,7 +40,7 @@ std::string RISCV64Target::compileToAssembly(
     constantFoldingPass(riscv_module);       // 第1.6阶段：常量折叠优化
     basicBlockReorderingPass(riscv_module);  // 第1.7阶段：基本块重排优化
 
-    // slotIndexWrapperPass(riscv_module);
+    // RAGreedyPass(riscv_module);
 
     registerAllocationPass(riscv_module);     // 第二阶段
     frameIndexEliminationPass(riscv_module);  // 第三阶段
@@ -180,7 +180,7 @@ Module& RISCV64Target::basicBlockReorderingPass(riscv64::Module& module) {
 }
 
 // TODO: rename fn
-Module& RISCV64Target::slotIndexWrapperPass(riscv64::Module& module) {
+Module& RISCV64Target::RAGreedyPass(riscv64::Module& module) {
     std::cout << "\n=== Phase 2.0: SlotIndexGeneration ===" << std::endl;
 
     SlotIndexesWrapperPass wrapper0;

@@ -923,8 +923,7 @@ std::unique_ptr<midend::Module> createSimpleArray1DTest() {
     // 初始化数组元素
     // arr[0] = 10
     auto* idx0 = midend::ConstantInt::get(i32Type, 0);
-    auto* ptr0 =
-        builder.createGEP(arrayType, arrayAlloca, {idx0}, "arr_0_ptr");
+    auto* ptr0 = builder.createGEP(arrayType, arrayAlloca, {idx0}, "arr_0_ptr");
 
     // 继续完成这个测试用例的实现
     auto val0 = midend::ConstantInt::get(i32Type, 10);
@@ -932,29 +931,25 @@ std::unique_ptr<midend::Module> createSimpleArray1DTest() {
 
     // arr[1] = 20
     auto* idx1 = midend::ConstantInt::get(i32Type, 1);
-    auto* ptr1 =
-        builder.createGEP(arrayType, arrayAlloca, {idx1}, "arr_1_ptr");
+    auto* ptr1 = builder.createGEP(arrayType, arrayAlloca, {idx1}, "arr_1_ptr");
     auto val1 = midend::ConstantInt::get(i32Type, 20);
     builder.createStore(val1, ptr1);
 
     // arr[2] = 30
     auto* idx2 = midend::ConstantInt::get(i32Type, 2);
-    auto* ptr2 =
-        builder.createGEP(arrayType, arrayAlloca, {idx2}, "arr_2_ptr");
+    auto* ptr2 = builder.createGEP(arrayType, arrayAlloca, {idx2}, "arr_2_ptr");
     auto val2 = midend::ConstantInt::get(i32Type, 30);
     builder.createStore(val2, ptr2);
 
     // arr[3] = 40
     auto* idx3 = midend::ConstantInt::get(i32Type, 3);
-    auto* ptr3 =
-        builder.createGEP(arrayType, arrayAlloca, {idx3}, "arr_3_ptr");
+    auto* ptr3 = builder.createGEP(arrayType, arrayAlloca, {idx3}, "arr_3_ptr");
     auto val3 = midend::ConstantInt::get(i32Type, 40);
     builder.createStore(val3, ptr3);
 
     // arr[4] = 50
     auto* idx4 = midend::ConstantInt::get(i32Type, 4);
-    auto* ptr4 =
-        builder.createGEP(arrayType, arrayAlloca, {idx4}, "arr_4_ptr");
+    auto* ptr4 = builder.createGEP(arrayType, arrayAlloca, {idx4}, "arr_4_ptr");
     auto val4 = midend::ConstantInt::get(i32Type, 50);
     builder.createStore(val4, ptr4);
 
@@ -1037,28 +1032,28 @@ std::unique_ptr<midend::Module> createSimpleArray2DTest() {
     auto* val3 = midend::ConstantInt::get(i32Type, 3);
 
     // matrix[0][0] = 1 (对角线元素)
-    auto* ptr00 = builder.createGEP(outerArrayType, matrixAlloca,
-                                    {idx0, idx0}, "matrix_0_0_ptr");
+    auto* ptr00 = builder.createGEP(outerArrayType, matrixAlloca, {idx0, idx0},
+                                    "matrix_0_0_ptr");
     builder.createStore(val1, ptr00);
 
     // matrix[0][1] = 2
-    auto* ptr01 = builder.createGEP(outerArrayType, matrixAlloca,
-                                    {idx0, idx1}, "matrix_0_1_ptr");
+    auto* ptr01 = builder.createGEP(outerArrayType, matrixAlloca, {idx0, idx1},
+                                    "matrix_0_1_ptr");
     builder.createStore(val2, ptr01);
 
     // matrix[1][1] = 5 (对角线元素)
-    auto* ptr11 = builder.createGEP(outerArrayType, matrixAlloca,
-                                    {idx1, idx1}, "matrix_1_1_ptr");
+    auto* ptr11 = builder.createGEP(outerArrayType, matrixAlloca, {idx1, idx1},
+                                    "matrix_1_1_ptr");
     builder.createStore(val5, ptr11);
 
     // matrix[1][0] = 3
-    auto* ptr10 = builder.createGEP(outerArrayType, matrixAlloca,
-                                    {idx1, idx0}, "matrix_1_0_ptr");
+    auto* ptr10 = builder.createGEP(outerArrayType, matrixAlloca, {idx1, idx0},
+                                    "matrix_1_0_ptr");
     builder.createStore(val3, ptr10);
 
     // matrix[2][2] = 9 (对角线元素)
-    auto* ptr22 = builder.createGEP(outerArrayType, matrixAlloca,
-                                    {idx2, idx2}, "matrix_2_2_ptr");
+    auto* ptr22 = builder.createGEP(outerArrayType, matrixAlloca, {idx2, idx2},
+                                    "matrix_2_2_ptr");
     builder.createStore(val9, ptr22);
 
     // 计算对角线元素之和
@@ -1191,8 +1186,8 @@ std::unique_ptr<midend::Module> createComplexMemoryArrayTest() {
     currentI = builder.createLoad(iAlloca, "i_in_process");
 
     // 加载当前元素 arr[i]
-    auto* currentElemPtr = builder.createGEP(
-        arrayType, arrayAlloca, {currentI}, "current_elem_ptr");
+    auto* currentElemPtr = builder.createGEP(arrayType, arrayAlloca, {currentI},
+                                             "current_elem_ptr");
     auto* currentElem = builder.createLoad(currentElemPtr, "current_elem");
 
     // 更新sum: sum += arr[i]
@@ -1270,8 +1265,8 @@ std::unique_ptr<midend::Module> createComplexMemoryArrayTest() {
 
     // 交换逻辑
     builder.setInsertPoint(swapBB);
-    auto* prevElemPtr = builder.createGEP(arrayType, arrayAlloca,
-                                          {iPrevious}, "prev_elem_ptr");
+    auto* prevElemPtr =
+        builder.createGEP(arrayType, arrayAlloca, {iPrevious}, "prev_elem_ptr");
     auto* currentElemForSwap =
         builder.createLoad(currentElemPtr, "current_for_swap");
     auto* prevElem = builder.createLoad(prevElemPtr, "prev_elem");
@@ -1808,21 +1803,21 @@ std::unique_ptr<midend::Module> createGlobalArrayTest() {
     auto* one = midend::ConstantInt::get(i32Type, 1);
 
     // 访问 small_data[1]
-    auto* smallDataPtr = builder.createGEP(smallArrayTy, smallData, {one},
-                                           "small_data_1_addr");
+    auto* smallDataPtr =
+        builder.createGEP(smallArrayTy, smallData, {one}, "small_data_1_addr");
     auto* smallDataVal = builder.createLoad(smallDataPtr, "small_data_1");
 
     // 修改 small_data[2] = 42
     auto* two = midend::ConstantInt::get(i32Type, 2);
-    auto* storePtr = builder.createGEP(smallArrayTy, smallData, {two},
-                                       "small_data_2_addr");
+    auto* storePtr =
+        builder.createGEP(smallArrayTy, smallData, {two}, "small_data_2_addr");
     auto* newVal = midend::ConstantInt::get(i32Type, 42);
     builder.createStore(newVal, storePtr);
 
     // 访问 zero_data[5]
     auto* five = midend::ConstantInt::get(i32Type, 5);
-    auto* zeroDataPtr = builder.createGEP(zeroArrayTy, zeroData, {five},
-                                          "zero_data_5_addr");
+    auto* zeroDataPtr =
+        builder.createGEP(zeroArrayTy, zeroData, {five}, "zero_data_5_addr");
     auto* zeroDataVal = builder.createLoad(zeroDataPtr, "zero_data_5");
 
     // 返回两个数组元素的和
@@ -1872,13 +1867,13 @@ std::unique_ptr<midend::Module> createGlobalMatrix2DTest() {
     auto* two = midend::ConstantInt::get(i32Type, 2);
 
     // 访问 matrix_data[0][1] = 2
-    auto* ptr01 = builder.createGEP(matrixTy, matrixData, {zero, one},
-                                    "matrix_0_1_addr");
+    auto* ptr01 =
+        builder.createGEP(matrixTy, matrixData, {zero, one}, "matrix_0_1_addr");
     auto* val01 = builder.createLoad(ptr01, "matrix_0_1");
 
     // 访问 matrix_data[1][2] = 6
-    auto* ptr12 = builder.createGEP(matrixTy, matrixData, {one, two},
-                                    "matrix_1_2_addr");
+    auto* ptr12 =
+        builder.createGEP(matrixTy, matrixData, {one, two}, "matrix_1_2_addr");
     auto* val12 = builder.createLoad(ptr12, "matrix_1_2");
 
     // 修改 matrix_data[0][0] = 100
@@ -1967,7 +1962,6 @@ std::unique_ptr<midend::Module> createGlobal3DArrayTest() {
 
     return module;
 }
-
 
 std::unique_ptr<midend::Module> createGlobalInitOrderTest() {
     static auto context = std::make_unique<midend::Context>();
@@ -2199,7 +2193,7 @@ void TestRunner::executeCodeGeneration(const std::string& testCaseName,
             << std::endl;
         std::cout << riscvModule.toString() << std::endl;
 
-        target.slotIndexWrapperPass(riscvModule);
+        target.RAGreedyPass(riscvModule);
 
         // 执行寄存器分配pass
         std::cout << "\n--- Running Register Allocation Pass ---" << std::endl;
