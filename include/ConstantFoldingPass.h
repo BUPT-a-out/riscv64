@@ -30,6 +30,9 @@ class ConstantFolding {
 
     // 工具函数
 
+    // 判断是否是常量，如果是则获取之
+    std::optional<int64_t> getConstant(MachineOperand& operand);
+
     // 计算常数指令的值
     std::optional<int64_t> calculateInstructionValue(
         Opcode op, std::vector<int64_t>& source_operands);

@@ -88,8 +88,8 @@ class Visitor {
         const midend::Type* element_type, T default_value);
 
     // 返回一个新的寄存器操作数
-    std::unique_ptr<RegisterOperand> cloneRegister(RegisterOperand* reg_op);
-    std::unique_ptr<RegisterOperand> cloneRegister(RegisterOperand* reg_op,
+    static std::unique_ptr<RegisterOperand> cloneRegister(RegisterOperand* reg_op);
+    static std::unique_ptr<RegisterOperand> cloneRegister(RegisterOperand* reg_op,
                                                    bool is_float);
 
     void createCFG(Function* func);
