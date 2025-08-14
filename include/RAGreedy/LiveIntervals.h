@@ -298,13 +298,13 @@ class LiveIntervals {
     Function *function;
     SlotIndexes *Indexes = nullptr;
     std::map<RegisterOperand, LiveInterval *> VirtRegIntervals;
+    bool assigningFloat = false;
 
    public:
     void analyze(Function &fn);
     void clear();
 
-    // TODO: dom tree
-    LiveIntervals(Function *fn, SlotIndexes *si) : function(fn), Indexes(si) {};
+    LiveIntervals(Function *fn, SlotIndexes *si, bool assignFloat= false) : function(fn), Indexes(si), assigningFloat(assignFloat) {};
 
     SlotIndexes *getSlotIndexes() const { return Indexes; }
 

@@ -148,14 +148,6 @@ std::vector<unsigned> RegAllocGreedy::getAllocationOrder(
     // 从LiveInterval获取虚拟寄存器号
     unsigned virtualReg = VirtReg.reg().getRegNum();
 
-    // 判断是否为浮点寄存器分配
-    // 这里需要根据你的实际实现来判断，可能的方法：
-    // 1. 通过寄存器类别判断
-    // 2. 通过虚拟寄存器的属性判断
-    // 3. 通过目标寄存器信息判断
-    bool assigningFloat =
-        VirtReg.reg().isFloatRegister();  // 你需要实现这个函数
-
     // 如果虚拟寄存器有特定的ABI约束，优先考虑相应的物理寄存器
     // if (physicalConstraints.find(virtualReg) != physicalConstraints.end()) {
     //     const auto& constraints = physicalConstraints.at(virtualReg);

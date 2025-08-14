@@ -15,6 +15,7 @@ class RegAllocGreedy {
     LiveIntervals *LIS;
     VirtRegMap *VRM;
     LiveRegMatrix *Matrix;
+    bool assigningFloat = false;
 
     unsigned stackSlotNum_ = 0;
 
@@ -22,8 +23,8 @@ class RegAllocGreedy {
     std::vector<LiveInterval *> unassignedRegs;                // 未分配的寄存器
 
    public:
-    explicit RegAllocGreedy(Function *func, LiveIntervals *LIS)
-        : function(func), LIS(LIS) {};
+    explicit RegAllocGreedy(Function *func, LiveIntervals *LIS, bool assigningFloat = false)
+        : function(func), LIS(LIS), assigningFloat(assigningFloat) {};
     void run(void);
     VirtRegMap* getVRM() { return VRM; }
 

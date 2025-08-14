@@ -360,10 +360,13 @@ void LiveIntervals::analyze(Function &fn) {
             SlotIndex instrIdx = getInstructionIndex(*I);
 
             // 处理使用的寄存器（必须在处理定义之前）
-            auto usedRegs = I->getUsedIntegerRegs();
+            auto usedRegs = assigningFloat ? I->getUsedFloatRegs()
+                                           : I->getUsedIntegerRegs();
             for (unsigned regNum : usedRegs) {
                 if (regNum >= 64) {  // 只处理虚拟寄存器
-                    RegisterOperand reg(regNum);
+                    RegisterOperand reg(regNum, true,
+                                        assigningFloat ? RegisterType::Float
+                                                       : RegisterType::Integer);
                     RegInfo &info = regInfoMap[reg];
 
                     // 只有在该基本块还没有定义这个寄存器时，才算作use
@@ -374,10 +377,13 @@ void LiveIntervals::analyze(Function &fn) {
             }
 
             // 处理定义的寄存器
-            auto definedRegs = I->getDefinedIntegerRegs();
+            auto definedRegs = assigningFloat ? I->getDefinedFloatRegs()
+                                              : I->getDefinedIntegerRegs();
             for (unsigned regNum : definedRegs) {
                 if (regNum >= 64) {  // 只处理虚拟寄存器
-                    RegisterOperand reg(regNum);
+                    RegisterOperand reg(regNum, true,
+                                        assigningFloat ? RegisterType::Float
+                                                       : RegisterType::Integer);
                     RegInfo &info = regInfoMap[reg];
                     info.defBlocks.insert(BB.get());
                     info.defsInBB[BB.get()].push_back(instrIdx);
@@ -554,7 +560,9 @@ void LiveIntervals::analyze(Function &fn) {
                     for (auto &I : *BB) {
                         SlotIndex instrIdx = getInstructionIndex(*I);
                         if (instrIdx >= segmentStart) {
-                            auto usedRegs = I->getUsedIntegerRegs();
+                            auto usedRegs = assigningFloat
+                                                ? I->getUsedFloatRegs()
+                                                : I->getUsedIntegerRegs();
                             if (std::find(usedRegs.begin(), usedRegs.end(),
                                           reg.getRegNum()) != usedRegs.end()) {
                                 segmentEnd = instrIdx.getNextSlot();

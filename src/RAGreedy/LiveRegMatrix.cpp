@@ -17,8 +17,7 @@ void LiveRegMatrix::init(Function &F, LiveIntervals &liveIntervals,
     LIS = &liveIntervals;
     VRM = &virtRegMap;
 
-    // TODO: float
-    const unsigned NumPhysRegs = 32;  // RISC-V有32个通用寄存器
+    const unsigned NumPhysRegs = 64;  // RISC-V有32个通用整数寄存器，32个通用浮点寄存器
 
     Matrix.clear();
     Matrix.resize(NumPhysRegs);
