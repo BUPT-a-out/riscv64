@@ -31,7 +31,7 @@ RegisterOperand* CodeGenerator::getOrAllocateIntReg(const midend::Value* val) {
 }
 
 std::unique_ptr<RegisterOperand> CodeGenerator::allocateFloatReg() {
-    return std::make_unique<RegisterOperand>(nextFloatRegNum_++, true,
+    return std::make_unique<RegisterOperand>(nextRegNum_++, true,
                                              RegisterType::Float);
 }
 
