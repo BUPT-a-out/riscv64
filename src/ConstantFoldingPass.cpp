@@ -47,6 +47,15 @@ void ConstantFolding::handleInstruction(Instruction* inst,
     peepholeOptimize(inst, parent_bb);
     // 尝试常量传播
     constantPropagate(inst, parent_bb);
+
+    // 若最终形态为 LI，确保记录常量 (放在最后避免被后续修改覆盖)
+    if (inst->getOpcode() == Opcode::LI && inst->getOprandCount() == 2) {
+        auto* rd = inst->getOperand(0);
+        auto* imm = inst->getOperand(1);
+        if (rd && imm && rd->isReg() && imm->isImm()) {
+            virtualRegisterConstants[rd->getRegNum()] = imm->getValue();
+        }
+    }
 }
 
 std::optional<int64_t> ConstantFolding::getConstant(MachineOperand& operand) {
@@ -70,6 +79,8 @@ void ConstantFolding::foldInstruction(Instruction* inst,
     }
 
     if (inst->getOpcode() == Opcode::LI) {
+        virtualRegisterConstants[inst->getOperand(0)->getRegNum()] =
+            inst->getOperand(1)->getValue();
         return;
     }
 
@@ -216,32 +227,145 @@ void ConstantFolding::foldToITypeInst(Instruction* inst,
 
 void ConstantFolding::algebraicIdentitySimplify(Instruction* inst,
                                                 BasicBlock* parent_bb) {
-    ;
+    // Only handle simple 3-operand integer-like instructions: rd, rs1, rs2
+    if (inst->getOprandCount() != 3) {
+        return;
+    }
+
+    auto opcode = inst->getOpcode();
+    auto* destOperand = inst->getOperand(0);
+    auto* srcOperand1 = inst->getOperand(1);
+    auto* srcOperand2 = inst->getOperand(2);
+
+    if (!destOperand->isReg()) {
+        return;  // We only care when we define a register
+    }
+
+    auto* destReg = dynamic_cast<RegisterOperand*>(destOperand);
+
+    auto constOp1 = getConstant(*srcOperand1);
+    auto constOp2 = getConstant(*srcOperand2);
+
+    auto cloneReg = [](MachineOperand* operand) {
+        return Visitor::cloneRegister(dynamic_cast<RegisterOperand*>(operand));
+    };
+
+    auto emitMovFrom = [&](MachineOperand* sourceRegOperand) {
+        // ADDI rd, rs, 0  (canonical MOV form we use elsewhere)
+        if (!sourceRegOperand->isReg()) {
+            return;  // Defensive: patterns ensure reg, but guard anyway
+        }
+        std::string original = inst->toString();
+        unsigned destRegNum = destReg->getRegNum();
+        unsigned srcRegNum = sourceRegOperand->getRegNum();
+        auto destClone = Visitor::cloneRegister(destReg);  // clone before clear
+        auto srcClone = cloneReg(sourceRegOperand);        // clone before clear
+        inst->clearOperands();
+        inst->setOpcode(Opcode::ADDI);
+        inst->addOperand(std::move(destClone));
+        inst->addOperand(std::move(srcClone));
+        inst->addOperand(std::make_unique<ImmediateOperand>(0));
+        // Constant propagation update
+        auto itConst = virtualRegisterConstants.find(srcRegNum);
+        if (itConst != virtualRegisterConstants.end()) {
+            virtualRegisterConstants[destRegNum] = itConst->second;
+        } else {
+            virtualRegisterConstants.erase(destRegNum);
+        }
+        std::cout << "Algebraic simplify: '" << original << "' -> '"
+                  << inst->toString() << "'" << std::endl;
+    };
+
+    auto emitLiZero = [&]() {
+        std::string original = inst->toString();
+        unsigned destRegNum = destReg->getRegNum();
+        auto destClone = Visitor::cloneRegister(destReg);
+        inst->clearOperands();
+        inst->setOpcode(Opcode::LI);
+        inst->addOperand(std::move(destClone));
+        inst->addOperand(std::make_unique<ImmediateOperand>(0));
+        virtualRegisterConstants[destRegNum] = 0;
+        std::cout << "Algebraic simplify: '" << original << "' -> '"
+                  << inst->toString() << "'" << std::endl;
+    };
+
+    switch (opcode) {
+        case Opcode::ADD:
+        case Opcode::ADDW: {  // Pattern 1.1
+            if (constOp1 && *constOp1 == 0 && srcOperand2->isReg()) {
+                emitMovFrom(srcOperand2);
+            } else if (constOp2 && *constOp2 == 0 && srcOperand1->isReg()) {
+                emitMovFrom(srcOperand1);
+            }
+            break;
+        }
+        case Opcode::SUB:     // Pattern 1.2 & 1.3
+        case Opcode::SUBW: {  // 32-bit variant
+            if (srcOperand1->isReg() && srcOperand2->isReg() &&
+                srcOperand1->getRegNum() == srcOperand2->getRegNum()) {
+                // x - x
+                emitLiZero();  // Pattern 1.3
+            } else if (constOp2 && *constOp2 == 0 && srcOperand1->isReg()) {
+                // x - 0 = x (Pattern 1.2)
+                emitMovFrom(srcOperand1);
+            }
+            break;
+        }
+        case Opcode::MUL:
+        case Opcode::MULW: {  // Pattern 1.4 & 1.5 (only handle MUL variant
+                              // here)
+            if ((constOp1 && *constOp1 == 0) || (constOp2 && *constOp2 == 0)) {
+                emitLiZero();  // x * 0 = 0 (Pattern 1.5)
+            } else if (constOp1 && *constOp1 == 1 && srcOperand2->isReg()) {
+                emitMovFrom(srcOperand2);  // 1 * x = x (Pattern 1.4)
+            } else if (constOp2 && *constOp2 == 1 && srcOperand1->isReg()) {
+                emitMovFrom(srcOperand1);  // x * 1 = x (Pattern 1.4)
+            }
+            break;
+        }
+        case Opcode::DIV:      // Pattern 1.6
+        case Opcode::DIVU:     // Unsigned variant
+        case Opcode::DIVW:     // 32-bit signed
+        case Opcode::DIVUW: {  // 32-bit unsigned
+            if (constOp2 && *constOp2 == 1 && srcOperand1->isReg()) {
+                emitMovFrom(srcOperand1);  // x / 1 = x
+            }
+            break;
+        }
+        default:
+            break;  // other opcodes not handled here
+    }
 }
 
 void ConstantFolding::strengthReduction(Instruction* inst,
                                         BasicBlock* parent_bb) {
-    ;
+    (void)inst;
+    (void)parent_bb;
 }
 
 void ConstantFolding::bitwiseOperationSimplify(Instruction* inst,
                                                BasicBlock* parent_bb) {
-    ;
+    (void)inst;
+    (void)parent_bb;
 }
 
 void ConstantFolding::instructionReassociateAndCombine(Instruction* inst,
                                                        BasicBlock* parent_bb) {
-    ;
+    (void)inst;
+    (void)parent_bb;
 }
 
 void ConstantFolding::constantPropagate(Instruction* inst,
                                         BasicBlock* parent_bb) {
-    ;
+    (void)inst;
+    (void)parent_bb;
 }
 
 std::optional<int64_t> ConstantFolding::calculateInstructionValue(
     Opcode op, std::vector<int64_t>& source_operands) {
     // TODO(rikka): impl
+    (void)op;
+    (void)source_operands;
     return 114514;
 }
 
