@@ -37,6 +37,13 @@ class ConstantFolding {
     std::optional<int64_t> calculateInstructionValue(
         Opcode op, std::vector<int64_t>& source_operands);
 
+    // 增添一条虚拟寄存器到常数值的映射
+    void mapRegToConstant(unsigned int reg_num, int64_t value) {
+        virtualRegisterConstants[reg_num] = value;
+        std::cout << "Mapped register " << reg_num << " to constant "
+                  << value << std::endl;
+    }
+
    private:
     // 将虚拟寄存器映射到一个已知的常量值
     std::map<unsigned int, int64_t> virtualRegisterConstants;

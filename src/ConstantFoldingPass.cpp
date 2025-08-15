@@ -1,5 +1,7 @@
 #include "ConstantFoldingPass.h"
 
+#include <cstdint>
+#include <limits>
 #include <string>
 
 #include "Visit.h"
@@ -18,6 +20,9 @@ void ConstantFolding::runOnBasicBlock(BasicBlock* basicBlock) {
     // init
     virtualRegisterConstants.clear();
     instructionsToRemove.clear();
+
+    // init: x0 -> 0
+    mapRegToConstant(0, 0);
 
     for (auto& inst : *basicBlock) {
         handleInstruction(inst.get(), basicBlock);
@@ -47,6 +52,15 @@ void ConstantFolding::handleInstruction(Instruction* inst,
     peepholeOptimize(inst, parent_bb);
     // 尝试常量传播
     constantPropagate(inst, parent_bb);
+
+    // 若最终形态为 LI，确保记录常量 (放在最后避免被后续修改覆盖)
+    if (inst->getOpcode() == Opcode::LI && inst->getOprandCount() == 2) {
+        auto* rd = inst->getOperand(0);
+        auto* imm = inst->getOperand(1);
+        if (rd && imm && rd->isReg() && imm->isImm()) {
+            mapRegToConstant(rd->getRegNum(), imm->getValue());
+        }
+    }
 }
 
 std::optional<int64_t> ConstantFolding::getConstant(MachineOperand& operand) {
@@ -70,6 +84,8 @@ void ConstantFolding::foldInstruction(Instruction* inst,
     }
 
     if (inst->getOpcode() == Opcode::LI) {
+        mapRegToConstant(inst->getOperand(0)->getRegNum(),
+                         inst->getOperand(1)->getValue());
         return;
     }
 
@@ -93,7 +109,7 @@ void ConstantFolding::foldInstruction(Instruction* inst,
     if (!dest_reg_operand->isReg()) {
         return;  // 目的不是寄存器，不处理
     }
-    virtualRegisterConstants[dest_reg_operand->getRegNum()] = result.value();
+    mapRegToConstant(dest_reg_operand->getRegNum(), result.value());
 
     // 记录原始字符串用于日志
     std::string original = inst->toString();
@@ -123,126 +139,719 @@ void ConstantFolding::peepholeOptimize(Instruction* inst,
 
 void ConstantFolding::foldToITypeInst(Instruction* inst,
                                       BasicBlock* parent_bb) {
-    switch (inst->getOpcode()) {
-        case Opcode::ADD:
-        case Opcode::ADDW:
-        case Opcode::AND:
-        case Opcode::OR:
-        case Opcode::XOR:
-        case Opcode::SLL:
-        case Opcode::SLLW:
-        case Opcode::SRA:
-        case Opcode::SRAW:
-        case Opcode::SRL:
-        case Opcode::SRLW:
-        case Opcode::SLT: {
-            static const std::unordered_map<Opcode, Opcode> rTypeToITypeMap = {
-                {Opcode::ADD, Opcode::ADDI},   {Opcode::ADDW, Opcode::ADDIW},
-                {Opcode::AND, Opcode::ANDI},   {Opcode::OR, Opcode::ORI},
-                {Opcode::XOR, Opcode::XORI},   {Opcode::SLL, Opcode::SLLI},
-                {Opcode::SLLW, Opcode::SLLIW}, {Opcode::SRA, Opcode::SRAI},
-                {Opcode::SRAW, Opcode::SRAIW}, {Opcode::SRL, Opcode::SRLI},
-                {Opcode::SRLW, Opcode::SRLIW}, {Opcode::SLT, Opcode::SLTI},
-                {Opcode::SUB, Opcode::ADDI},   {Opcode::SUBW, Opcode::ADDIW}};
-
-            // Check if any source operand is a constant
-            auto* operand1 = inst->getOperand(1);  // First source operand
-            auto* operand2 = inst->getOperand(2);  // Second source operand
-
-            auto const1 = getConstant(*operand1);
-            auto const2 = getConstant(*operand2);
-
-            // If either operand is constant, convert to I-type instruction
-            if (const1.has_value() || const2.has_value()) {
-                auto opcode = inst->getOpcode();
-                auto it = rTypeToITypeMap.find(opcode);
-                if (it != rTypeToITypeMap.end()) {
-                    Opcode newOpcode = it->second;
-
-                    // Determine which operand is constant and which is the
-                    // register
-                    RegisterOperand* regOperand;
-                    int64_t immValue;
-
-                    if (const2.has_value()) {
-                        // Second operand is constant, keep first operand as
-                        // register
-                        regOperand = dynamic_cast<RegisterOperand*>(operand1);
-                        immValue = const2.value();
-                    } else {
-                        // First operand is constant, keep second operand as
-                        // register
-                        regOperand = dynamic_cast<RegisterOperand*>(operand2);
-                        immValue = const1.value();
-                    }
-
-                    if (opcode == Opcode::SUB || opcode == Opcode::SUBW) {
-                        // 对于减法指令，立即数需要取反
-                        immValue = -immValue;
-                    }
-
-                    // Check if immediate value is within valid range for I-type
-                    // instructions RISC-V I-type instructions have 12-bit
-                    // signed immediate field
-                    if (immValue >= -2048 && immValue <= 2047) {
-                        // Store the destination operand
-                        auto destOperand = Visitor::cloneRegister(
-                            dynamic_cast<RegisterOperand*>(
-                                inst->getOperand(0)));
-                        auto regOperandClone =
-                            Visitor::cloneRegister(regOperand);
-
-                        // Clear existing operands and set new opcode
-                        inst->clearOperands();
-                        inst->setOpcode(newOpcode);
-
-                        // Add operands: destination, register, immediate
-                        inst->addOperand(std::move(destOperand));
-                        inst->addOperand(std::move(regOperandClone));
-                        inst->addOperand(
-                            std::make_unique<ImmediateOperand>(immValue));
-
-                        std::cout << "Converted R-type to I-type instruction: "
-                                  << inst->toString() << std::endl;
-                    }
-                }
-            }
-        } break;
-
-        default:
-            return;
+    // Only try to fold canonical 3-op R-type forms: rd, rs1, rs2
+    if (inst->getOprandCount() != 3) {
+        return;
     }
+
+    auto opcode = inst->getOpcode();
+
+    // Handle constant-first non-commutative comparisons by flipping predicate.
+    // Pattern: SLT rd, imm, rs  ==>  SGT rd, rs, imm   (because imm < rs <=> rs
+    // > imm) Keep it simple: only signed variant (i32) per requirement.
+    // Unsigned left untouched.
+    if (opcode == Opcode::SLT && inst->getOprandCount() == 3) {
+        auto* op1 = inst->getOperand(1);
+        auto* op2 = inst->getOperand(2);
+        if (op1->isImm() && op2->isReg()) {
+            auto* rd = inst->getOperand(0);
+            if (rd->isReg()) {
+                // Clone operands in new order: rd, rs(/*op2*/), imm(/*op1*/)
+                auto rdClone =
+                    Visitor::cloneRegister(dynamic_cast<RegisterOperand*>(rd));
+                auto rsClone =
+                    Visitor::cloneRegister(dynamic_cast<RegisterOperand*>(op2));
+                auto immVal = op1->getValue();
+                std::string original = inst->toString();
+                inst->clearOperands();
+                inst->setOpcode(Opcode::SGT);  // use pseudo greater-than
+                inst->addOperand(std::move(rdClone));
+                inst->addOperand(std::move(rsClone));
+                inst->addOperand(std::make_unique<ImmediateOperand>(immVal));
+                std::cout << "Flip predicate (const-first SLT): '" << original
+                          << "' -> '" << inst->toString() << "'" << std::endl;
+                // After rewriting, proceed with possible further peephole in
+                // later passes (do not continue here to avoid double-processing
+                // now)
+            }
+        }
+    }
+
+    // Mapping for direct R->I conversions (same semantics, rs2 -> imm)
+    static const std::unordered_map<Opcode, Opcode> r2i = {
+        {Opcode::ADD, Opcode::ADDI},   {Opcode::ADDW, Opcode::ADDIW},
+        {Opcode::AND, Opcode::ANDI},   {Opcode::OR, Opcode::ORI},
+        {Opcode::XOR, Opcode::XORI},   {Opcode::SLL, Opcode::SLLI},
+        {Opcode::SLLW, Opcode::SLLIW}, {Opcode::SRA, Opcode::SRAI},
+        {Opcode::SRAW, Opcode::SRAIW}, {Opcode::SRL, Opcode::SRLI},
+        {Opcode::SRLW, Opcode::SRLIW}, {Opcode::SLT, Opcode::SLTI},
+        {Opcode::SLTU, Opcode::SLTIU}, {Opcode::SUB, Opcode::ADDI},
+        {Opcode::SUBW, Opcode::ADDIW}};  // SUB uses ADDI with negated imm
+
+    auto it_map = r2i.find(opcode);
+    if (it_map == r2i.end()) {
+        return;  // Not a supported opcode
+    }
+
+    auto* rs1 = inst->getOperand(1);
+    auto* rs2 = inst->getOperand(2);
+    auto constOpRs1 = getConstant(*rs1);
+    auto constOpRs2 = getConstant(*rs2);
+
+    // Classification of op commutativity (with regard to source operands)
+    auto is_commutative = [&](Opcode opcodeCandidate) {
+        switch (opcodeCandidate) {
+            case Opcode::ADD:
+            case Opcode::ADDW:
+            case Opcode::AND:
+            case Opcode::OR:
+            case Opcode::XOR:
+                return true;  // safe to swap rs1/rs2
+            default:
+                return false;
+        }
+    };
+
+    // For non-commutative ops (SUB, shifts, SLT/SLTU) we only proceed if rs2 is
+    // constant. If rs1 is constant we abort (to avoid semantic inversion) -
+    // KISS principle.
+    if (!is_commutative(opcode)) {
+        if (!constOpRs2.has_value()) {
+            return;  // need rs2 const
+        }
+        if (!rs1->isReg()) {
+            return;  // rs1 must stay a reg
+        }
+    } else {
+        // Commutative: prefer rs2 const. If only rs1 const, swap logically.
+        if (!constOpRs2.has_value() && constOpRs1.has_value()) {
+            // We can transform: op rd, const, reg  ==> op (swap) rd, reg, const
+            // Just treat as if rs2 const by swapping rs1/rs2 pointers and
+            // constants.
+            std::swap(rs1, rs2);
+            std::swap(constOpRs1, constOpRs2);
+        }
+        if (!constOpRs2.has_value()) {
+            return;  // still no immediate candidate
+        }
+        if (!rs1->isReg()) {
+            return;  // rs1 must be register in I-type
+        }
+    }
+
+    // Now rs2 is the constant to fold.
+    auto immValue = constOpRs2.value();
+
+    // Special case: SUB / SUBW become ADDI / ADDIW with negated immediate
+    if (opcode == Opcode::SUB || opcode == Opcode::SUBW) {
+        immValue = -immValue;
+    }
+
+    // Range check for 12-bit signed immediates
+    constexpr int IMM12_MIN = -2048;
+    constexpr int IMM12_MAX = 2047;
+    if (immValue < IMM12_MIN || immValue > IMM12_MAX) {
+        return;
+    }
+
+    // Clone destination & rs1 register
+    auto* rd_orig = inst->getOperand(0);
+    if (!rd_orig->isReg()) {
+        return;  // defensive
+    }
+    auto rdClone =
+        Visitor::cloneRegister(dynamic_cast<RegisterOperand*>(rd_orig));
+    auto rs1Clone = Visitor::cloneRegister(dynamic_cast<RegisterOperand*>(rs1));
+
+    auto newOpcode = it_map->second;
+    std::string original = inst->toString();
+
+    inst->clearOperands();
+    inst->setOpcode(newOpcode);
+    inst->addOperand(std::move(rdClone));
+    inst->addOperand(std::move(rs1Clone));
+    inst->addOperand(std::make_unique<ImmediateOperand>(immValue));
+
+    std::cout << "Converted R-type to I-type instruction: '" << original
+              << "' -> '" << inst->toString() << "'" << std::endl;
 }
 
 void ConstantFolding::algebraicIdentitySimplify(Instruction* inst,
                                                 BasicBlock* parent_bb) {
-    ;
+    // Only handle simple 3-operand integer-like instructions: rd, rs1, rs2
+    if (inst->getOprandCount() != 3) {
+        return;
+    }
+
+    auto opcode = inst->getOpcode();
+    auto* destOperand = inst->getOperand(0);
+    auto* srcOperand1 = inst->getOperand(1);
+    auto* srcOperand2 = inst->getOperand(2);
+
+    if (!destOperand->isReg()) {
+        return;  // We only care when we define a register
+    }
+
+    auto* destReg = dynamic_cast<RegisterOperand*>(destOperand);
+
+    auto constOp1 = getConstant(*srcOperand1);
+    auto constOp2 = getConstant(*srcOperand2);
+
+    auto cloneReg = [](MachineOperand* operand) {
+        return Visitor::cloneRegister(dynamic_cast<RegisterOperand*>(operand));
+    };
+
+    auto emitMovFrom = [&](MachineOperand* sourceRegOperand) {
+        // ADDI rd, rs, 0  (canonical MOV form we use elsewhere)
+        if (!sourceRegOperand->isReg()) {
+            return;  // Defensive: patterns ensure reg, but guard anyway
+        }
+        std::string original = inst->toString();
+        unsigned destRegNum = destReg->getRegNum();
+        unsigned srcRegNum = sourceRegOperand->getRegNum();
+        auto destClone = Visitor::cloneRegister(destReg);  // clone before clear
+        auto srcClone = cloneReg(sourceRegOperand);        // clone before clear
+        inst->clearOperands();
+        inst->setOpcode(Opcode::ADDI);
+        inst->addOperand(std::move(destClone));
+        inst->addOperand(std::move(srcClone));
+        inst->addOperand(std::make_unique<ImmediateOperand>(0));
+        // Constant propagation update
+        auto itConst = virtualRegisterConstants.find(srcRegNum);
+        if (itConst != virtualRegisterConstants.end()) {
+            mapRegToConstant(destRegNum, itConst->second);
+        } else {
+            virtualRegisterConstants.erase(destRegNum);
+        }
+        std::cout << "Algebraic simplify: '" << original << "' -> '"
+                  << inst->toString() << "'" << std::endl;
+    };
+
+    auto emitLiZero = [&]() {
+        std::string original = inst->toString();
+        unsigned destRegNum = destReg->getRegNum();
+        auto destClone = Visitor::cloneRegister(destReg);
+        inst->clearOperands();
+        inst->setOpcode(Opcode::LI);
+        inst->addOperand(std::move(destClone));
+        inst->addOperand(std::make_unique<ImmediateOperand>(0));
+        mapRegToConstant(destRegNum, 0);
+        std::cout << "Algebraic simplify: '" << original << "' -> '"
+                  << inst->toString() << "'" << std::endl;
+    };
+
+    switch (opcode) {
+        case Opcode::ADD:
+        case Opcode::ADDW: {  // Pattern 1.1
+            if (constOp1 && *constOp1 == 0 && srcOperand2->isReg()) {
+                emitMovFrom(srcOperand2);
+            } else if (constOp2 && *constOp2 == 0 && srcOperand1->isReg()) {
+                emitMovFrom(srcOperand1);
+            }
+            break;
+        }
+        case Opcode::SUB:     // Pattern 1.2 & 1.3
+        case Opcode::SUBW: {  // 32-bit variant
+            if (srcOperand1->isReg() && srcOperand2->isReg() &&
+                srcOperand1->getRegNum() == srcOperand2->getRegNum()) {
+                // x - x
+                emitLiZero();  // Pattern 1.3
+            } else if (constOp2 && *constOp2 == 0 && srcOperand1->isReg()) {
+                // x - 0 = x (Pattern 1.2)
+                emitMovFrom(srcOperand1);
+            }
+            break;
+        }
+        case Opcode::MUL:
+        case Opcode::MULW: {  // Pattern 1.4 & 1.5 (only handle MUL variant
+                              // here)
+            if ((constOp1 && *constOp1 == 0) || (constOp2 && *constOp2 == 0)) {
+                emitLiZero();  // x * 0 = 0 (Pattern 1.5)
+            } else if (constOp1 && *constOp1 == 1 && srcOperand2->isReg()) {
+                emitMovFrom(srcOperand2);  // 1 * x = x (Pattern 1.4)
+            } else if (constOp2 && *constOp2 == 1 && srcOperand1->isReg()) {
+                emitMovFrom(srcOperand1);  // x * 1 = x (Pattern 1.4)
+            }
+            break;
+        }
+        case Opcode::DIV:      // Pattern 1.6
+        case Opcode::DIVU:     // Unsigned variant
+        case Opcode::DIVW:     // 32-bit signed
+        case Opcode::DIVUW: {  // 32-bit unsigned
+            if (constOp2 && *constOp2 == 1 && srcOperand1->isReg()) {
+                emitMovFrom(srcOperand1);  // x / 1 = x
+            }
+            break;
+        }
+        default:
+            break;  // other opcodes not handled here
+    }
 }
 
 void ConstantFolding::strengthReduction(Instruction* inst,
                                         BasicBlock* parent_bb) {
-    ;
+    (void)parent_bb;
+    // Pattern: mul/div by power-of-two constant -> shift
+    // Support opcodes: MUL, MULW, DIVU, DIVUW, DIV, DIVW (signed div only if
+    // dividend known non-negative)
+    if (inst->getOprandCount() != 3) {
+        return;  // rd, rs1, rs2
+    }
+
+    const auto opcode = inst->getOpcode();
+    auto* destReg = inst->getOperand(0);
+    auto* srcReg1 = inst->getOperand(1);
+    auto* srcReg2 = inst->getOperand(2);
+    if (!destReg->isReg()) {
+        return;
+    }
+
+    auto getConstValue =
+        [&](MachineOperand* operand) -> std::optional<int64_t> {
+        return getConstant(*operand);
+    };
+    const auto constVal1 = getConstValue(srcReg1);
+    const auto constVal2 = getConstValue(srcReg2);
+
+    auto isPowerOfTwo = [](int64_t value) -> bool {
+        if (value <= 0) {
+            return false;
+        }
+        uint64_t u = static_cast<uint64_t>(value);
+        return (u & (u - 1ULL)) == 0ULL;
+    };
+    auto log2Exact = [](int64_t value) -> unsigned {
+        unsigned shiftAmount = 0U;
+        uint64_t u = static_cast<uint64_t>(value);
+        while ((1ULL << shiftAmount) < u) {
+            ++shiftAmount;
+        }
+        return shiftAmount;
+    };
+
+    auto cloneRegOperand = [](MachineOperand* operand) {
+        return Visitor::cloneRegister(dynamic_cast<RegisterOperand*>(operand));
+    };
+
+    auto applyShiftImm = [&](Opcode newOpcode, MachineOperand* fromReg,
+                             unsigned shiftAmount) {
+        std::string original = inst->toString();
+        unsigned destRegNum = destReg->getRegNum();
+        unsigned sourceRegNum = fromReg->getRegNum();
+        auto destClone = cloneRegOperand(destReg);
+        auto sourceClone = cloneRegOperand(fromReg);
+        inst->clearOperands();
+        inst->setOpcode(newOpcode);
+        inst->addOperand(std::move(destClone));
+        inst->addOperand(std::move(sourceClone));
+        inst->addOperand(std::make_unique<ImmediateOperand>(
+            static_cast<int64_t>(shiftAmount)));
+        // Constant propagation update
+        auto itConst = virtualRegisterConstants.find(sourceRegNum);
+        if (itConst != virtualRegisterConstants.end()) {
+            int64_t srcVal = itConst->second;
+            int64_t newVal = 0;
+            switch (newOpcode) {
+                case Opcode::SLLI:
+                case Opcode::SLLIW:
+                    newVal = static_cast<int64_t>(static_cast<int32_t>(
+                        static_cast<int32_t>(srcVal) << shiftAmount));
+                    break;
+                case Opcode::SRLI:
+                case Opcode::SRLIW:
+                    newVal = static_cast<int64_t>(static_cast<int32_t>(
+                        static_cast<uint32_t>(static_cast<int32_t>(srcVal)) >>
+                        shiftAmount));
+                    break;
+                case Opcode::SRAI:
+                case Opcode::SRAIW:
+                    newVal = static_cast<int64_t>(static_cast<int32_t>(
+                        static_cast<int32_t>(srcVal) >> shiftAmount));
+                    break;
+                default:
+                    break;
+            }
+            mapRegToConstant(destRegNum, newVal);
+        } else {
+            virtualRegisterConstants.erase(destRegNum);
+        }
+        std::cout << "Strength reduction: '" << original << "' -> '"
+                  << inst->toString() << "'" << std::endl;
+    };
+
+    constexpr unsigned SHIFT_WIDTH_32 = 32U;  // 5-bit shift amount range
+    auto shiftFits = [&](unsigned shiftAmount, bool isWord) -> bool {
+        if (isWord) {
+            return shiftAmount < SHIFT_WIDTH_32;
+        }
+        return shiftAmount <
+               SHIFT_WIDTH_32;  // Currently treating as 32-bit ops
+    };
+
+    auto tryReduceMul = [&]() {
+        bool isWord = (opcode == Opcode::MULW);
+        MachineOperand* sourceRegForShift = nullptr;
+        std::optional<int64_t> constFactor;
+        if (constVal1 && isPowerOfTwo(*constVal1) && srcReg2->isReg()) {
+            sourceRegForShift = srcReg2;
+            constFactor = constVal1;
+        } else if (constVal2 && isPowerOfTwo(*constVal2) && srcReg1->isReg()) {
+            sourceRegForShift = srcReg1;
+            constFactor = constVal2;
+        } else {
+            return false;
+        }
+        if (*constFactor == 1) {
+            return false;  // handled elsewhere
+        }
+        unsigned shiftAmount = log2Exact(*constFactor);
+        if (!shiftFits(shiftAmount, isWord)) {
+            return false;
+        }
+        applyShiftImm(isWord ? Opcode::SLLIW : Opcode::SLLI, sourceRegForShift,
+                      shiftAmount);
+        return true;
+    };
+
+    auto tryReduceDivU = [&]() {
+        bool isWord = (opcode == Opcode::DIVUW);
+        if (!constVal2 || !isPowerOfTwo(*constVal2) || *constVal2 == 1) {
+            return false;
+        }
+        if (!srcReg1->isReg()) {
+            return false;
+        }
+        unsigned shiftAmount = log2Exact(*constVal2);
+        if (!shiftFits(shiftAmount, isWord)) {
+            return false;
+        }
+        applyShiftImm(isWord ? Opcode::SRLIW : Opcode::SRLI, srcReg1,
+                      shiftAmount);
+        return true;
+    };
+
+    auto tryReduceDivSigned = [&]() {
+        bool isWord = (opcode == Opcode::DIVW);
+        if (!constVal2 || !isPowerOfTwo(*constVal2) || *constVal2 == 1) {
+            return false;
+        }
+        // Only when dividend known non-negative (conservative)
+        if (!(constVal1 && *constVal1 >= 0)) {
+            return false;
+        }
+        if (!srcReg1->isReg()) {
+            return false;
+        }
+        unsigned shiftAmount = log2Exact(*constVal2);
+        if (!shiftFits(shiftAmount, isWord)) {
+            return false;
+        }
+        applyShiftImm(isWord ? Opcode::SRAIW : Opcode::SRAI, srcReg1,
+                      shiftAmount);
+        return true;
+    };
+
+    switch (opcode) {
+        case Opcode::MUL:
+        case Opcode::MULW:
+            (void)tryReduceMul();
+            break;
+        case Opcode::DIVU:
+        case Opcode::DIVUW:
+            (void)tryReduceDivU();
+            break;
+        case Opcode::DIV:
+        case Opcode::DIVW:
+            (void)tryReduceDivSigned();
+            break;
+        default:
+            break;  // not handled
+    }
 }
 
 void ConstantFolding::bitwiseOperationSimplify(Instruction* inst,
                                                BasicBlock* parent_bb) {
-    ;
+    (void)inst;
+    (void)parent_bb;
 }
 
 void ConstantFolding::instructionReassociateAndCombine(Instruction* inst,
                                                        BasicBlock* parent_bb) {
-    ;
+    (void)inst;
+    (void)parent_bb;
 }
 
 void ConstantFolding::constantPropagate(Instruction* inst,
                                         BasicBlock* parent_bb) {
-    ;
+    (void)inst;
+    (void)parent_bb;
 }
 
 std::optional<int64_t> ConstantFolding::calculateInstructionValue(
     Opcode op, std::vector<int64_t>& source_operands) {
-    // TODO(rikka): impl
-    return 114514;
+    // Only handle simple integer (i32) semantics for now.
+    auto as_i32 = [](int64_t v) -> int32_t { return static_cast<int32_t>(v); };
+    auto sign_extend_i32 = [&](int64_t v) -> int64_t {
+        return static_cast<int64_t>(static_cast<int32_t>(v));
+    };
+
+    auto needN = [&](std::size_t n) -> bool {
+        return source_operands.size() == n;
+    };
+
+    switch (op) {
+        // Binary arithmetic (signed) wrap in 32-bit
+        case Opcode::ADD:
+        case Opcode::ADDW:
+        case Opcode::ADDI:
+        case Opcode::ADDIW: {
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            int32_t b = as_i32(source_operands[1]);
+            auto result = sign_extend_i32(static_cast<int64_t>(a) +
+                                          static_cast<int64_t>(b));
+            std::cout << "Calculate Inst value: " << a << " + " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::SUB:
+        case Opcode::SUBW: {
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            int32_t b = as_i32(source_operands[1]);
+            auto result = sign_extend_i32(static_cast<int64_t>(a) -
+                                          static_cast<int64_t>(b));
+            std::cout << "Calculate Inst value: " << a << " - " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::MUL:
+        case Opcode::MULW: {
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            int32_t b = as_i32(source_operands[1]);
+            auto result = sign_extend_i32(static_cast<int64_t>(a) *
+                                          static_cast<int64_t>(b));
+            std::cout << "Calculate Inst value: " << a << " * " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::DIV:
+        case Opcode::DIVW: {
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            int32_t b = as_i32(source_operands[1]);
+            if (b == 0) return std::nullopt;  // avoid div-by-zero fold
+            if (a == std::numeric_limits<int32_t>::min() && b == -1)
+                return std::nullopt;  // avoid overflow UB
+            auto result = sign_extend_i32(static_cast<int64_t>(a / b));
+            std::cout << "Calculate Inst value: " << a << " / " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::DIVU:
+        case Opcode::DIVUW: {
+            if (!needN(2)) return std::nullopt;
+            uint32_t a = static_cast<uint32_t>(as_i32(source_operands[0]));
+            uint32_t b = static_cast<uint32_t>(as_i32(source_operands[1]));
+            if (b == 0) return std::nullopt;
+            auto result = sign_extend_i32(
+                static_cast<int64_t>(static_cast<int32_t>(a / b)));
+            std::cout << "Calculate Inst value: " << a << " /u " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::REM:
+        case Opcode::REMW: {
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            int32_t b = as_i32(source_operands[1]);
+            if (b == 0) return std::nullopt;
+            if (a == std::numeric_limits<int32_t>::min() && b == -1) {
+                auto result =
+                    sign_extend_i32(0);  // per RISC-V spec rem of this is 0
+                std::cout << "Calculate Inst value: " << a << " % " << b
+                          << " (special) -> " << result << std::endl;
+                return result;
+            }
+            auto result = sign_extend_i32(static_cast<int64_t>(a % b));
+            std::cout << "Calculate Inst value: " << a << " % " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::REMU:
+        case Opcode::REMUW: {
+            if (!needN(2)) return std::nullopt;
+            uint32_t a = static_cast<uint32_t>(as_i32(source_operands[0]));
+            uint32_t b = static_cast<uint32_t>(as_i32(source_operands[1]));
+            if (b == 0) return std::nullopt;
+            auto result = sign_extend_i32(
+                static_cast<int64_t>(static_cast<int32_t>(a % b)));
+            std::cout << "Calculate Inst value: " << a << " %u " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+
+        // Bitwise / logic
+        case Opcode::AND:
+        case Opcode::ANDI: {
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            int32_t b = as_i32(source_operands[1]);
+            auto result = sign_extend_i32(a & b);
+            std::cout << "Calculate Inst value: " << a << " & " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::OR:
+        case Opcode::ORI: {
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            int32_t b = as_i32(source_operands[1]);
+            auto result = sign_extend_i32(a | b);
+            std::cout << "Calculate Inst value: " << a << " | " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::XOR:
+        case Opcode::XORI: {
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            int32_t b = as_i32(source_operands[1]);
+            auto result = sign_extend_i32(a ^ b);
+            std::cout << "Calculate Inst value: " << a << " ^ " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::SLL:
+        case Opcode::SLLW:
+        case Opcode::SLLI:
+        case Opcode::SLLIW: {
+            if (!needN(2)) return std::nullopt;
+            uint32_t a = static_cast<uint32_t>(as_i32(source_operands[0]));
+            uint32_t sh =
+                static_cast<uint32_t>(as_i32(source_operands[1])) & 31u;
+            auto result = sign_extend_i32(
+                static_cast<int64_t>(static_cast<int32_t>(a << sh)));
+            std::cout << "Calculate Inst value: " << a << " << " << sh << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::SRL:
+        case Opcode::SRLW:
+        case Opcode::SRLI:
+        case Opcode::SRLIW: {
+            if (!needN(2)) return std::nullopt;
+            uint32_t a = static_cast<uint32_t>(as_i32(source_operands[0]));
+            uint32_t sh =
+                static_cast<uint32_t>(as_i32(source_operands[1])) & 31u;
+            auto result = sign_extend_i32(
+                static_cast<int64_t>(static_cast<int32_t>(a >> sh)));
+            std::cout << "Calculate Inst value: " << a << " >>u " << sh
+                      << " -> " << result << std::endl;
+            return result;
+        }
+        case Opcode::SRA:
+        case Opcode::SRAW:
+        case Opcode::SRAI:
+        case Opcode::SRAIW: {
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            uint32_t sh =
+                static_cast<uint32_t>(as_i32(source_operands[1])) & 31u;
+            auto result = sign_extend_i32(static_cast<int64_t>(a >> sh));
+            std::cout << "Calculate Inst value: " << a << " >> " << sh << " -> "
+                      << result << std::endl;
+            return result;
+        }
+
+        // Comparisons (return 0/1)
+        case Opcode::SLT:
+        case Opcode::SLTI: {
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            int32_t b = as_i32(source_operands[1]);
+            auto result = static_cast<int64_t>(a < b ? 1 : 0);
+            std::cout << "Calculate Inst value: " << a << " < " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::SGT: {  // pseudo >
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            int32_t b = as_i32(source_operands[1]);
+            auto result = static_cast<int64_t>(a > b ? 1 : 0);
+            std::cout << "Calculate Inst value: " << a << " > " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::SLTU:
+        case Opcode::SLTIU: {
+            if (!needN(2)) return std::nullopt;
+            uint32_t a = static_cast<uint32_t>(as_i32(source_operands[0]));
+            uint32_t b = static_cast<uint32_t>(as_i32(source_operands[1]));
+            auto result = static_cast<int64_t>(a < b ? 1 : 0);
+            std::cout << "Calculate Inst value: " << a << " <u " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+
+        // Unary pseudos
+        case Opcode::NEG:
+        case Opcode::NEGW: {
+            if (!needN(1)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            // Avoid overflow case -INT32_MIN (leave for later lowering)
+            if (a == std::numeric_limits<int32_t>::min()) return std::nullopt;
+            auto result = sign_extend_i32(-a);
+            std::cout << "Calculate Inst value: -" << a << " -> " << result
+                      << std::endl;
+            return result;
+        }
+        case Opcode::NOT: {
+            if (!needN(1)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            auto result = sign_extend_i32(~a);
+            std::cout << "Calculate Inst value: ~" << a << " -> " << result
+                      << std::endl;
+            return result;
+        }
+        case Opcode::SEQZ: {
+            if (!needN(1)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            auto result = static_cast<int64_t>(a == 0 ? 1 : 0);
+            std::cout << "Calculate Inst value: (" << a << " == 0) -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::SNEZ: {
+            if (!needN(1)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            auto result = static_cast<int64_t>(a != 0 ? 1 : 0);
+            std::cout << "Calculate Inst value: (" << a << " != 0) -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::SLTZ: {
+            if (!needN(1)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            auto result = static_cast<int64_t>(a < 0 ? 1 : 0);
+            std::cout << "Calculate Inst value: (" << a << " < 0) -> " << result
+                      << std::endl;
+            return result;
+        }
+        case Opcode::SGTZ: {
+            if (!needN(1)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            auto result = static_cast<int64_t>(a > 0 ? 1 : 0);
+            std::cout << "Calculate Inst value: (" << a << " > 0) -> " << result
+                      << std::endl;
+            return result;
+        }
+
+        default:
+            return std::nullopt;  // Not (yet) supported
+    }
 }
 
 }  // namespace riscv64

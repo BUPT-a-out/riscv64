@@ -2232,6 +2232,38 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
                     auto divisor = static_cast<int32_t>(rhs_imm->getValue());
 
+                    // 如果是 1，直接优化掉
+                    if (divisor == 1) {
+                        // 直接返回左操作数
+                        new_reg = immToReg(std::move(lhs), parent_bb);
+                        return cloneRegister(new_reg.get(), is_float_op);
+                    }
+
+                    // 如果是 2^n，优化为右移
+                    if (divisor > 0 && (divisor & (divisor - 1)) == 0) {
+                        // 计算右移位数
+                        int shift_amount = 0;
+                        while (divisor > 1) {
+                            divisor >>= 1;
+                            shift_amount++;
+                        }
+
+                        // 使用 srai 指令进行右移
+                        auto lhs_reg = immToReg(std::move(lhs), parent_bb);
+                        new_reg = codeGen_->allocateIntReg();
+                        auto instruction = std::make_unique<Instruction>(
+                            Opcode::SRAIW, parent_bb);
+                        instruction->addOperand(
+                            std::make_unique<RegisterOperand>(
+                                new_reg->getRegNum(), new_reg->isVirtual()));
+                        instruction->addOperand(std::move(lhs_reg));
+                        instruction->addOperand(
+                            std::make_unique<ImmediateOperand>(shift_amount));
+
+                        parent_bb->addInstruction(std::move(instruction));
+                        return cloneRegister(new_reg.get(), is_float_op);
+                    }
+
                     // 尝试使用魔数除法优化
                     if (MagicDivision::canOptimize(divisor)) {
                         auto lhs_reg = immToReg(std::move(lhs), parent_bb);

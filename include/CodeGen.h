@@ -19,7 +19,6 @@ class CodeGenerator {
     std::unordered_map<const midend::BasicBlock*, std::unique_ptr<LabelOperand>>
         bbToLabel_;
     int nextRegNum_ = 100;
-    int nextFloatRegNum_ = 1000;  // 使用不同的编号空间避免冲突
     int nextLabelNum_ = 0;
     std::unique_ptr<FloatConstantPool> floatConstantPool_;
 

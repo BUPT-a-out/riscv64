@@ -163,3 +163,16 @@ task("test-riscv64-complex")
         os.exec("xmake run riscv64_test_framework arithmetic_ops")
         os.exec("xmake run riscv64_test_framework conditional_branch")
     end)
+
+task("test-riscv64-runner")
+    set_menu {
+        usage = "xmake test-riscv64-runner",
+        description = "Run RISC-V test_runner"
+    }
+    on_run(function ()
+        import("core.base.task")
+        
+        task.run("build", {}, "riscv64_test_runner")
+        cprint("${color.info}Running RISC-V test_runner...")
+        os.exec("xmake run riscv64_test_runner")
+    end)
