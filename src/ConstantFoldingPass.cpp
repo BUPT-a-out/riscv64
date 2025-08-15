@@ -363,10 +363,269 @@ void ConstantFolding::constantPropagate(Instruction* inst,
 
 std::optional<int64_t> ConstantFolding::calculateInstructionValue(
     Opcode op, std::vector<int64_t>& source_operands) {
-    // TODO(rikka): impl
-    (void)op;
-    (void)source_operands;
-    return 114514;
+    // Only handle simple integer (i32) semantics for now.
+    auto as_i32 = [](int64_t v) -> int32_t { return static_cast<int32_t>(v); };
+    auto sign_extend_i32 = [&](int64_t v) -> int64_t {
+        return static_cast<int64_t>(static_cast<int32_t>(v));
+    };
+
+    auto needN = [&](std::size_t n) -> bool {
+        return source_operands.size() == n;
+    };
+
+    switch (op) {
+        // Binary arithmetic (signed) wrap in 32-bit
+        case Opcode::ADD:
+        case Opcode::ADDW:
+        case Opcode::ADDI:
+        case Opcode::ADDIW: {
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            int32_t b = as_i32(source_operands[1]);
+            auto result = sign_extend_i32(static_cast<int64_t>(a) +
+                                          static_cast<int64_t>(b));
+            std::cout << "Calculate Inst value: " << a << " + " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::SUB:
+        case Opcode::SUBW: {
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            int32_t b = as_i32(source_operands[1]);
+            auto result = sign_extend_i32(static_cast<int64_t>(a) -
+                                          static_cast<int64_t>(b));
+            std::cout << "Calculate Inst value: " << a << " - " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::MUL:
+        case Opcode::MULW: {
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            int32_t b = as_i32(source_operands[1]);
+            auto result = sign_extend_i32(static_cast<int64_t>(a) *
+                                          static_cast<int64_t>(b));
+            std::cout << "Calculate Inst value: " << a << " * " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::DIV:
+        case Opcode::DIVW: {
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            int32_t b = as_i32(source_operands[1]);
+            if (b == 0) return std::nullopt;  // avoid div-by-zero fold
+            if (a == std::numeric_limits<int32_t>::min() && b == -1)
+                return std::nullopt;  // avoid overflow UB
+            auto result = sign_extend_i32(static_cast<int64_t>(a / b));
+            std::cout << "Calculate Inst value: " << a << " / " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::DIVU:
+        case Opcode::DIVUW: {
+            if (!needN(2)) return std::nullopt;
+            uint32_t a = static_cast<uint32_t>(as_i32(source_operands[0]));
+            uint32_t b = static_cast<uint32_t>(as_i32(source_operands[1]));
+            if (b == 0) return std::nullopt;
+            auto result = sign_extend_i32(
+                static_cast<int64_t>(static_cast<int32_t>(a / b)));
+            std::cout << "Calculate Inst value: " << a << " /u " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::REM:
+        case Opcode::REMW: {
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            int32_t b = as_i32(source_operands[1]);
+            if (b == 0) return std::nullopt;
+            if (a == std::numeric_limits<int32_t>::min() && b == -1) {
+                auto result =
+                    sign_extend_i32(0);  // per RISC-V spec rem of this is 0
+                std::cout << "Calculate Inst value: " << a << " % " << b
+                          << " (special) -> " << result << std::endl;
+                return result;
+            }
+            auto result = sign_extend_i32(static_cast<int64_t>(a % b));
+            std::cout << "Calculate Inst value: " << a << " % " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::REMU:
+        case Opcode::REMUW: {
+            if (!needN(2)) return std::nullopt;
+            uint32_t a = static_cast<uint32_t>(as_i32(source_operands[0]));
+            uint32_t b = static_cast<uint32_t>(as_i32(source_operands[1]));
+            if (b == 0) return std::nullopt;
+            auto result = sign_extend_i32(
+                static_cast<int64_t>(static_cast<int32_t>(a % b)));
+            std::cout << "Calculate Inst value: " << a << " %u " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+
+        // Bitwise / logic
+        case Opcode::AND:
+        case Opcode::ANDI: {
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            int32_t b = as_i32(source_operands[1]);
+            auto result = sign_extend_i32(a & b);
+            std::cout << "Calculate Inst value: " << a << " & " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::OR:
+        case Opcode::ORI: {
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            int32_t b = as_i32(source_operands[1]);
+            auto result = sign_extend_i32(a | b);
+            std::cout << "Calculate Inst value: " << a << " | " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::XOR:
+        case Opcode::XORI: {
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            int32_t b = as_i32(source_operands[1]);
+            auto result = sign_extend_i32(a ^ b);
+            std::cout << "Calculate Inst value: " << a << " ^ " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::SLL:
+        case Opcode::SLLW:
+        case Opcode::SLLI:
+        case Opcode::SLLIW: {
+            if (!needN(2)) return std::nullopt;
+            uint32_t a = static_cast<uint32_t>(as_i32(source_operands[0]));
+            uint32_t sh =
+                static_cast<uint32_t>(as_i32(source_operands[1])) & 31u;
+            auto result = sign_extend_i32(
+                static_cast<int64_t>(static_cast<int32_t>(a << sh)));
+            std::cout << "Calculate Inst value: " << a << " << " << sh << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::SRL:
+        case Opcode::SRLW:
+        case Opcode::SRLI:
+        case Opcode::SRLIW: {
+            if (!needN(2)) return std::nullopt;
+            uint32_t a = static_cast<uint32_t>(as_i32(source_operands[0]));
+            uint32_t sh =
+                static_cast<uint32_t>(as_i32(source_operands[1])) & 31u;
+            auto result = sign_extend_i32(
+                static_cast<int64_t>(static_cast<int32_t>(a >> sh)));
+            std::cout << "Calculate Inst value: " << a << " >>u " << sh
+                      << " -> " << result << std::endl;
+            return result;
+        }
+        case Opcode::SRA:
+        case Opcode::SRAW:
+        case Opcode::SRAI:
+        case Opcode::SRAIW: {
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            uint32_t sh =
+                static_cast<uint32_t>(as_i32(source_operands[1])) & 31u;
+            auto result = sign_extend_i32(static_cast<int64_t>(a >> sh));
+            std::cout << "Calculate Inst value: " << a << " >> " << sh << " -> "
+                      << result << std::endl;
+            return result;
+        }
+
+        // Comparisons (return 0/1)
+        case Opcode::SLT:
+        case Opcode::SLTI: {
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            int32_t b = as_i32(source_operands[1]);
+            auto result = static_cast<int64_t>(a < b ? 1 : 0);
+            std::cout << "Calculate Inst value: " << a << " < " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::SGT: {  // pseudo >
+            if (!needN(2)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            int32_t b = as_i32(source_operands[1]);
+            auto result = static_cast<int64_t>(a > b ? 1 : 0);
+            std::cout << "Calculate Inst value: " << a << " > " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::SLTU:
+        case Opcode::SLTIU: {
+            if (!needN(2)) return std::nullopt;
+            uint32_t a = static_cast<uint32_t>(as_i32(source_operands[0]));
+            uint32_t b = static_cast<uint32_t>(as_i32(source_operands[1]));
+            auto result = static_cast<int64_t>(a < b ? 1 : 0);
+            std::cout << "Calculate Inst value: " << a << " <u " << b << " -> "
+                      << result << std::endl;
+            return result;
+        }
+
+        // Unary pseudos
+        case Opcode::NEG:
+        case Opcode::NEGW: {
+            if (!needN(1)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            // Avoid overflow case -INT32_MIN (leave for later lowering)
+            if (a == std::numeric_limits<int32_t>::min()) return std::nullopt;
+            auto result = sign_extend_i32(-a);
+            std::cout << "Calculate Inst value: -" << a << " -> " << result
+                      << std::endl;
+            return result;
+        }
+        case Opcode::NOT: {
+            if (!needN(1)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            auto result = sign_extend_i32(~a);
+            std::cout << "Calculate Inst value: ~" << a << " -> " << result
+                      << std::endl;
+            return result;
+        }
+        case Opcode::SEQZ: {
+            if (!needN(1)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            auto result = static_cast<int64_t>(a == 0 ? 1 : 0);
+            std::cout << "Calculate Inst value: (" << a << " == 0) -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::SNEZ: {
+            if (!needN(1)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            auto result = static_cast<int64_t>(a != 0 ? 1 : 0);
+            std::cout << "Calculate Inst value: (" << a << " != 0) -> "
+                      << result << std::endl;
+            return result;
+        }
+        case Opcode::SLTZ: {
+            if (!needN(1)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            auto result = static_cast<int64_t>(a < 0 ? 1 : 0);
+            std::cout << "Calculate Inst value: (" << a << " < 0) -> " << result
+                      << std::endl;
+            return result;
+        }
+        case Opcode::SGTZ: {
+            if (!needN(1)) return std::nullopt;
+            int32_t a = as_i32(source_operands[0]);
+            auto result = static_cast<int64_t>(a > 0 ? 1 : 0);
+            std::cout << "Calculate Inst value: (" << a << " > 0) -> " << result
+                      << std::endl;
+            return result;
+        }
+
+        default:
+            return std::nullopt;  // Not (yet) supported
+    }
 }
 
 }  // namespace riscv64
