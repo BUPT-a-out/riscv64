@@ -1,5 +1,7 @@
 #include "ConstantFoldingPass.h"
 
+#include <cstdint>
+#include <limits>
 #include <string>
 
 #include "Visit.h"
@@ -134,95 +136,141 @@ void ConstantFolding::peepholeOptimize(Instruction* inst,
 
 void ConstantFolding::foldToITypeInst(Instruction* inst,
                                       BasicBlock* parent_bb) {
-    switch (inst->getOpcode()) {
-        case Opcode::ADD:
-        case Opcode::ADDW:
-        case Opcode::AND:
-        case Opcode::OR:
-        case Opcode::XOR:
-        case Opcode::SLL:
-        case Opcode::SLLW:
-        case Opcode::SRA:
-        case Opcode::SRAW:
-        case Opcode::SRL:
-        case Opcode::SRLW:
-        case Opcode::SLT: {
-            static const std::unordered_map<Opcode, Opcode> rTypeToITypeMap = {
-                {Opcode::ADD, Opcode::ADDI},   {Opcode::ADDW, Opcode::ADDIW},
-                {Opcode::AND, Opcode::ANDI},   {Opcode::OR, Opcode::ORI},
-                {Opcode::XOR, Opcode::XORI},   {Opcode::SLL, Opcode::SLLI},
-                {Opcode::SLLW, Opcode::SLLIW}, {Opcode::SRA, Opcode::SRAI},
-                {Opcode::SRAW, Opcode::SRAIW}, {Opcode::SRL, Opcode::SRLI},
-                {Opcode::SRLW, Opcode::SRLIW}, {Opcode::SLT, Opcode::SLTI},
-                {Opcode::SUB, Opcode::ADDI},   {Opcode::SUBW, Opcode::ADDIW}};
-
-            // Check if any source operand is a constant
-            auto* operand1 = inst->getOperand(1);  // First source operand
-            auto* operand2 = inst->getOperand(2);  // Second source operand
-
-            auto const1 = getConstant(*operand1);
-            auto const2 = getConstant(*operand2);
-
-            // If either operand is constant, convert to I-type instruction
-            if (const1.has_value() || const2.has_value()) {
-                auto opcode = inst->getOpcode();
-                auto it = rTypeToITypeMap.find(opcode);
-                if (it != rTypeToITypeMap.end()) {
-                    Opcode newOpcode = it->second;
-
-                    // Determine which operand is constant and which is the
-                    // register
-                    RegisterOperand* regOperand;
-                    int64_t immValue;
-
-                    if (const2.has_value()) {
-                        // Second operand is constant, keep first operand as
-                        // register
-                        regOperand = dynamic_cast<RegisterOperand*>(operand1);
-                        immValue = const2.value();
-                    } else {
-                        // First operand is constant, keep second operand as
-                        // register
-                        regOperand = dynamic_cast<RegisterOperand*>(operand2);
-                        immValue = const1.value();
-                    }
-
-                    if (opcode == Opcode::SUB || opcode == Opcode::SUBW) {
-                        // 对于减法指令，立即数需要取反
-                        immValue = -immValue;
-                    }
-
-                    // Check if immediate value is within valid range for I-type
-                    // instructions RISC-V I-type instructions have 12-bit
-                    // signed immediate field
-                    if (immValue >= -2048 && immValue <= 2047) {
-                        // Store the destination operand
-                        auto destOperand = Visitor::cloneRegister(
-                            dynamic_cast<RegisterOperand*>(
-                                inst->getOperand(0)));
-                        auto regOperandClone =
-                            Visitor::cloneRegister(regOperand);
-
-                        // Clear existing operands and set new opcode
-                        inst->clearOperands();
-                        inst->setOpcode(newOpcode);
-
-                        // Add operands: destination, register, immediate
-                        inst->addOperand(std::move(destOperand));
-                        inst->addOperand(std::move(regOperandClone));
-                        inst->addOperand(
-                            std::make_unique<ImmediateOperand>(immValue));
-
-                        std::cout << "Converted R-type to I-type instruction: "
-                                  << inst->toString() << std::endl;
-                    }
-                }
-            }
-        } break;
-
-        default:
-            return;
+    // Only try to fold canonical 3-op R-type forms: rd, rs1, rs2
+    if (inst->getOprandCount() != 3) {
+        return;
     }
+
+    auto opcode = inst->getOpcode();
+
+    // Handle constant-first non-commutative comparisons by flipping predicate.
+    // Pattern: SLT rd, imm, rs  ==>  SGT rd, rs, imm   (because imm < rs <=> rs
+    // > imm) Keep it simple: only signed variant (i32) per requirement.
+    // Unsigned left untouched.
+    if (opcode == Opcode::SLT && inst->getOprandCount() == 3) {
+        auto* op1 = inst->getOperand(1);
+        auto* op2 = inst->getOperand(2);
+        if (op1->isImm() && op2->isReg()) {
+            auto* rd = inst->getOperand(0);
+            if (rd->isReg()) {
+                // Clone operands in new order: rd, rs(/*op2*/), imm(/*op1*/)
+                auto rdClone =
+                    Visitor::cloneRegister(dynamic_cast<RegisterOperand*>(rd));
+                auto rsClone =
+                    Visitor::cloneRegister(dynamic_cast<RegisterOperand*>(op2));
+                auto immVal = op1->getValue();
+                std::string original = inst->toString();
+                inst->clearOperands();
+                inst->setOpcode(Opcode::SGT);  // use pseudo greater-than
+                inst->addOperand(std::move(rdClone));
+                inst->addOperand(std::move(rsClone));
+                inst->addOperand(std::make_unique<ImmediateOperand>(immVal));
+                std::cout << "Flip predicate (const-first SLT): '" << original
+                          << "' -> '" << inst->toString() << "'" << std::endl;
+                // After rewriting, proceed with possible further peephole in
+                // later passes (do not continue here to avoid double-processing
+                // now)
+            }
+        }
+    }
+
+    // Mapping for direct R->I conversions (same semantics, rs2 -> imm)
+    static const std::unordered_map<Opcode, Opcode> r2i = {
+        {Opcode::ADD, Opcode::ADDI},   {Opcode::ADDW, Opcode::ADDIW},
+        {Opcode::AND, Opcode::ANDI},   {Opcode::OR, Opcode::ORI},
+        {Opcode::XOR, Opcode::XORI},   {Opcode::SLL, Opcode::SLLI},
+        {Opcode::SLLW, Opcode::SLLIW}, {Opcode::SRA, Opcode::SRAI},
+        {Opcode::SRAW, Opcode::SRAIW}, {Opcode::SRL, Opcode::SRLI},
+        {Opcode::SRLW, Opcode::SRLIW}, {Opcode::SLT, Opcode::SLTI},
+        {Opcode::SLTU, Opcode::SLTIU}, {Opcode::SUB, Opcode::ADDI},
+        {Opcode::SUBW, Opcode::ADDIW}};  // SUB uses ADDI with negated imm
+
+    auto it_map = r2i.find(opcode);
+    if (it_map == r2i.end()) {
+        return;  // Not a supported opcode
+    }
+
+    auto* rs1 = inst->getOperand(1);
+    auto* rs2 = inst->getOperand(2);
+    auto constOpRs1 = getConstant(*rs1);
+    auto constOpRs2 = getConstant(*rs2);
+
+    // Classification of op commutativity (with regard to source operands)
+    auto is_commutative = [&](Opcode opcodeCandidate) {
+        switch (opcodeCandidate) {
+            case Opcode::ADD:
+            case Opcode::ADDW:
+            case Opcode::AND:
+            case Opcode::OR:
+            case Opcode::XOR:
+                return true;  // safe to swap rs1/rs2
+            default:
+                return false;
+        }
+    };
+
+    // For non-commutative ops (SUB, shifts, SLT/SLTU) we only proceed if rs2 is
+    // constant. If rs1 is constant we abort (to avoid semantic inversion) -
+    // KISS principle.
+    if (!is_commutative(opcode)) {
+        if (!constOpRs2.has_value()) {
+            return;  // need rs2 const
+        }
+        if (!rs1->isReg()) {
+            return;  // rs1 must stay a reg
+        }
+    } else {
+        // Commutative: prefer rs2 const. If only rs1 const, swap logically.
+        if (!constOpRs2.has_value() && constOpRs1.has_value()) {
+            // We can transform: op rd, const, reg  ==> op (swap) rd, reg, const
+            // Just treat as if rs2 const by swapping rs1/rs2 pointers and
+            // constants.
+            std::swap(rs1, rs2);
+            std::swap(constOpRs1, constOpRs2);
+        }
+        if (!constOpRs2.has_value()) {
+            return;  // still no immediate candidate
+        }
+        if (!rs1->isReg()) {
+            return;  // rs1 must be register in I-type
+        }
+    }
+
+    // Now rs2 is the constant to fold.
+    auto immValue = constOpRs2.value();
+
+    // Special case: SUB / SUBW become ADDI / ADDIW with negated immediate
+    if (opcode == Opcode::SUB || opcode == Opcode::SUBW) {
+        immValue = -immValue;
+    }
+
+    // Range check for 12-bit signed immediates
+    constexpr int IMM12_MIN = -2048;
+    constexpr int IMM12_MAX = 2047;
+    if (immValue < IMM12_MIN || immValue > IMM12_MAX) {
+        return;
+    }
+
+    // Clone destination & rs1 register
+    auto* rd_orig = inst->getOperand(0);
+    if (!rd_orig->isReg()) {
+        return;  // defensive
+    }
+    auto rdClone =
+        Visitor::cloneRegister(dynamic_cast<RegisterOperand*>(rd_orig));
+    auto rs1Clone = Visitor::cloneRegister(dynamic_cast<RegisterOperand*>(rs1));
+
+    auto newOpcode = it_map->second;
+    std::string original = inst->toString();
+
+    inst->clearOperands();
+    inst->setOpcode(newOpcode);
+    inst->addOperand(std::move(rdClone));
+    inst->addOperand(std::move(rs1Clone));
+    inst->addOperand(std::make_unique<ImmediateOperand>(immValue));
+
+    std::cout << "Converted R-type to I-type instruction: '" << original
+              << "' -> '" << inst->toString() << "'" << std::endl;
 }
 
 void ConstantFolding::algebraicIdentitySimplify(Instruction* inst,
