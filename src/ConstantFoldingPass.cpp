@@ -390,8 +390,183 @@ void ConstantFolding::algebraicIdentitySimplify(Instruction* inst,
 
 void ConstantFolding::strengthReduction(Instruction* inst,
                                         BasicBlock* parent_bb) {
-    (void)inst;
     (void)parent_bb;
+    // Pattern: mul/div by power-of-two constant -> shift
+    // Support opcodes: MUL, MULW, DIVU, DIVUW, DIV, DIVW (signed div only if
+    // dividend known non-negative)
+    if (inst->getOprandCount() != 3) {
+        return;  // rd, rs1, rs2
+    }
+
+    const auto opcode = inst->getOpcode();
+    auto* destReg = inst->getOperand(0);
+    auto* srcReg1 = inst->getOperand(1);
+    auto* srcReg2 = inst->getOperand(2);
+    if (!destReg->isReg()) {
+        return;
+    }
+
+    auto getConstValue =
+        [&](MachineOperand* operand) -> std::optional<int64_t> {
+        return getConstant(*operand);
+    };
+    const auto constVal1 = getConstValue(srcReg1);
+    const auto constVal2 = getConstValue(srcReg2);
+
+    auto isPowerOfTwo = [](int64_t value) -> bool {
+        if (value <= 0) {
+            return false;
+        }
+        uint64_t u = static_cast<uint64_t>(value);
+        return (u & (u - 1ULL)) == 0ULL;
+    };
+    auto log2Exact = [](int64_t value) -> unsigned {
+        unsigned shiftAmount = 0U;
+        uint64_t u = static_cast<uint64_t>(value);
+        while ((1ULL << shiftAmount) < u) {
+            ++shiftAmount;
+        }
+        return shiftAmount;
+    };
+
+    auto cloneRegOperand = [](MachineOperand* operand) {
+        return Visitor::cloneRegister(dynamic_cast<RegisterOperand*>(operand));
+    };
+
+    auto applyShiftImm = [&](Opcode newOpcode, MachineOperand* fromReg,
+                             unsigned shiftAmount) {
+        std::string original = inst->toString();
+        unsigned destRegNum = destReg->getRegNum();
+        unsigned sourceRegNum = fromReg->getRegNum();
+        auto destClone = cloneRegOperand(destReg);
+        auto sourceClone = cloneRegOperand(fromReg);
+        inst->clearOperands();
+        inst->setOpcode(newOpcode);
+        inst->addOperand(std::move(destClone));
+        inst->addOperand(std::move(sourceClone));
+        inst->addOperand(std::make_unique<ImmediateOperand>(
+            static_cast<int64_t>(shiftAmount)));
+        // Constant propagation update
+        auto itConst = virtualRegisterConstants.find(sourceRegNum);
+        if (itConst != virtualRegisterConstants.end()) {
+            int64_t srcVal = itConst->second;
+            int64_t newVal = 0;
+            switch (newOpcode) {
+                case Opcode::SLLI:
+                case Opcode::SLLIW:
+                    newVal = static_cast<int64_t>(static_cast<int32_t>(
+                        static_cast<int32_t>(srcVal) << shiftAmount));
+                    break;
+                case Opcode::SRLI:
+                case Opcode::SRLIW:
+                    newVal = static_cast<int64_t>(static_cast<int32_t>(
+                        static_cast<uint32_t>(static_cast<int32_t>(srcVal)) >>
+                        shiftAmount));
+                    break;
+                case Opcode::SRAI:
+                case Opcode::SRAIW:
+                    newVal = static_cast<int64_t>(static_cast<int32_t>(
+                        static_cast<int32_t>(srcVal) >> shiftAmount));
+                    break;
+                default:
+                    break;
+            }
+            mapRegToConstant(destRegNum, newVal);
+        } else {
+            virtualRegisterConstants.erase(destRegNum);
+        }
+        std::cout << "Strength reduction: '" << original << "' -> '"
+                  << inst->toString() << "'" << std::endl;
+    };
+
+    constexpr unsigned SHIFT_WIDTH_32 = 32U;  // 5-bit shift amount range
+    auto shiftFits = [&](unsigned shiftAmount, bool isWord) -> bool {
+        if (isWord) {
+            return shiftAmount < SHIFT_WIDTH_32;
+        }
+        return shiftAmount <
+               SHIFT_WIDTH_32;  // Currently treating as 32-bit ops
+    };
+
+    auto tryReduceMul = [&]() {
+        bool isWord = (opcode == Opcode::MULW);
+        MachineOperand* sourceRegForShift = nullptr;
+        std::optional<int64_t> constFactor;
+        if (constVal1 && isPowerOfTwo(*constVal1) && srcReg2->isReg()) {
+            sourceRegForShift = srcReg2;
+            constFactor = constVal1;
+        } else if (constVal2 && isPowerOfTwo(*constVal2) && srcReg1->isReg()) {
+            sourceRegForShift = srcReg1;
+            constFactor = constVal2;
+        } else {
+            return false;
+        }
+        if (*constFactor == 1) {
+            return false;  // handled elsewhere
+        }
+        unsigned shiftAmount = log2Exact(*constFactor);
+        if (!shiftFits(shiftAmount, isWord)) {
+            return false;
+        }
+        applyShiftImm(isWord ? Opcode::SLLIW : Opcode::SLLI, sourceRegForShift,
+                      shiftAmount);
+        return true;
+    };
+
+    auto tryReduceDivU = [&]() {
+        bool isWord = (opcode == Opcode::DIVUW);
+        if (!constVal2 || !isPowerOfTwo(*constVal2) || *constVal2 == 1) {
+            return false;
+        }
+        if (!srcReg1->isReg()) {
+            return false;
+        }
+        unsigned shiftAmount = log2Exact(*constVal2);
+        if (!shiftFits(shiftAmount, isWord)) {
+            return false;
+        }
+        applyShiftImm(isWord ? Opcode::SRLIW : Opcode::SRLI, srcReg1,
+                      shiftAmount);
+        return true;
+    };
+
+    auto tryReduceDivSigned = [&]() {
+        bool isWord = (opcode == Opcode::DIVW);
+        if (!constVal2 || !isPowerOfTwo(*constVal2) || *constVal2 == 1) {
+            return false;
+        }
+        // Only when dividend known non-negative (conservative)
+        if (!(constVal1 && *constVal1 >= 0)) {
+            return false;
+        }
+        if (!srcReg1->isReg()) {
+            return false;
+        }
+        unsigned shiftAmount = log2Exact(*constVal2);
+        if (!shiftFits(shiftAmount, isWord)) {
+            return false;
+        }
+        applyShiftImm(isWord ? Opcode::SRAIW : Opcode::SRAI, srcReg1,
+                      shiftAmount);
+        return true;
+    };
+
+    switch (opcode) {
+        case Opcode::MUL:
+        case Opcode::MULW:
+            (void)tryReduceMul();
+            break;
+        case Opcode::DIVU:
+        case Opcode::DIVUW:
+            (void)tryReduceDivU();
+            break;
+        case Opcode::DIV:
+        case Opcode::DIVW:
+            (void)tryReduceDivSigned();
+            break;
+        default:
+            break;  // not handled
+    }
 }
 
 void ConstantFolding::bitwiseOperationSimplify(Instruction* inst,
