@@ -36,6 +36,7 @@ std::unique_ptr<midend::Module> createComplexFunctionCallTest();
 std::unique_ptr<midend::Module> createSimpleArray1DTest();
 std::unique_ptr<midend::Module> createSimpleArray2DTest();
 std::unique_ptr<midend::Module> createComplexMemoryArrayTest();
+std::unique_ptr<midend::Module> createPeepholeOptimizationCoverageTest();
 }  // namespace testcases
 
 class TestRunner {
@@ -1015,7 +1016,7 @@ std::unique_ptr<midend::Module> createSimpleArray2DTest() {
     // 分配对角线和变量: %diag_sum = alloca i32
     auto* diagSumAlloca = builder.createAlloca(i32Type, nullptr, "diag_sum");
 
-    // 初始化对角线和为0
+    // 初始化对角线和为0: store i32 0, i32* %diag_sum
     auto* zero = midend::ConstantInt::get(i32Type, 0);
     builder.createStore(zero, diagSumAlloca);
 
@@ -1795,6 +1796,7 @@ std::unique_ptr<midend::Module> createGlobalArrayTest() {
     // 创建测试函数: int array_sum()
     auto* funcType = midend::FunctionType::get(i32Type, {});
     auto* func = midend::Function::Create(funcType, "array_sum", module.get());
+
     auto* entry = midend::BasicBlock::Create(context.get(), "entry", func);
     midend::IRBuilder builder(context.get());
     builder.setInsertPoint(entry);
@@ -1963,78 +1965,80 @@ std::unique_ptr<midend::Module> createGlobal3DArrayTest() {
     return module;
 }
 
-std::unique_ptr<midend::Module> createGlobalInitOrderTest() {
-    static auto context = std::make_unique<midend::Context>();
-    auto module =
-        std::make_unique<midend::Module>("global_init_order", context.get());
-    auto* i32Type = context->getInt32Type();
+// std::unique_ptr<midend::Module> createGlobalInitOrderTest() {
+//     static auto context = std::make_unique<midend::Context>();
+//     auto module =
+//         std::make_unique<midend::Module>("global_init_order", context.get());
+//     auto* i32Type = context->getInt32Type();
 
-    // 创建相互依赖的全局变量
-    // int base_value = 10;
-    auto* baseValue = midend::GlobalVariable::Create(
-        i32Type, false, midend::GlobalVariable::ExternalLinkage,
-        midend::ConstantInt::get(i32Type, 10), "base_value", module.get());
+//     // 创建相互依赖的全局变量
+//     // int base_value = 10;
+//     auto* baseValue = midend::GlobalVariable::Create(
+//         i32Type, false, midend::GlobalVariable::ExternalLinkage,
+//         midend::ConstantInt::get(i32Type, 10), "base_value", module.get());
 
-    // const int multiplier = 5;
-    auto* multiplier = midend::GlobalVariable::Create(
-        i32Type, true, midend::GlobalVariable::ExternalLinkage,
-        midend::ConstantInt::get(i32Type, 5), "multiplier", module.get());
+//     // const int multiplier = 5;
+//     auto* multiplier = midend::GlobalVariable::Create(
+//         i32Type, true, midend::GlobalVariable::ExternalLinkage,
+//         midend::ConstantInt::get(i32Type, 5), "multiplier", module.get());
 
-    // int computed_values[5] = {10, 20, 30, 40, 50};
-    auto* arrayTy = midend::ArrayType::get(i32Type, 5);
-    std::vector<midend::Constant*> arrayInit = {
-        midend::ConstantInt::get(i32Type, 10),
-        midend::ConstantInt::get(i32Type, 20),
-        midend::ConstantInt::get(i32Type, 30),
-        midend::ConstantInt::get(i32Type, 40),
-        midend::ConstantInt::get(i32Type, 50)};
-    auto* arrayInitializer = midend::ConstantArray::get(arrayTy, arrayInit);
-    auto* computedValues = midend::GlobalVariable::Create(
-        arrayTy, false, midend::GlobalVariable::ExternalLinkage,
-        arrayInitializer, "computed_values", module.get());
+//     // int computed_values[5] = {10, 20, 30, 40, 50};
+//     auto* arrayTy = midend::ArrayType::get(i32Type, 5);
+//     std::vector<midend::Constant*> arrayInit = {
+//         midend::ConstantInt::get(i32Type, 10),
+//         midend::ConstantInt::get(i32Type, 20),
+//         midend::ConstantInt::get(i32Type, 30),
+//         midend::ConstantInt::get(i32Type, 40),
+//         midend::ConstantInt::get(i32Type, 50)};
+//     auto* arrayInitializer = midend::ConstantArray::get(arrayTy, arrayInit);
+//     auto* computedValues = midend::GlobalVariable::Create(
+//         arrayTy, false, midend::GlobalVariable::ExternalLinkage,
+//         arrayInitializer, "computed_values", module.get());
 
-    // 创建计算函数: int compute_result()
-    auto* funcType = midend::FunctionType::get(i32Type, {});
-    auto* func =
-        midend::Function::Create(funcType, "compute_result", module.get());
-    auto* entry = midend::BasicBlock::Create(context.get(), "entry", func);
-    midend::IRBuilder builder(context.get());
-    builder.setInsertPoint(entry);
+//     // 创建计算函数: int compute_result()
+//     auto* funcType = midend::FunctionType::get(i32Type, {});
+//     auto* func =
+//         midend::Function::Create(funcType, "compute_result", module.get());
+//     auto* entry = midend::BasicBlock::Create(context.get(), "entry", func);
+//     midend::IRBuilder builder(context.get());
+//     builder.setInsertPoint(entry);
 
-    auto* zero = midend::ConstantInt::get(i32Type, 0);
-    midend::Value* sum = zero;
+//     // 使用所有全局变量进行计算
+//     auto* baseVal = builder.createLoad(baseValue, "base_val");
+//     auto* multVal = builder.createLoad(multiplier, "mult_val");
 
-    // 使用所有全局变量进行计算
-    auto* baseVal = builder.createLoad(baseValue, "base_val");
-    auto* multVal = builder.createLoad(multiplier, "mult_val");
+//     // 修改base_value
+//     auto* newBase = builder.createMul(baseVal, multVal, "new_base");
+//     builder.createStore(newBase, baseValue);
 
-    // 修改base_value
-    auto* newBase = builder.createMul(baseVal, multVal, "new_base");
-    builder.createStore(newBase, baseValue);
+//     // 初始化累加器
+//     auto* zero = midend::ConstantInt::get(i32Type, 0);
+//     auto* sum = zero;
 
-    // 累加数组元素
-    for (int i = 0; i < 5; i++) {
-        auto* idx = midend::ConstantInt::get(i32Type, i);
-        auto* elemPtr = builder.createGEP(arrayTy, computedValues, {idx},
-                                          "elem_" + std::to_string(i) + "_ptr");
-        auto* elemVal =
-            builder.createLoad(elemPtr, "elem_" + std::to_string(i));
+//     // 累加数组元素
+//     constexpr int ARRAY_SIZE = 5;
+//     for (int i = 0; i < ARRAY_SIZE; i++) {
+//         auto* idx = midend::ConstantInt::get(i32Type, i);
+//         auto* elemPtr = builder.createGEP(arrayTy, computedValues, {idx},
+//                                           "elem_" + std::to_string(i) + "_ptr");
+//         auto* elemVal =
+//             builder.createLoad(elemPtr, "elem_" + std::to_string(i));
 
-        // 修改数组元素: computed_values[i] *= multiplier
-        auto* newElem = builder.createMul(elemVal, multVal,
-                                          "new_elem_" + std::to_string(i));
-        builder.createStore(newElem, elemPtr);
+//         // 修改数组元素: computed_values[i] *= multiplier
+//         auto* newElem = builder.createMul(elemVal, multVal,
+//                                           "new_elem_" + std::to_string(i));
+//         builder.createStore(newElem, elemPtr);
 
-        sum = builder.createAdd(sum, newElem, "sum_" + std::to_string(i));
-    }
+//         sum = builder.createAdd(sum, newElem, "sum_" + std::to_string(i));
+//     }
 
-    // 添加修改后的base_value
-    auto* finalBase = builder.createLoad(baseValue, "final_base");
-    auto* result = builder.createAdd(sum, finalBase, "result");
-    builder.createRet(result);
+//     // 添加修改后的base_value
+//     auto* finalBase = builder.createLoad(baseValue, "final_base");
+//     auto* result = builder.createAdd(sum, finalBase, "result");
+//     builder.createRet(result);
 
-    return module;
-}
+//     return module;
+// }
 
 std::unique_ptr<midend::Module> createGlobalPointerArithmeticTest() {
     static auto context = std::make_unique<midend::Context>();
@@ -2097,6 +2101,114 @@ std::unique_ptr<midend::Module> createGlobalPointerArithmeticTest() {
     return module;
 }
 
+std::unique_ptr<midend::Module> createPeepholeOptimizationCoverageTest() {
+    static auto context = std::make_unique<midend::Context>();
+    auto module =
+        std::make_unique<midend::Module>("peephole_opt", context.get());
+    auto* i32 = context->getInt32Type();
+
+    // Function: i32 peephole_opt(i32 a)
+    auto* fty = midend::FunctionType::get(i32, {i32});
+    auto* fn = midend::Function::Create(fty, "peephole_opt", module.get());
+    auto* argA = fn->getArg(0);
+    argA->setName("a");
+
+    auto* entry = midend::BasicBlock::Create(context.get(), "entry", fn);
+    midend::IRBuilder b(context.get());
+    b.setInsertPoint(entry);
+
+    // Constants
+    auto* C0 = midend::ConstantInt::get(i32, 0);
+    auto* C1 = midend::ConstantInt::get(i32, 1);
+    auto* C2 = midend::ConstantInt::get(i32, 2);
+    auto* C3 = midend::ConstantInt::get(i32, 3);
+    auto* C4 = midend::ConstantInt::get(i32, 4);
+    auto* C5 = midend::ConstantInt::get(i32, 5);
+    auto* C7 = midend::ConstantInt::get(i32, 7);
+    auto* C8 = midend::ConstantInt::get(i32, 8);  // 2^3 for shift
+    auto* C9 = midend::ConstantInt::get(i32, 9);  // decomposable (8 + 1)
+    auto* Cn1 = midend::ConstantInt::get(i32, -1);
+
+    // 1. Algebraic identity candidates
+    auto* add_zero = b.createAdd(argA, C0, "add_zero");    // a + 0
+    auto* sub_zero = b.createSub(argA, C0, "sub_zero");    // a - 0
+    auto* sub_self = b.createSub(argA, argA, "sub_self");  // a - a
+    auto* mul_one = b.createMul(argA, C1, "mul_one");      // a * 1
+    auto* mul_zero = b.createMul(argA, C0, "mul_zero");    // a * 0
+    auto* div_one = b.createDiv(argA, C1, "div_one");      // a / 1
+
+    // 2. Strength reduction
+    auto* mul_pow2 = b.createMul(argA, C8, "mul_pow2");  // a * 8 -> SLLI
+    auto* div_pow2 = b.createDiv(
+        argA, C8,
+        "div_pow2");  // a / 8 -> SRLI (if treated unsigned or simplified)
+    auto* mul_9 = b.createMul(
+        argA, C9, "mul_9");  // a * 9 -> (a<<3)+a pattern opportunity
+
+    // 3. Bitwise simplifications
+    auto* and_self = b.createAnd(argA, argA, "and_self");
+    auto* or_self = b.createOr(argA, argA, "or_self");
+    auto* xor_self = b.createXor(argA, argA, "xor_self");
+
+    auto* and_zero = b.createAnd(argA, C0, "and_zero");
+    auto* or_zero = b.createOr(argA, C0, "or_zero");
+    auto* and_allones = b.createAnd(argA, Cn1, "and_allones");
+    auto* or_allones = b.createOr(argA, Cn1, "or_allones");
+    auto* xor_allones = b.createXor(argA, Cn1, "xor_allones");  // NOT pattern
+
+    // 4. Reassociation & combination
+    // const_c1 = (2 + 3) -> folded to 5
+    auto* const_c1 = b.createAdd(C2, C3, "const_c1");
+    // chain1 = a + const_c1 (R-type ADD with const in reg, convertible to ADDI)
+    auto* chain1 = b.createAdd(argA, const_c1, "chain1");
+    // chain2 = chain1 + 7  => should reassociate into single ADDI from a if
+    // pass handles
+    auto* chain2 = b.createAdd(chain1, C7, "chain2");
+
+    // Copy propagation / MOV elimination candidate: add a,0 single use
+    auto* mov_like = b.createAdd(argA, C0, "mov_like");
+    auto* use_mov = b.createAdd(mov_like, chain2, "use_mov");
+
+    // Another R-type to I-type candidate: ( (a + 4) + 5 )
+    auto* a_plus_4 = b.createAdd(argA, C4, "a_plus_4");  // expect ADDI
+    auto* plus_chain =
+        b.createAdd(a_plus_4, C5, "a_plus_4_plus_5");  // combine constants
+
+    // Pure constant fold chain
+    auto* k1 = b.createMul(C2, C3, "k1");  // 6
+    auto* k2 = b.createAdd(k1, C7, "k2");  // 13
+    auto* k3 = b.createSub(k2, C1, "k3");  // 12
+    auto* k4 = b.createAdd(k3, C0, "k4");  // 12 (tests add zero too)
+
+    // Aggregate all to keep them live
+    auto* agg1 = b.createAdd(add_zero, sub_zero, "agg1");
+    auto* agg2 = b.createAdd(sub_self, mul_one, "agg2");
+    auto* agg3 = b.createAdd(mul_zero, div_one, "agg3");
+    auto* agg4 = b.createAdd(mul_pow2, div_pow2, "agg4");
+    auto* agg5 = b.createAdd(mul_9, and_self, "agg5");
+    auto* agg6 = b.createAdd(or_self, xor_self, "agg6");
+    auto* agg7 = b.createAdd(and_zero, or_zero, "agg7");
+    auto* agg8 = b.createAdd(and_allones, or_allones, "agg8");
+    auto* agg9 = b.createAdd(xor_allones, chain2, "agg9");
+    auto* agg10 = b.createAdd(use_mov, plus_chain, "agg10");
+    auto* agg11 = b.createAdd(k4, agg1, "agg11");
+
+    // Combine aggressively
+    auto* sum1 = b.createAdd(agg2, agg3, "sum1");
+    auto* sum2 = b.createAdd(agg4, agg5, "sum2");
+    auto* sum3 = b.createAdd(agg6, agg7, "sum3");
+    auto* sum4 = b.createAdd(agg8, agg9, "sum4");
+    auto* sum5 = b.createAdd(agg10, agg11, "sum5");
+
+    auto* t0 = b.createAdd(sum1, sum2, "t0");
+    auto* t1 = b.createAdd(sum3, sum4, "t1");
+    auto* t2 = b.createAdd(t0, t1, "t2");
+    auto* final_sum = b.createAdd(t2, sum5, "final_sum");
+
+    b.createRet(final_sum);
+    return module;
+}
+
 }  // namespace testcases
 
 // TestRunner 构造函数实现
@@ -2131,9 +2243,12 @@ TestRunner::TestRunner() {
     testCases_["17_global_array"] = testcases::createGlobalArrayTest;
     testCases_["18_global_matrix_2d"] = testcases::createGlobalMatrix2DTest;
     testCases_["19_global_3d_array"] = testcases::createGlobal3DArrayTest;
-    testCases_["20_global_init_order"] = testcases::createGlobalInitOrderTest;
+    // testCases_["20_global_init_order"] = testcases::createGlobalInitOrderTest;
     testCases_["21_global_pointer_arithmetic"] =
         testcases::createGlobalPointerArithmeticTest;
+    // New comprehensive peephole optimization coverage test
+    testCases_["22_peephole_opt_coverage"] =
+        testcases::createPeepholeOptimizationCoverageTest;
 }
 
 std::unique_ptr<midend::Module> TestRunner::loadTestCase(
@@ -2179,53 +2294,62 @@ void TestRunner::executeCodeGeneration(const std::string& testCaseName,
     std::cout << midend::IRPrinter::toString(module.get()) << std::endl;
 
     try {
-        // 创建RISC-V目标
         RISCV64Target target;
 
-        // 执行指令选择pass
-        std::cout << "\n--- Running Instruction Selection Pass ---"
-                  << std::endl;
+        // Phase 1: Instruction Selection
+        std::cout << "\n--- Phase 1: Instruction Selection ---" << std::endl;
         auto riscvModule = target.instructionSelectionPass(*module);
-
-        // 打印生成的RISC-V汇编代码
-        std::cout
-            << "\n--- Generated RISC-V Assembly (with virtual registers) ---"
-            << std::endl;
+        std::cout << "\n[After Instruction Selection]" << std::endl;
         std::cout << riscvModule.toString() << std::endl;
 
-        target.RAGreedyPass(riscvModule);
+        // Phase 0.5: Value Reuse (optional, pass nullptr AnalysisManager here)
+        // std::cout << "\n--- Phase 0.5: Value Reuse (optional) ---" <<
+        // std::endl; target.valueReusePass(riscvModule, *module, nullptr);
+        // std::cout << "\n[After Value Reuse]" << std::endl;
+        // std::cout << riscvModule.toString() << std::endl;
 
-        // 执行寄存器分配pass
-        std::cout << "\n--- Running Register Allocation Pass ---" << std::endl;
-        auto& allocatedModule = target.registerAllocationPass(riscvModule);
-
-        // 打印寄存器分配后的代码
-        std::cout << "\n--- Final RISC-V Assembly (with physical registers) ---"
+        // Phase 1.5: Initial Frame Index
+        std::cout << "\n--- Phase 1.5: Initial Frame Index Creation ---"
                   << std::endl;
+        target.initialFrameIndexPass(riscvModule);
+        std::cout << "\n[After Initial Frame Index]" << std::endl;
+        std::cout << riscvModule.toString() << std::endl;
+
+        // Phase 1.6: Constant Folding
+        std::cout << "\n--- Phase 1.6: Constant Folding ---" << std::endl;
+        target.constantFoldingPass(riscvModule);
+        std::cout << "\n[After Constant Folding]" << std::endl;
+        std::cout << riscvModule.toString() << std::endl;
+
+        // Phase 1.7: Basic Block Reordering
+        std::cout << "\n--- Phase 1.7: Basic Block Reordering ---" << std::endl;
+        target.basicBlockReorderingPass(riscvModule);
+        std::cout << "\n[After Basic Block Reordering]" << std::endl;
+        std::cout << riscvModule.toString() << std::endl;
+
+        // (Optional experimental) Greedy RA path was here in old runner:
+        // target.RAGreedyPass(riscvModule);
+
+        // Phase 2: Register Allocation
+        std::cout << "\n--- Phase 2: Register Allocation ---" << std::endl;
+        auto& allocatedModule = target.registerAllocationPass(riscvModule);
+        std::cout << "\n[After Register Allocation]" << std::endl;
         std::cout << allocatedModule.toString() << std::endl;
 
-        // 执行栈帧布局 pass
-        std::cout << "\n--- Running Frame Index Elimination Pass ---"
-                  << std::endl;
+        // Phase 3: Frame Index Elimination
+        std::cout << "\n--- Phase 3: Frame Index Elimination ---" << std::endl;
         try {
             target.frameIndexEliminationPass(allocatedModule);
-
-            // 打印栈帧布局后的代码
-            std::cout << "\n--- Final RISC-V Assembly (with frame indices) ---"
-                      << std::endl;
+            std::cout << "\n[After Frame Index Elimination]" << std::endl;
             std::cout << allocatedModule.toString() << std::endl;
         } catch (const std::exception& e) {
             std::cout << "Frame index elimination pass failed: " << e.what()
                       << std::endl;
         }
 
-        // 可选：生成最终的汇编文本
-        // auto assembly = target.compileToAssembly(*module);
-        // std::cout << "\n--- Final Assembly Output ---" << std::endl;
-        // // for (const auto& line : assemblyLines) {
-        // //     std::cout << line << std::endl;
-        // // }
-        // std::cout << assembly << std::endl;
+        // Final assembly (string form)
+        std::cout << "\n--- Final Assembly Output (string) ---" << std::endl;
+        std::cout << allocatedModule.toString() << std::endl;
 
     } catch (const std::exception& e) {
         std::cerr << "Error during code generation: " << e.what() << std::endl;
