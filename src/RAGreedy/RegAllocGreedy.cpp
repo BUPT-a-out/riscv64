@@ -59,7 +59,7 @@ void RegAllocGreedy::selectOrSplit(LiveInterval *LI,
     if (PhysReg != NO_PHYS_REG) {
         std::cout << "Assigning " << LI->reg().getRegNum() << " to " << PhysReg
                   << std::endl;
-        Matrix->assign(*LI, RegisterOperand(PhysReg));
+        Matrix->assign(*LI, RegisterOperand(PhysReg, false));
         VRM->assignVirt2Phys(LI->reg().getRegNum(), PhysReg);
         return;
     }
@@ -74,48 +74,48 @@ void RegAllocGreedy::selectOrSplit(LiveInterval *LI,
     // }
 
     // 尝试区域分割
-    PhysReg = tryRegionSplit(*LI, allocationOrder, NewVRegs);
-    if (PhysReg != NO_PHYS_REG) {
-        for (unsigned NewVReg : NewVRegs) {
-            if (LIS->hasInterval(RegisterOperand(NewVReg))) {
-                enqueue(&LIS->getInterval(RegisterOperand(NewVReg)));
-            }
-        }
-        return;
-    }
+    // PhysReg = tryRegionSplit(*LI, allocationOrder, NewVRegs);
+    // if (PhysReg != NO_PHYS_REG) {
+    //     for (unsigned NewVReg : NewVRegs) {
+    //         if (LIS->hasInterval(RegisterOperand(NewVReg))) {
+    //             enqueue(&LIS->getInterval(RegisterOperand(NewVReg)));
+    //         }
+    //     }
+    //     return;
+    // }
 
-    // 尝试基本块分割
-    PhysReg = tryBlockSplit(*LI, allocationOrder, NewVRegs);
-    if (PhysReg != NO_PHYS_REG) {
-        for (unsigned NewVReg : NewVRegs) {
-            if (LIS->hasInterval(RegisterOperand(NewVReg))) {
-                enqueue(&LIS->getInterval(RegisterOperand(NewVReg)));
-            }
-        }
-        return;
-    }
+    // // 尝试基本块分割
+    // PhysReg = tryBlockSplit(*LI, allocationOrder, NewVRegs);
+    // if (PhysReg != NO_PHYS_REG) {
+    //     for (unsigned NewVReg : NewVRegs) {
+    //         if (LIS->hasInterval(RegisterOperand(NewVReg))) {
+    //             enqueue(&LIS->getInterval(RegisterOperand(NewVReg)));
+    //         }
+    //     }
+    //     return;
+    // }
 
-    // 尝试局部分割
-    PhysReg = tryLocalSplit(*LI, allocationOrder, NewVRegs);
-    if (PhysReg != NO_PHYS_REG) {
-        for (unsigned NewVReg : NewVRegs) {
-            if (LIS->hasInterval(RegisterOperand(NewVReg))) {
-                enqueue(&LIS->getInterval(RegisterOperand(NewVReg)));
-            }
-        }
-        return;
-    }
+    // // 尝试局部分割
+    // PhysReg = tryLocalSplit(*LI, allocationOrder, NewVRegs);
+    // if (PhysReg != NO_PHYS_REG) {
+    //     for (unsigned NewVReg : NewVRegs) {
+    //         if (LIS->hasInterval(RegisterOperand(NewVReg))) {
+    //             enqueue(&LIS->getInterval(RegisterOperand(NewVReg)));
+    //         }
+    //     }
+    //     return;
+    // }
 
-    // 最后尝试重着色
-    std::unordered_set<unsigned> FixedRegisters;
-    std::vector<std::pair<const LiveInterval *, unsigned>> RecolorStack;
-    PhysReg = tryLastChanceRecoloring(*LI, allocationOrder, NewVRegs,
-                                      FixedRegisters, RecolorStack, 0);
-    if (PhysReg != NO_PHYS_REG) {
-        Matrix->assign(*LI, RegisterOperand(PhysReg));
-        VRM->assignVirt2Phys(LI->reg().getRegNum(), PhysReg);
-        return;
-    }
+    // // 最后尝试重着色
+    // std::unordered_set<unsigned> FixedRegisters;
+    // std::vector<std::pair<const LiveInterval *, unsigned>> RecolorStack;
+    // PhysReg = tryLastChanceRecoloring(*LI, allocationOrder, NewVRegs,
+    //                                   FixedRegisters, RecolorStack, 0);
+    // if (PhysReg != NO_PHYS_REG) {
+    //     Matrix->assign(*LI, RegisterOperand(PhysReg));
+    //     VRM->assignVirt2Phys(LI->reg().getRegNum(), PhysReg);
+    //     return;
+    // }
 
     // 如果所有方法都失败，则溢出到内存
     VRM->assignVirt2StackSlot(LI->reg().getRegNum(), stackSlotNum_);
@@ -519,7 +519,7 @@ unsigned RegAllocGreedy::tryLastChanceRecoloring(
             // 应用重着色
             for (auto &Entry : RecolorStack) {
                 Matrix->unassign(*Entry.first);
-                Matrix->assign(*Entry.first, RegisterOperand(Entry.second));
+                Matrix->assign(*Entry.first, RegisterOperand(Entry.second, false));
                 VRM->assignVirt2Phys(Entry.first->reg().getRegNum(),
                                      Entry.second);
             }

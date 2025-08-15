@@ -179,7 +179,6 @@ Module& RISCV64Target::basicBlockReorderingPass(riscv64::Module& module) {
     return module;
 }
 
-// TODO: rename fn
 Module& RISCV64Target::RAGreedyPass(riscv64::Module& module) {
     std::cout << "\n=== Phase 2.0: SlotIndexGeneration ===" << std::endl;
 
@@ -200,7 +199,7 @@ Module& RISCV64Target::RAGreedyPass(riscv64::Module& module) {
         RAGreedyFloat.print(std::cout);
 
         auto rewriterFloat =
-            RegisterRewriter(function.get(), RAGreedyFloat.getVRM());
+            RegisterRewriter(function.get(), RAGreedyFloat.getVRM(), true);
         rewriterFloat.rewrite();
     }
 

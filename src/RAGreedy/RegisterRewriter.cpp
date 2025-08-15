@@ -4,6 +4,7 @@
 
 namespace riscv64 {
 void RegisterRewriter::rewrite() {
+    mapStackSlotToFrameIndex();
     // 遍历所有基本块
     for (auto& BB : *function) {
         // 第一个循环：处理已经分配到物理寄存器的虚拟寄存器
@@ -63,23 +64,22 @@ void RegisterRewriter::rewrite() {
 
                     if (VRM->hasStackSlot(virtReg)) {
                         // 检查是否是浮点寄存器
-                        bool isFloat = isFloatRegister(virtReg);
-                        if (isFloat) hasFloatSpill = true;
+                        if (assigningFloat) hasFloatSpill = true;
 
                         // 收集使用的spill寄存器
-                        if ((isFloat &&
+                        if ((assigningFloat &&
                              std::find(useFloats.begin(), useFloats.end(),
                                        virtReg) != useFloats.end()) ||
-                            (!isFloat && std::find(uses.begin(), uses.end(),
+                            (!assigningFloat && std::find(uses.begin(), uses.end(),
                                                    virtReg) != uses.end())) {
                             spilledUsedRegs.push_back(virtReg);
                         }
 
                         // 收集定义的spill寄存器
-                        if ((isFloat &&
+                        if ((assigningFloat &&
                              std::find(defFloats.begin(), defFloats.end(),
                                        virtReg) != defFloats.end()) ||
-                            (!isFloat && std::find(defs.begin(), defs.end(),
+                            (!assigningFloat && std::find(defs.begin(), defs.end(),
                                                    virtReg) != defs.end())) {
                             spilledDefinedRegs.push_back(virtReg);
                         }
@@ -95,24 +95,23 @@ void RegisterRewriter::rewrite() {
 
                         if (VRM->hasStackSlot(virtReg)) {
                             // 检查是否是浮点寄存器
-                            bool isFloat = isFloatRegister(virtReg);
-                            if (isFloat) hasFloatSpill = true;
+                            if (assigningFloat) hasFloatSpill = true;
 
                             // 收集使用的spill寄存器
-                            if ((isFloat &&
+                            if ((assigningFloat &&
                                  std::find(useFloats.begin(), useFloats.end(),
                                            virtReg) != useFloats.end()) ||
-                                (!isFloat &&
+                                (!assigningFloat &&
                                  std::find(uses.begin(), uses.end(), virtReg) !=
                                      uses.end())) {
                                 spilledUsedRegs.push_back(virtReg);
                             }
 
                             // 收集定义的spill寄存器
-                            if ((isFloat &&
+                            if ((assigningFloat &&
                                  std::find(defFloats.begin(), defFloats.end(),
                                            virtReg) != defFloats.end()) ||
-                                (!isFloat &&
+                                (!assigningFloat &&
                                  std::find(defs.begin(), defs.end(), virtReg) !=
                                      defs.end())) {
                                 spilledDefinedRegs.push_back(virtReg);
@@ -125,14 +124,13 @@ void RegisterRewriter::rewrite() {
             // 处理使用的spill寄存器（在指令前插入load）
             for (unsigned virtReg : spilledUsedRegs) {
                 StackSlot slot = VRM->getStackSlot(virtReg);
-                bool isFloat = isFloatRegister(virtReg);
 
                 // 获取frame index
                 auto fi_id = stackSlot2FrameIndex[slot];
 
                 // 分配数据寄存器和地址寄存器
                 unsigned dataReg =
-                    selectAvailablePhysicalDataReg(inst, isFloat);
+                    selectAvailablePhysicalDataReg(inst, assigningFloat);
                 unsigned addrReg = 5;  // t0 用于地址计算
 
                 // 1. 插入 FRAMEADDR 指令
@@ -146,7 +144,7 @@ void RegisterRewriter::rewrite() {
                 ++it;
 
                 // 2. 插入 LOAD 指令
-                if (isFloat) {
+                if (assigningFloat) {
                     auto loadInst = std::make_unique<Instruction>(Opcode::FLW);
                     loadInst->addOperand(
                         std::make_unique<RegisterOperand>(dataReg, false));
@@ -167,7 +165,7 @@ void RegisterRewriter::rewrite() {
                 }
 
                 // 3. 更新原指令中的寄存器引用
-                updateRegisterInInstruction(inst, virtReg, dataReg, false);
+                updateRegisterInInstruction(inst, virtReg, dataReg, assigningFloat);
             }
 
             ++it;  // 移动到当前指令的下一个位置
@@ -175,7 +173,6 @@ void RegisterRewriter::rewrite() {
             // 处理定义的spill寄存器（在指令后插入store）
             for (unsigned virtReg : spilledDefinedRegs) {
                 StackSlot slot = VRM->getStackSlot(virtReg);
-                bool isFloat = isFloatRegister(virtReg);
 
                 // 获取frame index
 
@@ -183,11 +180,11 @@ void RegisterRewriter::rewrite() {
 
                 // 分配数据寄存器和地址寄存器
                 unsigned dataReg =
-                    selectAvailablePhysicalDataReg(inst, isFloat);
+                    selectAvailablePhysicalDataReg(inst, assigningFloat);
                 unsigned addrReg = 5;  // t0 用于地址计算
 
                 // 更新原指令中的寄存器引用
-                updateRegisterInInstruction(inst, virtReg, dataReg, false);
+                updateRegisterInInstruction(inst, virtReg, dataReg, assigningFloat);
 
                 // 1. 插入 FRAMEADDR 指令
                 auto frameAddrInst =
@@ -200,7 +197,7 @@ void RegisterRewriter::rewrite() {
                 ++it;
 
                 // 2. 插入 STORE 指令
-                if (isFloat) {
+                if (assigningFloat) {
                     auto storeInst = std::make_unique<Instruction>(Opcode::FSW);
                     storeInst->addOperand(
                         std::make_unique<RegisterOperand>(dataReg, false));
@@ -248,13 +245,14 @@ unsigned RegisterRewriter::selectAvailablePhysicalDataReg(Instruction* inst,
     }
 
     // 如果没有可用寄存器，返回默认值
+    // 其实不可能
     return isFloat ? 32 : 6;  // ft0 或 t1
 }
 
 // 辅助函数：更新指令中的寄存器引用
 void RegisterRewriter::updateRegisterInInstruction(Instruction* inst,
                                                    unsigned oldReg,
-                                                   unsigned newReg,
+                                                   unsigned newPhysReg,
                                                    bool isFloat) {
     const auto& operands = inst->getOperands();
     for (const auto& operand : operands) {
@@ -262,7 +260,7 @@ void RegisterRewriter::updateRegisterInInstruction(Instruction* inst,
             RegisterOperand* regOp =
                 static_cast<RegisterOperand*>(operand.get());
             if (regOp->getRegNum() == oldReg) {
-                regOp->setRegNum(newReg);
+                regOp->setPhysicalReg(newPhysReg);
             }
         } else if (operand->isMem()) {
             auto baseReg =
@@ -270,7 +268,7 @@ void RegisterRewriter::updateRegisterInInstruction(Instruction* inst,
             if (baseReg && baseReg->isReg() &&
                 baseReg->isFloatRegister() == isFloat &&
                 baseReg->getRegNum() == oldReg) {
-                baseReg->setRegNum(newReg);
+                baseReg->setPhysicalReg(newPhysReg);
             }
         }
     }
@@ -286,16 +284,11 @@ void RegisterRewriter::mapStackSlotToFrameIndex() {
 
 unsigned RegisterRewriter::allocateTemporaryRegister(unsigned virtReg) {
     // TODO：分析活跃寄存器，scavenge
-    if (isFloatRegister(virtReg)) {
+    if (assigningFloat) {
         return 32;  // ft0临时浮点寄存器
     } else {
         return 5;  // t0临时整数寄存器
     }
-}
-
-bool RegisterRewriter::isFloatRegister(unsigned reg) {
-    // RISC-V浮点寄存器范围：32-63
-    return reg >= 32 && reg <= 63;
 }
 
 void RegisterRewriter::print(std::ostream& OS) const {

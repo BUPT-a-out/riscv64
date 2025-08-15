@@ -13,6 +13,7 @@ class RegisterRewriter {
    private:
     Function* function;
     VirtRegMap* VRM;
+    bool assigningFloat = false;
 
     // 跟踪需要的栈槽偏移
     std::unordered_map<StackSlot, int> stackSlot2FrameIndex;
@@ -39,15 +40,13 @@ class RegisterRewriter {
     unsigned allocateTemporaryRegister(unsigned virtReg);
 
     // 寄存器类型判断
-    bool isFloatRegister(unsigned reg);
-
     void updateRegisterInInstruction(Instruction* inst, unsigned oldReg,
                                      unsigned newReg, bool isFloat);
     unsigned selectAvailablePhysicalDataReg(Instruction* inst, bool isFloat);
 
    public:
-    RegisterRewriter(Function* func, VirtRegMap* vrm)
-        : function(func), VRM(vrm), currentStackOffset(0) {}
+    RegisterRewriter(Function* func, VirtRegMap* vrm, bool assigningFloat = false)
+        : function(func), VRM(vrm), assigningFloat(assigningFloat), currentStackOffset(0) {}
 
     void rewrite();
     void mapStackSlotToFrameIndex();
