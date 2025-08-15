@@ -21,6 +21,9 @@ void ConstantFolding::runOnBasicBlock(BasicBlock* basicBlock) {
     virtualRegisterConstants.clear();
     instructionsToRemove.clear();
 
+    // init: x0 -> 0
+    virtualRegisterConstants[0] = 0;
+
     for (auto& inst : *basicBlock) {
         handleInstruction(inst.get(), basicBlock);
     }
