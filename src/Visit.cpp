@@ -2248,11 +2248,11 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                             shift_amount++;
                         }
 
-                        // 使用 srl 指令进行右移
+                        // 使用 srai 指令进行右移
                         auto lhs_reg = immToReg(std::move(lhs), parent_bb);
                         new_reg = codeGen_->allocateIntReg();
                         auto instruction = std::make_unique<Instruction>(
-                            Opcode::SRLW, parent_bb);
+                            Opcode::SRAIW, parent_bb);
                         instruction->addOperand(
                             std::make_unique<RegisterOperand>(
                                 new_reg->getRegNum(), new_reg->isVirtual()));
