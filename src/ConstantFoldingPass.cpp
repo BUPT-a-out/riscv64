@@ -22,7 +22,7 @@ void ConstantFolding::runOnBasicBlock(BasicBlock* basicBlock) {
     instructionsToRemove.clear();
 
     // init: x0 -> 0
-    virtualRegisterConstants[0] = 0;
+    mapRegToConstant(0, 0);
 
     for (auto& inst : *basicBlock) {
         handleInstruction(inst.get(), basicBlock);
@@ -58,7 +58,7 @@ void ConstantFolding::handleInstruction(Instruction* inst,
         auto* rd = inst->getOperand(0);
         auto* imm = inst->getOperand(1);
         if (rd && imm && rd->isReg() && imm->isImm()) {
-            virtualRegisterConstants[rd->getRegNum()] = imm->getValue();
+            mapRegToConstant(rd->getRegNum(), imm->getValue());
         }
     }
 }
@@ -84,8 +84,8 @@ void ConstantFolding::foldInstruction(Instruction* inst,
     }
 
     if (inst->getOpcode() == Opcode::LI) {
-        virtualRegisterConstants[inst->getOperand(0)->getRegNum()] =
-            inst->getOperand(1)->getValue();
+        mapRegToConstant(inst->getOperand(0)->getRegNum(),
+                         inst->getOperand(1)->getValue());
         return;
     }
 
@@ -109,7 +109,7 @@ void ConstantFolding::foldInstruction(Instruction* inst,
     if (!dest_reg_operand->isReg()) {
         return;  // 目的不是寄存器，不处理
     }
-    virtualRegisterConstants[dest_reg_operand->getRegNum()] = result.value();
+    mapRegToConstant(dest_reg_operand->getRegNum(), result.value());
 
     // 记录原始字符串用于日志
     std::string original = inst->toString();
@@ -319,7 +319,7 @@ void ConstantFolding::algebraicIdentitySimplify(Instruction* inst,
         // Constant propagation update
         auto itConst = virtualRegisterConstants.find(srcRegNum);
         if (itConst != virtualRegisterConstants.end()) {
-            virtualRegisterConstants[destRegNum] = itConst->second;
+            mapRegToConstant(destRegNum, itConst->second);
         } else {
             virtualRegisterConstants.erase(destRegNum);
         }
@@ -335,7 +335,7 @@ void ConstantFolding::algebraicIdentitySimplify(Instruction* inst,
         inst->setOpcode(Opcode::LI);
         inst->addOperand(std::move(destClone));
         inst->addOperand(std::make_unique<ImmediateOperand>(0));
-        virtualRegisterConstants[destRegNum] = 0;
+        mapRegToConstant(destRegNum, 0);
         std::cout << "Algebraic simplify: '" << original << "' -> '"
                   << inst->toString() << "'" << std::endl;
     };
