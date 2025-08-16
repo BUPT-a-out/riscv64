@@ -22,6 +22,7 @@ class ConstantFolding {
     void algebraicIdentitySimplify(Instruction* inst, BasicBlock* parent_bb);
     void strengthReduction(Instruction* inst, BasicBlock* parent_bb);
     void bitwiseOperationSimplify(Instruction* inst, BasicBlock* parent_bb);
+    void mvToAddi(Instruction* inst, BasicBlock* parent_bb);
     void instructionReassociateAndCombine(Instruction* inst,
                                           BasicBlock* parent_bb);
 

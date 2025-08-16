@@ -135,6 +135,7 @@ void ConstantFolding::peepholeOptimize(Instruction* inst,
         algebraicIdentitySimplify(inst, parent_bb);
         strengthReduction(inst, parent_bb);
         bitwiseOperationSimplify(inst, parent_bb);
+        mvToAddi(inst, parent_bb);
         instructionReassociateAndCombine(inst, parent_bb);
     }
 }
@@ -748,6 +749,24 @@ void ConstantFolding::bitwiseOperationSimplify(Instruction* inst,
     }
 }
 
+void ConstantFolding::mvToAddi(Instruction* inst, BasicBlock* parent_bb) {
+    if (inst->getOpcode() != MV) {
+        return;
+    }
+
+    // 把 MV 替换为 ADDI，便于后续传播
+    auto dest_op = Visitor::cloneRegister(
+        dynamic_cast<RegisterOperand*>(inst->getOperand(0)));
+    auto src_op = Visitor::cloneRegister(
+        dynamic_cast<RegisterOperand*>(inst->getOperand(1)));
+
+    inst->clearOperands();
+    inst->setOpcode(ADDI);
+    inst->addOperand(std::move(dest_op));
+    inst->addOperand(std::move(src_op));
+    inst->addOperand(std::make_unique<ImmediateOperand>(0));
+}
+
 void ConstantFolding::instructionReassociateAndCombine(Instruction* inst,
                                                        BasicBlock* parent_bb) {
     auto isVReg = [](MachineOperand* operand) {
@@ -790,7 +809,7 @@ void ConstantFolding::instructionReassociateAndCombine(Instruction* inst,
             //     dynamic_cast<RegisterOperand*>(src_reg_def->getOperand(0)));
             auto new_src = Visitor::cloneRegister(
                 dynamic_cast<RegisterOperand*>(src_reg_def_src_op));
-            
+
             inst->clearOperands();
             // inst->setOpcode(inst->getOpcode() == ADDI ? ADDI : ADDIW);
             inst->addOperand(std::move(dest_clone));
