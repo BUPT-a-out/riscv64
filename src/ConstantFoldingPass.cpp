@@ -786,12 +786,15 @@ void ConstantFolding::instructionReassociateAndCombine(Instruction* inst,
             unsigned dest_reg_num = inst->getOperand(0)->getRegNum();
             auto dest_clone = Visitor::cloneRegister(
                 dynamic_cast<RegisterOperand*>(inst->getOperand(0)));
-            auto src_clone = Visitor::cloneRegister(
-                dynamic_cast<RegisterOperand*>(src_reg_def->getOperand(0)));
+            // auto src_clone = Visitor::cloneRegister(
+            //     dynamic_cast<RegisterOperand*>(src_reg_def->getOperand(0)));
+            auto new_src = Visitor::cloneRegister(
+                dynamic_cast<RegisterOperand*>(src_reg_def_src_op));
+            
             inst->clearOperands();
             // inst->setOpcode(inst->getOpcode() == ADDI ? ADDI : ADDIW);
             inst->addOperand(std::move(dest_clone));
-            inst->addOperand(std::move(src_clone));
+            inst->addOperand(std::move(new_src));
             inst->addOperand(std::make_unique<ImmediateOperand>(new_imm_val));
             std::cout << "Reassociate and combine: '" << original << "' -> '"
                       << inst->toString() << "'" << std::endl;
