@@ -4306,6 +4306,11 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
                                  value->toString());
     }
 
+    if (midend::isa<midend::UndefValue>(value)) {
+        // 未定义值，当做 0 处理
+        return std::make_unique<RegisterOperand>(0, true);
+    }
+
     throw std::runtime_error(
         "Unsupported value type: " + value->getName() + " (type: " +
         std::to_string(static_cast<int>(value->getValueKind())) + ")");

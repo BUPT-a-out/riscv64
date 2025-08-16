@@ -105,6 +105,8 @@ class Visitor {
         const midend::Value* init, const midend::Type* type);
     CompilerType convertLLVMTypeToCompilerType(const midend::Type* llvm_type);
 
+    static bool isValidImmediateOffset(int64_t offset);
+
    private:
     CodeGenerator* codeGen_;
 
@@ -135,7 +137,6 @@ class Visitor {
     std::optional<RegisterOperand*> findRegForValue(const midend::Value* value);
 
     // 辅助函数：处理大偏移量的内存操作
-    bool isValidImmediateOffset(int64_t offset);
     std::unique_ptr<RegisterOperand> handleLargeOffset(
         std::unique_ptr<RegisterOperand> base_reg, int64_t offset,
         BasicBlock* parent_bb);
