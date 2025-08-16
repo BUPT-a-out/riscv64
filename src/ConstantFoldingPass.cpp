@@ -797,6 +797,11 @@ void ConstantFolding::instructionReassociateAndCombine(Instruction* inst,
             return;  // 需要是虚拟寄存器
         }
 
+        if (inst->getOperand(0)->getRegNum() ==
+            inst->getOperand(1)->getRegNum()) {
+            return;
+        }
+
         auto new_imm_val = getConstant(*src_reg_def->getOperand(2)).value() +
                            getConstant(*inst->getOperand(2)).value();
         if (Visitor::isValidImmediateOffset(new_imm_val)) {
