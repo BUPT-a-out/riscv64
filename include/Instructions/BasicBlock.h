@@ -81,6 +81,19 @@ class BasicBlock {
     auto getSuccessors() { return successors; }
     auto getPredecessors() { return predecessors; }
 
+    // 简单的基本块内 use-def 工具
+    Instruction* getIntVRegDef(unsigned reg_num) {
+        for (const auto& inst : instructions) {
+            // TODO(rikka): 假定是 SSA
+            // 如果出问题了再修复，改为从后往前遍历
+            auto defined_int_regs = inst->getDefinedIntegerRegs();
+            if ((!defined_int_regs.empty()) && defined_int_regs[0] == reg_num) {
+                return inst.get();
+            }
+        }
+        return nullptr;
+    }
+
     std::string toString() const;
 
    private:
