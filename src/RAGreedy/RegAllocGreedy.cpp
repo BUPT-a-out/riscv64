@@ -299,7 +299,7 @@ bool RegAllocGreedy::isUsedAsArgument(unsigned virtualReg) const {
 
 bool RegAllocGreedy::isUsedAcrossCalls(unsigned virtualReg) const {
     // 获取该虚拟寄存器的活跃区间
-    RegisterOperand regOp(virtualReg);
+    RegisterOperand regOp(virtualReg, true, assigningFloat ? RegisterType::Float : RegisterType::Integer);
     if (!LIS->hasInterval(regOp)) {
         return false;
     }

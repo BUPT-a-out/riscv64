@@ -566,6 +566,7 @@ void LiveIntervals::analyze(Function &fn) {
                             if (std::find(usedRegs.begin(), usedRegs.end(),
                                           reg.getRegNum()) != usedRegs.end()) {
                                 segmentEnd = instrIdx.getNextSlot();
+                                segmentEnd = instrIdx;
                             }
                         }
                     }
