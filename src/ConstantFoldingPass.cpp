@@ -130,11 +130,13 @@ void ConstantFolding::foldInstruction(Instruction* inst,
 
 void ConstantFolding::peepholeOptimize(Instruction* inst,
                                        BasicBlock* parent_bb) {
-    foldToITypeInst(inst, parent_bb);
-    algebraicIdentitySimplify(inst, parent_bb);
-    strengthReduction(inst, parent_bb);
-    bitwiseOperationSimplify(inst, parent_bb);
-    instructionReassociateAndCombine(inst, parent_bb);
+    for (int i = 0; i < 3; i++) {
+        foldToITypeInst(inst, parent_bb);
+        algebraicIdentitySimplify(inst, parent_bb);
+        strengthReduction(inst, parent_bb);
+        bitwiseOperationSimplify(inst, parent_bb);
+        instructionReassociateAndCombine(inst, parent_bb);
+    }
 }
 
 void ConstantFolding::foldToITypeInst(Instruction* inst,
@@ -748,8 +750,55 @@ void ConstantFolding::bitwiseOperationSimplify(Instruction* inst,
 
 void ConstantFolding::instructionReassociateAndCombine(Instruction* inst,
                                                        BasicBlock* parent_bb) {
-    (void)inst;
-    (void)parent_bb;
+    auto isVReg = [](MachineOperand* operand) {
+        return operand->isReg() && operand->getRegNum() >= 100;
+    };
+
+    // 1. 合并 ADDI 指令（前面已经把常量加减都变成了 ADDI）
+    if (inst->getOpcode() == ADDI || inst->getOpcode() == ADDIW) {
+        // src_reg_def: ADDI src_op, src_reg_def_src_op, imm1
+        // inst: ADDI result, src_op, imm2
+        auto* src_op = inst->getOperand(1);
+        if (!isVReg(src_op)) {
+            return;  // 需要是虚拟寄存器
+        }
+
+        auto* src_reg_def = parent_bb->getIntVRegDef(src_op->getRegNum());
+        if (src_reg_def == nullptr) {
+            return;  // 目标指令未定义，或者不在这个基本块
+        }
+
+        if (src_reg_def->getOpcode() != ADDI &&
+            src_reg_def->getOpcode() != ADDIW) {
+            return;  // 不是 ADDI 指令
+        }
+
+        auto* src_reg_def_src_op = src_reg_def->getOperand(1);
+        if (!isVReg(src_reg_def_src_op)) {
+            return;  // 需要是虚拟寄存器
+        }
+
+        auto new_imm_val = getConstant(*src_reg_def->getOperand(2)).value() +
+                           getConstant(*inst->getOperand(2)).value();
+        if (Visitor::isValidImmediateOffset(new_imm_val)) {
+            // 合并成一个新的 ADDI 指令
+            auto original = inst->toString();
+            unsigned dest_reg_num = inst->getOperand(0)->getRegNum();
+            auto dest_clone = Visitor::cloneRegister(
+                dynamic_cast<RegisterOperand*>(inst->getOperand(0)));
+            auto src_clone = Visitor::cloneRegister(
+                dynamic_cast<RegisterOperand*>(src_reg_def->getOperand(0)));
+            inst->clearOperands();
+            // inst->setOpcode(inst->getOpcode() == ADDI ? ADDI : ADDIW);
+            inst->addOperand(std::move(dest_clone));
+            inst->addOperand(std::move(src_clone));
+            inst->addOperand(std::make_unique<ImmediateOperand>(new_imm_val));
+            std::cout << "Reassociate and combine: '" << original << "' -> '"
+                      << inst->toString() << "'" << std::endl;
+        }
+
+    } else if (inst->getOpcode() == MUL || inst->getOpcode() == MULW) {
+    }
 }
 
 void ConstantFolding::constantPropagate(Instruction* inst,
