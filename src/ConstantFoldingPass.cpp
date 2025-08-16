@@ -571,8 +571,179 @@ void ConstantFolding::strengthReduction(Instruction* inst,
 
 void ConstantFolding::bitwiseOperationSimplify(Instruction* inst,
                                                BasicBlock* parent_bb) {
-    (void)inst;
-    (void)parent_bb;
+    if (inst->getOprandCount() != 3) {
+        return;  // 只处理三操作数形式: rd, rs1, rs2
+    }
+
+    auto opcode = inst->getOpcode();
+    if (opcode != Opcode::AND && opcode != Opcode::OR &&
+        opcode != Opcode::XOR && opcode != Opcode::ANDI &&
+        opcode != Opcode::ORI && opcode != Opcode::XORI) {
+        return;
+    }
+
+    auto* rd = inst->getOperand(0);
+    auto* op1 = inst->getOperand(1);
+    auto* op2 = inst->getOperand(2);
+    if (!rd->isReg()) return;
+
+    auto cloneReg = [](MachineOperand* r) {
+        return Visitor::cloneRegister(dynamic_cast<RegisterOperand*>(r));
+    };
+
+    auto emitLi = [&](int32_t imm) {
+        std::string original = inst->toString();
+        unsigned rdNum = rd->getRegNum();
+        auto rdClone = cloneReg(rd);
+        inst->clearOperands();
+        inst->setOpcode(Opcode::LI);
+        inst->addOperand(std::move(rdClone));
+        inst->addOperand(
+            std::make_unique<ImmediateOperand>(static_cast<int64_t>(imm)));
+        mapRegToConstant(rdNum, imm);
+        std::cout << "Bitwise simplify: '" << original << "' -> '"
+                  << inst->toString() << "'" << std::endl;
+    };
+
+    auto emitMovFrom = [&](MachineOperand* src) {
+        if (!src->isReg()) return;
+        std::string original = inst->toString();
+        unsigned rdNum = rd->getRegNum();
+        unsigned srcNum = src->getRegNum();
+        auto rdClone = cloneReg(rd);
+        auto srcClone = cloneReg(src);
+        inst->clearOperands();
+        inst->setOpcode(Opcode::ADDI);
+        inst->addOperand(std::move(rdClone));
+        inst->addOperand(std::move(srcClone));
+        inst->addOperand(std::make_unique<ImmediateOperand>(0));
+        auto it = virtualRegisterConstants.find(srcNum);
+        if (it != virtualRegisterConstants.end()) {
+            mapRegToConstant(rdNum, it->second);
+        } else {
+            virtualRegisterConstants.erase(rdNum);
+        }
+        std::cout << "Bitwise simplify: '" << original << "' -> '"
+                  << inst->toString() << "'" << std::endl;
+    };
+
+    auto emitNotFrom = [&](MachineOperand* src) {
+        if (!src->isReg()) return;
+        std::string original = inst->toString();
+        unsigned rdNum = rd->getRegNum();
+        unsigned srcNum = src->getRegNum();
+        auto rdClone = cloneReg(rd);
+        auto srcClone = cloneReg(src);
+        inst->clearOperands();
+        inst->setOpcode(Opcode::NOT);  // 伪指令：后续可降为 XORI rd, rs, -1
+        inst->addOperand(std::move(rdClone));
+        inst->addOperand(std::move(srcClone));
+        auto it = virtualRegisterConstants.find(srcNum);
+        if (it != virtualRegisterConstants.end()) {
+            int32_t v = static_cast<int32_t>(it->second);
+            int32_t res = static_cast<int32_t>(~v);
+            mapRegToConstant(rdNum, res);
+        } else {
+            virtualRegisterConstants.erase(rdNum);
+        }
+        std::cout << "Bitwise simplify: '" << original << "' -> '"
+                  << inst->toString() << "'" << std::endl;
+    };
+
+    auto constVal1 = getConstant(*op1);
+    auto constVal2 = getConstant(*op2);
+
+    auto isZero = [](const std::optional<int64_t>& v) {
+        return v && static_cast<int32_t>(*v) == 0;
+    };
+    auto isMinusOne = [](const std::optional<int64_t>& v) {
+        return v && static_cast<int32_t>(*v) == -1;
+    };
+
+    // 模式 3.1: 与自身
+    if (op1->isReg() && op2->isReg() && op1->getRegNum() == op2->getRegNum()) {
+        switch (opcode) {
+            case Opcode::AND:
+            case Opcode::OR:
+                emitMovFrom(op1);
+                return;
+            case Opcode::XOR:
+                emitLi(0);
+                return;
+            default:
+                break;
+        }
+    }
+
+    // 模式 3.2: 与常量（0 / -1）
+    // 对于 R-Type 可交换操作（AND/OR/XOR），若常量在左侧尝试交换到右侧，
+    // I-Type (ANDI/ORI/XORI) 不能交换操作数次序（语义不同），保持原状。
+    auto isRTypeCommutative = (opcode == Opcode::AND || opcode == Opcode::OR ||
+                               opcode == Opcode::XOR);
+    if (isRTypeCommutative) {
+        if (!constVal2 && constVal1) {
+            std::swap(op1, op2);
+            std::swap(constVal1, constVal2);
+        }
+    }
+
+    // 现在 constVal2 若存在是优先考虑的常量
+    if (constVal2) {
+        if (opcode == Opcode::AND || opcode == Opcode::ANDI) {
+            if (isZero(constVal2)) {  // x & 0 -> 0
+                emitLi(0);
+                return;
+            }
+            if (isMinusOne(constVal2) && op1->isReg()) {  // x & -1 -> x
+                emitMovFrom(op1);
+                return;
+            }
+        } else if (opcode == Opcode::OR || opcode == Opcode::ORI) {
+            if (isZero(constVal2) && op1->isReg()) {  // x | 0 -> x
+                emitMovFrom(op1);
+                return;
+            }
+            if (isMinusOne(constVal2)) {  // x | -1 -> -1
+                emitLi(-1);
+                return;
+            }
+        } else if (opcode == Opcode::XOR || opcode == Opcode::XORI) {
+            if (isMinusOne(constVal2) && op1->isReg()) {  // x ^ -1 -> ~x
+                emitNotFrom(op1);
+                return;
+            }
+            if (isZero(constVal2) && op1->isReg()) {  // x ^ 0 -> x
+                emitMovFrom(op1);
+                return;
+            }
+        }
+    }
+
+    // 若常量在左 (constVal1) 且右侧不是常量但没有被处理（例如 0 |
+    // x），再处理一次对称
+    if (constVal1 && !constVal2 && op2->isReg()) {
+        // 仅对 R-Type 进行对称处理；I-Type 不调整
+        if (opcode == Opcode::OR && isZero(constVal1)) {  // 0 | x -> x
+            emitMovFrom(op2);
+            return;
+        }
+        if (opcode == Opcode::AND && isMinusOne(constVal1)) {  // -1 & x -> x
+            emitMovFrom(op2);
+            return;
+        }
+        if (opcode == Opcode::XOR && isMinusOne(constVal1)) {  // -1 ^ x -> ~x
+            emitNotFrom(op2);
+            return;
+        }
+        if (opcode == Opcode::AND && isZero(constVal1)) {  // 0 & x -> 0
+            emitLi(0);
+            return;
+        }
+        if (opcode == Opcode::OR && isMinusOne(constVal1)) {  // -1 | x -> -1
+            emitLi(-1);
+            return;
+        }
+    }
 }
 
 void ConstantFolding::instructionReassociateAndCombine(Instruction* inst,
