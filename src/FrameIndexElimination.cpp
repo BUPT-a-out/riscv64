@@ -46,11 +46,14 @@ void FrameIndexElimination::assignFinalOffsets() {
     int localVarSize = 0;
     int spillSize = 0;
 
+    int spillCount = 0;
+
     for (const auto& obj : stackManager->getAllStackObjects()) {
         if (obj->type == StackObjectType::AllocatedStackSlot) {
             localVarSize += alignTo(obj->size, obj->alignment);
         } else if (obj->type == StackObjectType::SpilledRegister) {
             spillSize += alignTo(obj->size, obj->alignment);
+            spillCount ++;
         }
     }
 
@@ -106,6 +109,8 @@ void FrameIndexElimination::assignFinalOffsets() {
                       << ", alignment: " << obj->alignment << ")" << std::endl;
         }
     }
+
+    std::cout << "Total " << spillCount << " registers are spilled" << std::endl;
 }
 
 int FrameIndexElimination::calculateSavedRegisterSize() {
