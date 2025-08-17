@@ -387,9 +387,28 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
     }
 
     // 获取基地址 (延迟访问全局变量，便于常量折叠)
-    const auto* base_ptr = gep_inst->getPointerOperand();
-    auto* base_global = midend::dyn_cast<midend::GlobalVariable>(base_ptr);
-    std::unique_ptr<MachineOperand> base_addr;  // 只有在需要时才生成
+    auto* base_ptr = gep_inst->getPointerOperand();
+    auto base_addr_operand = visit(base_ptr, parent_bb);
+
+    std::unique_ptr<RegisterOperand> current_addr_reg;
+
+    if (base_addr_operand->getType() == OperandType::FrameIndex) {
+        current_addr_reg = codeGen_->allocateIntReg();
+        auto get_base_addr_inst =
+            std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
+        get_base_addr_inst->addOperand(cloneRegister(current_addr_reg.get()));
+        get_base_addr_inst->addOperand(std::move(base_addr_operand));
+        parent_bb->addInstruction(std::move(get_base_addr_inst));
+    } else if (base_addr_operand->getType() == OperandType::Register) {
+        auto* reg_op = dynamic_cast<RegisterOperand*>(base_addr_operand.get());
+        current_addr_reg = std::make_unique<RegisterOperand>(
+            reg_op->getRegNum(), reg_op->isVirtual());
+    } else {
+        // Handle globals or other cases here, e.g., using LA
+        // For globals, LA is often simpler than AUIPC+ADDI unless you need
+        // position-independent code
+        throw std::runtime_error("Unsupported base address type for GEP");
+    }
 
     // 获取 strides 和索引
     auto strides = gep_inst->getStrides();
@@ -398,230 +417,339 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
     }
 
     // 检查是否所有索引都为常量，如果是则直接计算出最终偏移量
-    bool all_indices_const = true;
-    int const_total_indice = 0;
-    for (unsigned i = 0; i < gep_inst->getNumIndices(); ++i) {
-        auto* index_value = gep_inst->getIndex(i);
-        if (auto* const_int =
-                midend::dyn_cast<midend::ConstantInt>(index_value)) {
-            const_total_indice += const_int->getSignedValue() * strides[i];
-        } else {
-            all_indices_const = false;
-            break;
-        }
-    }
+    // bool all_indices_const = true;
+    // int const_total_indice = 0;
+    // for (unsigned i = 0; i < gep_inst->getNumIndices(); ++i) {
+    //     auto* index_value = gep_inst->getIndex(i);
+    //     if (auto* const_int =
+    //             midend::dyn_cast<midend::ConstantInt>(index_value)) {
+    //         const_total_indice += const_int->getSignedValue() * strides[i];
+    //     } else {
+    //         all_indices_const = false;
+    //         break;
+    //     }
+    // }
 
-    // TODO: extract function
-    std::unique_ptr<RegisterOperand> base_addr_reg;
-    if (!base_global || !all_indices_const) {
-        // 普通路径：先获取基地址（可能生成 LA / FRAMEADDR 等）
-        if (!base_addr) base_addr = visit(base_ptr, parent_bb);
-    }
-
-    if (base_global && all_indices_const) {
-        // 占位：稍后在常量索引路径中直接生成 AUIPC+ADDI
-    } else if (base_addr->getType() == OperandType::FrameIndex) {
-        // 处理基于栈帧的地址
-        auto get_base_addr_inst =
-            std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
-        base_addr_reg = codeGen_->allocateIntReg();
-        get_base_addr_inst->addOperand(std::make_unique<RegisterOperand>(
-            base_addr_reg->getRegNum(), base_addr_reg->isVirtual()));  // rd
-        get_base_addr_inst->addOperand(std::move(base_addr));          // FI
-        parent_bb->addInstruction(std::move(get_base_addr_inst));
-    } else if (base_addr->getType() == OperandType::Register) {
-        // 基地址已经在寄存器中（如全局变量地址）
-        auto* reg_operand = dynamic_cast<RegisterOperand*>(base_addr.get());
-        base_addr_reg = std::make_unique<RegisterOperand>(
-            reg_operand->getRegNum(), reg_operand->isVirtual());
-    } else {
-        throw std::runtime_error(
-            "Base address must be a frame index or register operand, got: " +
-            base_addr->toString());
-    }
-
-    if (all_indices_const) {
-        if (base_global != nullptr) {
-            // 直接生成 AUIPC + ADDI （PC 相对）序列：rd = global + offset
-            // 标签
-            auto final_addr_reg = codeGen_->allocateIntReg();
-            auto auipc_label_name =
-                ".L_AUIPC_" + std::to_string(final_addr_reg->getRegNum());
-            // auipc rd, %pcrel_hi(sym+off)
-            auto auipc_inst =
-                std::make_unique<Instruction>(Opcode::AUIPC, parent_bb);
-            auipc_inst->setPreInstLabel(auipc_label_name);
-            auipc_inst->addOperand(cloneRegister(final_addr_reg.get()));
-            auipc_inst->addOperand(std::make_unique<LabelOperand>(
-                base_global->getName(), const_total_indice,
-                LabelOperand::RelocKind::PCREL_HI));
-            parent_bb->addInstruction(std::move(auipc_inst));
-            // addi rd, rd, %pcrel_lo(.auipc_label)
-            auto addi_inst =
-                std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
-            addi_inst->addOperand(cloneRegister(final_addr_reg.get()));
-            addi_inst->addOperand(cloneRegister(final_addr_reg.get()));
-            addi_inst->addOperand(std::make_unique<LabelOperand>(
-                auipc_label_name, 0, LabelOperand::RelocKind::PCREL_LO));
-            parent_bb->addInstruction(std::move(addi_inst));
-            codeGen_->mapValueToReg(inst, final_addr_reg->getRegNum(),
-                                    final_addr_reg->isVirtual());
-            return cloneRegister(final_addr_reg.get());
-        }
-        // 普通（非全局）路径复用现有逻辑
-        // 所有索引都为0，直接返回基地址
-        if (const_total_indice == 0) {
-            codeGen_->mapValueToReg(inst, base_addr_reg->getRegNum(),
-                                    base_addr_reg->isVirtual());
-            return cloneRegister(base_addr_reg.get());
-        }
-
-        auto final_addr_reg = codeGen_->allocateIntReg();
-        if (isValidImmediateOffset(const_total_indice)) {
-            auto addi_inst =
-                std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
-            addi_inst->addOperand(cloneRegister(final_addr_reg.get()));
-            addi_inst->addOperand(cloneRegister(base_addr_reg.get()));
-            addi_inst->addOperand(
-                std::make_unique<ImmediateOperand>(const_total_indice));
-            parent_bb->addInstruction(std::move(addi_inst));
-        } else {
-            // 偏移量超出立即数范围，使用 LI + ADD 序列
-            auto total_offset_reg =
-                immToReg(std::make_unique<ImmediateOperand>(const_total_indice),
-                         parent_bb);
-
-            auto final_add_inst =
-                std::make_unique<Instruction>(Opcode::ADD, parent_bb);
-            final_add_inst->addOperand(cloneRegister(final_addr_reg.get()));
-            final_add_inst->addOperand(cloneRegister(base_addr_reg.get()));
-            final_add_inst->addOperand(std::move(total_offset_reg));
-            parent_bb->addInstruction(std::move(final_add_inst));
-        }
-
-        // 建立GEP指令结果到寄存器的映射
-        // codeGen_->mapValueToReg(inst, final_addr_reg->getRegNum(),
-        //                         final_addr_reg->isVirtual());
-
-        return cloneRegister(final_addr_reg.get());
-    }
-
-    // 计算总偏移量，采用更直接的策略
-    std::unique_ptr<RegisterOperand> total_offset_reg = nullptr;
-
-    // 遍历所有索引，计算 index[i] * stride[i] 并累加
+    // New unified loop
     for (unsigned i = 0; i < gep_inst->getNumIndices(); ++i) {
         auto* index_value = gep_inst->getIndex(i);
         auto stride = strides[i];
 
-        // 检查索引是否为常量0，如果是则跳过
-        if (auto* const_int =
-                midend::dyn_cast<midend::ConstantInt>(index_value)) {
-            if (const_int->getSignedValue() == 0) {
-                continue;  // 跳过索引为0的情况，不会产生偏移
-            }
-        }
-
         if (stride == 0) {
-            // stride为0，跳过
             continue;
         }
 
-        auto index_operand = visit(index_value, parent_bb);
-        auto index_reg = immToReg(std::move(index_operand), parent_bb);
-
-        // 计算 index * stride
-        // TODO: extract function: reg calculateOffset(BB parent, reg index_reg,
-        // uint stride)
-        std::unique_ptr<RegisterOperand> offset_reg;
-
-        if (stride == 1) {
-            // stride为1，直接使用索引作为偏移量
-            offset_reg = std::move(index_reg);
-        } else if ((stride & (stride - 1)) == 0) {
-            // stride是2的幂，使用左移优化
-            int shift_amount = 0;
-            auto temp = static_cast<unsigned int>(stride);
-            while (temp > 1) {
-                temp >>= 1;
-                shift_amount++;
+        if (auto* const_int =
+                midend::dyn_cast<midend::ConstantInt>(index_value)) {
+            // --- CONSTANT INDEX PATH ---
+            std::int64_t offset = const_int->getSignedValue() * stride;
+            if (offset == 0) {
+                continue;
             }
 
-            offset_reg = codeGen_->allocateIntReg();
-            auto slli_inst =
-                std::make_unique<Instruction>(Opcode::SLLI, parent_bb);
-            slli_inst->addOperand(std::make_unique<RegisterOperand>(
-                offset_reg->getRegNum(), offset_reg->isVirtual()));
-            slli_inst->addOperand(std::move(index_reg));
-            slli_inst->addOperand(
-                std::make_unique<ImmediateOperand>(shift_amount));
-            parent_bb->addInstruction(std::move(slli_inst));
-        } else {
-            // 一般情况，使用乘法
-            auto stride_reg = codeGen_->allocateIntReg();
-            auto li_stride_inst =
-                std::make_unique<Instruction>(Opcode::LI, parent_bb);
-            li_stride_inst->addOperand(std::make_unique<RegisterOperand>(
-                stride_reg->getRegNum(), stride_reg->isVirtual()));
-            li_stride_inst->addOperand(std::make_unique<ImmediateOperand>(
-                static_cast<std::int64_t>(stride)));
-            parent_bb->addInstruction(std::move(li_stride_inst));
+            auto new_addr_reg = codeGen_->allocateIntReg();
+            if (isValidImmediateOffset(offset)) {
+                // Optimize with a single ADDI
+                auto addi_inst =
+                    std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
+                addi_inst->addOperand(cloneRegister(new_addr_reg.get()));
+                addi_inst->addOperand(cloneRegister(current_addr_reg.get()));
+                addi_inst->addOperand(
+                    std::make_unique<ImmediateOperand>(static_cast<std::int64_t>(offset)));
+                parent_bb->addInstruction(std::move(addi_inst));
+            } else {
+                // Offset too large, use LI + ADD
+                auto offset_reg = immToReg(
+                    std::make_unique<ImmediateOperand>(static_cast<std::int64_t>(offset)), parent_bb);
+                auto add_inst =
+                    std::make_unique<Instruction>(Opcode::ADD, parent_bb);
+                add_inst->addOperand(cloneRegister(new_addr_reg.get()));
+                add_inst->addOperand(cloneRegister(current_addr_reg.get()));
+                add_inst->addOperand(std::move(offset_reg));
+                parent_bb->addInstruction(std::move(add_inst));
+            }
+            current_addr_reg = std::move(new_addr_reg);
 
-            offset_reg = codeGen_->allocateIntReg();
-            auto mul_inst =
-                std::make_unique<Instruction>(Opcode::MUL, parent_bb);
-            mul_inst->addOperand(std::make_unique<RegisterOperand>(
-                offset_reg->getRegNum(), offset_reg->isVirtual()));
-            mul_inst->addOperand(std::move(index_reg));
-            mul_inst->addOperand(std::move(stride_reg));
-            parent_bb->addInstruction(std::move(mul_inst));
-        }
-
-        // 累加到总偏移量
-        if (total_offset_reg == nullptr) {
-            // 第一个非零偏移量，直接使用
-            total_offset_reg = std::move(offset_reg);
         } else {
-            // 累加：total_offset += offset
-            auto new_total_offset_reg = codeGen_->allocateIntReg();
+            // --- VARIABLE INDEX PATH (your existing logic is good here) ---
+            auto index_operand = visit(index_value, parent_bb);
+            auto index_reg = immToReg(std::move(index_operand), parent_bb);
+
+            // Calculate index * stride into offset_reg (using SLLI, MUL, etc.)
+            // This part of your code is well-implemented.
+            std::unique_ptr<RegisterOperand> offset_reg;
+            // ... (copy your SLLI/MUL logic here to compute offset_reg) ...
+            // uint stride)
+            if (stride == 1) {
+                // stride为1，直接使用索引作为偏移量
+                offset_reg = std::move(index_reg);
+            } else if ((stride & (stride - 1)) == 0) {
+                // stride是2的幂，使用左移优化
+                int shift_amount = 0;
+                auto temp = static_cast<unsigned int>(stride);
+                while (temp > 1) {
+                    temp >>= 1;
+                    shift_amount++;
+                }
+
+                offset_reg = codeGen_->allocateIntReg();
+                auto slli_inst =
+                    std::make_unique<Instruction>(Opcode::SLLI, parent_bb);
+                slli_inst->addOperand(std::make_unique<RegisterOperand>(
+                    offset_reg->getRegNum(), offset_reg->isVirtual()));
+                slli_inst->addOperand(std::move(index_reg));
+                slli_inst->addOperand(
+                    std::make_unique<ImmediateOperand>(shift_amount));
+                parent_bb->addInstruction(std::move(slli_inst));
+            } else {
+                // 一般情况，使用乘法
+                auto stride_reg = codeGen_->allocateIntReg();
+                auto li_stride_inst =
+                    std::make_unique<Instruction>(Opcode::LI, parent_bb);
+                li_stride_inst->addOperand(std::make_unique<RegisterOperand>(
+                    stride_reg->getRegNum(), stride_reg->isVirtual()));
+                li_stride_inst->addOperand(std::make_unique<ImmediateOperand>(
+                    static_cast<std::int64_t>(stride)));
+                parent_bb->addInstruction(std::move(li_stride_inst));
+
+                offset_reg = codeGen_->allocateIntReg();
+                auto mul_inst =
+                    std::make_unique<Instruction>(Opcode::MUL, parent_bb);
+                mul_inst->addOperand(std::make_unique<RegisterOperand>(
+                    offset_reg->getRegNum(), offset_reg->isVirtual()));
+                mul_inst->addOperand(std::move(index_reg));
+                mul_inst->addOperand(std::move(stride_reg));
+                parent_bb->addInstruction(std::move(mul_inst));
+            }
+
+            // Add to the current address
+            auto new_addr_reg = codeGen_->allocateIntReg();
             auto add_inst =
                 std::make_unique<Instruction>(Opcode::ADD, parent_bb);
-            add_inst->addOperand(std::make_unique<RegisterOperand>(
-                new_total_offset_reg->getRegNum(),
-                new_total_offset_reg->isVirtual()));
-            add_inst->addOperand(std::make_unique<RegisterOperand>(
-                total_offset_reg->getRegNum(), total_offset_reg->isVirtual()));
+            add_inst->addOperand(cloneRegister(new_addr_reg.get()));
+            add_inst->addOperand(cloneRegister(current_addr_reg.get()));
             add_inst->addOperand(std::move(offset_reg));
             parent_bb->addInstruction(std::move(add_inst));
-            total_offset_reg = std::move(new_total_offset_reg);
+            current_addr_reg = std::move(new_addr_reg);
         }
     }
 
-    // 如果没有任何偏移量，直接返回基地址
-    if (total_offset_reg == nullptr) {
-        codeGen_->mapValueToReg(inst, base_addr_reg->getRegNum(),
-                                base_addr_reg->isVirtual());
-        return std::make_unique<RegisterOperand>(base_addr_reg->getRegNum(),
-                                                 base_addr_reg->isVirtual());
-    }
+    // After the loop, current_addr_reg holds the final address.
+    codeGen_->mapValueToReg(inst, current_addr_reg->getRegNum(),
+                            current_addr_reg->isVirtual());
+    return cloneRegister(current_addr_reg.get());
 
-    // 计算最终地址：基地址 + 总偏移量
-    auto final_addr_reg = codeGen_->allocateIntReg();
-    auto final_add_inst = std::make_unique<Instruction>(Opcode::ADD, parent_bb);
-    final_add_inst->addOperand(std::make_unique<RegisterOperand>(
-        final_addr_reg->getRegNum(), final_addr_reg->isVirtual()));
-    final_add_inst->addOperand(std::make_unique<RegisterOperand>(
-        base_addr_reg->getRegNum(), base_addr_reg->isVirtual()));
-    final_add_inst->addOperand(std::make_unique<RegisterOperand>(
-        total_offset_reg->getRegNum(), total_offset_reg->isVirtual()));
-    parent_bb->addInstruction(std::move(final_add_inst));
+    // TODO: extract function
+    // std::unique_ptr<RegisterOperand> base_addr_reg;
+    // if (!base_global || !all_indices_const) {
+    //     // 普通路径：先获取基地址（可能生成 LA / FRAMEADDR 等）
+    //     if (!base_addr) base_addr = visit(base_ptr, parent_bb);
+    // }
 
-    // 建立GEP指令结果到寄存器的映射
-    codeGen_->mapValueToReg(inst, final_addr_reg->getRegNum(),
-                            final_addr_reg->isVirtual());
+    // if (base_global && all_indices_const) {
+    //     // 占位：稍后在常量索引路径中直接生成 AUIPC+ADDI
+    // } else if (base_addr->getType() == OperandType::FrameIndex) {
+    //     // 处理基于栈帧的地址
+    //     auto get_base_addr_inst =
+    //         std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
+    //     base_addr_reg = codeGen_->allocateIntReg();
+    //     get_base_addr_inst->addOperand(std::make_unique<RegisterOperand>(
+    //         base_addr_reg->getRegNum(), base_addr_reg->isVirtual()));  // rd
+    //     get_base_addr_inst->addOperand(std::move(base_addr));          // FI
+    //     parent_bb->addInstruction(std::move(get_base_addr_inst));
+    // } else if (base_addr->getType() == OperandType::Register) {
+    //     // 基地址已经在寄存器中（如全局变量地址）
+    //     auto* reg_operand = dynamic_cast<RegisterOperand*>(base_addr.get());
+    //     base_addr_reg = std::make_unique<RegisterOperand>(
+    //         reg_operand->getRegNum(), reg_operand->isVirtual());
+    // } else {
+    //     throw std::runtime_error(
+    //         "Base address must be a frame index or register operand, got: " +
+    //         base_addr->toString());
+    // }
 
-    return std::make_unique<RegisterOperand>(final_addr_reg->getRegNum(),
-                                             final_addr_reg->isVirtual());
+    // if (all_indices_const) {
+    //     if (base_global != nullptr) {
+    //         // 直接生成 AUIPC + ADDI （PC 相对）序列：rd = global + offset
+    //         // 标签
+    //         auto final_addr_reg = codeGen_->allocateIntReg();
+    //         auto auipc_label_name =
+    //             ".L_AUIPC_" + std::to_string(final_addr_reg->getRegNum());
+    //         // auipc rd, %pcrel_hi(sym+off)
+    //         auto auipc_inst =
+    //             std::make_unique<Instruction>(Opcode::AUIPC, parent_bb);
+    //         auipc_inst->setPreInstLabel(auipc_label_name);
+    //         auipc_inst->addOperand(cloneRegister(final_addr_reg.get()));
+    //         auipc_inst->addOperand(std::make_unique<LabelOperand>(
+    //             base_global->getName(), const_total_indice,
+    //             LabelOperand::RelocKind::PCREL_HI));
+    //         parent_bb->addInstruction(std::move(auipc_inst));
+    //         // addi rd, rd, %pcrel_lo(.auipc_label)
+    //         auto addi_inst =
+    //             std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
+    //         addi_inst->addOperand(cloneRegister(final_addr_reg.get()));
+    //         addi_inst->addOperand(cloneRegister(final_addr_reg.get()));
+    //         addi_inst->addOperand(std::make_unique<LabelOperand>(
+    //             auipc_label_name, 0, LabelOperand::RelocKind::PCREL_LO));
+    //         parent_bb->addInstruction(std::move(addi_inst));
+    //         codeGen_->mapValueToReg(inst, final_addr_reg->getRegNum(),
+    //                                 final_addr_reg->isVirtual());
+    //         return cloneRegister(final_addr_reg.get());
+    //     }
+    //     // 普通（非全局）路径复用现有逻辑
+    //     // 所有索引都为0，直接返回基地址
+    //     if (const_total_indice == 0) {
+    //         codeGen_->mapValueToReg(inst, base_addr_reg->getRegNum(),
+    //                                 base_addr_reg->isVirtual());
+    //         return cloneRegister(base_addr_reg.get());
+    //     }
+
+    //     auto final_addr_reg = codeGen_->allocateIntReg();
+    //     if (isValidImmediateOffset(const_total_indice)) {
+    //         auto addi_inst =
+    //             std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
+    //         addi_inst->addOperand(cloneRegister(final_addr_reg.get()));
+    //         addi_inst->addOperand(cloneRegister(base_addr_reg.get()));
+    //         addi_inst->addOperand(
+    //             std::make_unique<ImmediateOperand>(const_total_indice));
+    //         parent_bb->addInstruction(std::move(addi_inst));
+    //     } else {
+    //         // 偏移量超出立即数范围，使用 LI + ADD 序列
+    //         auto total_offset_reg =
+    //             immToReg(std::make_unique<ImmediateOperand>(const_total_indice),
+    //                      parent_bb);
+
+    //         auto final_add_inst =
+    //             std::make_unique<Instruction>(Opcode::ADD, parent_bb);
+    //         final_add_inst->addOperand(cloneRegister(final_addr_reg.get()));
+    //         final_add_inst->addOperand(cloneRegister(base_addr_reg.get()));
+    //         final_add_inst->addOperand(std::move(total_offset_reg));
+    //         parent_bb->addInstruction(std::move(final_add_inst));
+    //     }
+
+    //     // 建立GEP指令结果到寄存器的映射
+    //     // codeGen_->mapValueToReg(inst, final_addr_reg->getRegNum(),
+    //     //                         final_addr_reg->isVirtual());
+
+    //     return cloneRegister(final_addr_reg.get());
+    // }
+
+    // // 计算总偏移量，采用更直接的策略
+    // std::unique_ptr<RegisterOperand> total_offset_reg = nullptr;
+
+    // // 遍历所有索引，计算 index[i] * stride[i] 并累加
+    // for (unsigned i = 0; i < gep_inst->getNumIndices(); ++i) {
+    //     auto* index_value = gep_inst->getIndex(i);
+    //     auto stride = strides[i];
+
+    //     // 检查索引是否为常量0，如果是则跳过
+    //     if (auto* const_int =
+    //             midend::dyn_cast<midend::ConstantInt>(index_value)) {
+    //         if (const_int->getSignedValue() == 0) {
+    //             continue;  // 跳过索引为0的情况，不会产生偏移
+    //         }
+    //     }
+
+    //     if (stride == 0) {
+    //         // stride为0，跳过
+    //         continue;
+    //     }
+
+    //     auto index_operand = visit(index_value, parent_bb);
+    //     auto index_reg = immToReg(std::move(index_operand), parent_bb);
+
+    //     // 计算 index * stride
+    //     // TODO: extract function: reg calculateOffset(BB parent, reg index_reg,
+    //     // uint stride)
+    //     std::unique_ptr<RegisterOperand> offset_reg;
+
+    //     if (stride == 1) {
+    //         // stride为1，直接使用索引作为偏移量
+    //         offset_reg = std::move(index_reg);
+    //     } else if ((stride & (stride - 1)) == 0) {
+    //         // stride是2的幂，使用左移优化
+    //         int shift_amount = 0;
+    //         auto temp = static_cast<unsigned int>(stride);
+    //         while (temp > 1) {
+    //             temp >>= 1;
+    //             shift_amount++;
+    //         }
+
+    //         offset_reg = codeGen_->allocateIntReg();
+    //         auto slli_inst =
+    //             std::make_unique<Instruction>(Opcode::SLLI, parent_bb);
+    //         slli_inst->addOperand(std::make_unique<RegisterOperand>(
+    //             offset_reg->getRegNum(), offset_reg->isVirtual()));
+    //         slli_inst->addOperand(std::move(index_reg));
+    //         slli_inst->addOperand(
+    //             std::make_unique<ImmediateOperand>(shift_amount));
+    //         parent_bb->addInstruction(std::move(slli_inst));
+    //     } else {
+    //         // 一般情况，使用乘法
+    //         auto stride_reg = codeGen_->allocateIntReg();
+    //         auto li_stride_inst =
+    //             std::make_unique<Instruction>(Opcode::LI, parent_bb);
+    //         li_stride_inst->addOperand(std::make_unique<RegisterOperand>(
+    //             stride_reg->getRegNum(), stride_reg->isVirtual()));
+    //         li_stride_inst->addOperand(std::make_unique<ImmediateOperand>(
+    //             static_cast<std::int64_t>(stride)));
+    //         parent_bb->addInstruction(std::move(li_stride_inst));
+
+    //         offset_reg = codeGen_->allocateIntReg();
+    //         auto mul_inst =
+    //             std::make_unique<Instruction>(Opcode::MUL, parent_bb);
+    //         mul_inst->addOperand(std::make_unique<RegisterOperand>(
+    //             offset_reg->getRegNum(), offset_reg->isVirtual()));
+    //         mul_inst->addOperand(std::move(index_reg));
+    //         mul_inst->addOperand(std::move(stride_reg));
+    //         parent_bb->addInstruction(std::move(mul_inst));
+    //     }
+
+    //     // 累加到总偏移量
+    //     if (total_offset_reg == nullptr) {
+    //         // 第一个非零偏移量，直接使用
+    //         total_offset_reg = std::move(offset_reg);
+    //     } else {
+    //         // 累加：total_offset += offset
+    //         auto new_total_offset_reg = codeGen_->allocateIntReg();
+    //         auto add_inst =
+    //             std::make_unique<Instruction>(Opcode::ADD, parent_bb);
+    //         add_inst->addOperand(std::make_unique<RegisterOperand>(
+    //             new_total_offset_reg->getRegNum(),
+    //             new_total_offset_reg->isVirtual()));
+    //         add_inst->addOperand(std::make_unique<RegisterOperand>(
+    //             total_offset_reg->getRegNum(), total_offset_reg->isVirtual()));
+    //         add_inst->addOperand(std::move(offset_reg));
+    //         parent_bb->addInstruction(std::move(add_inst));
+    //         total_offset_reg = std::move(new_total_offset_reg);
+    //     }
+    // }
+
+    // // 如果没有任何偏移量，直接返回基地址
+    // if (total_offset_reg == nullptr) {
+    //     codeGen_->mapValueToReg(inst, base_addr_reg->getRegNum(),
+    //                             base_addr_reg->isVirtual());
+    //     return std::make_unique<RegisterOperand>(base_addr_reg->getRegNum(),
+    //                                              base_addr_reg->isVirtual());
+    // }
+
+    // // 计算最终地址：基地址 + 总偏移量
+    // auto final_addr_reg = codeGen_->allocateIntReg();
+    // auto final_add_inst = std::make_unique<Instruction>(Opcode::ADD, parent_bb);
+    // final_add_inst->addOperand(std::make_unique<RegisterOperand>(
+    //     final_addr_reg->getRegNum(), final_addr_reg->isVirtual()));
+    // final_add_inst->addOperand(std::make_unique<RegisterOperand>(
+    //     base_addr_reg->getRegNum(), base_addr_reg->isVirtual()));
+    // final_add_inst->addOperand(std::make_unique<RegisterOperand>(
+    //     total_offset_reg->getRegNum(), total_offset_reg->isVirtual()));
+    // parent_bb->addInstruction(std::move(final_add_inst));
+
+    // // 建立GEP指令结果到寄存器的映射
+    // codeGen_->mapValueToReg(inst, final_addr_reg->getRegNum(),
+    //                         final_addr_reg->isVirtual());
+
+    // return std::make_unique<RegisterOperand>(final_addr_reg->getRegNum(),
+    //                                          final_addr_reg->isVirtual());
 }
 
 std::unique_ptr<MachineOperand> Visitor::visitCallInst(
@@ -762,6 +890,14 @@ std::unique_ptr<MachineOperand> Visitor::visitCallInst(
 
             // 使用预计算的栈偏移
             int64_t stack_offset = stack_arg_offsets[arg_i - 8];
+            std::cout << "DEBUG CALL stack arg store: func="
+                      << called_func->getName() << ", arg_index=" << arg_i
+                      << ", name=" << dest_arg->getName()
+                      << ", is_float=" << is_float_arg
+                      << ", is_pointer=" << dest_arg->getType()->isPointerType()
+                      << ", size_aligned="
+                      << ((getArgSize(dest_arg->getType()) + 7) & ~7)
+                      << ", stack_offset=" << stack_offset << std::endl;
 
             // 根据参数类型选择存储指令
             Opcode store_opcode;
@@ -4066,6 +4202,10 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         int64_t final_offset = base_stack_arg_offset + arg_offset;
 
         bool is_pointer = arg->getType()->isPointerType();
+        std::cout << "DEBUG CALLEE stack arg load: func=" << function->getName()
+                  << ", arg_pos=" << arg_pos << ", name=" << arg->getName()
+                  << ", is_float=" << is_float << ", is_pointer=" << is_pointer
+                  << ", final_offset=" << final_offset << std::endl;
 
         // 为该参数分配一个虚拟寄存器并加载
         auto vreg = codeGen_->allocateReg(is_float);
