@@ -739,21 +739,27 @@ std::vector<unsigned> RegAllocChaitin::getSimplificationOrder() {
         invalidateDegreeCache(regNum);
     }
 
-    // 如果还有未移除的节点，选择溢出候选
-    for (auto& [regNum, node] : interferenceGraph) {
-        if (removed.find(regNum) == removed.end() && !node->isPrecolored) {
-            if (!ABI::isReservedReg(regNum, assigningFloat)) {
-                std::cout << "Spill reg " << regNum << " with degree "
-                          << getCachedDegree(regNum) << std::endl;
-                spilledRegs.insert(regNum);
-            } else {
-                std::cerr
-                    << "Warning: Reserved register " << regNum << " ("
-                    << ABI::getABINameFromRegNum(regNum) << ") "
-                    << "cannot be spilled and will cause allocation failure."
-                    << std::endl;
+    unsigned spillCandidate = 0;
+    int maxDegree = -1;
+
+    for (auto const& [regNum, node] : interferenceGraph) {
+        // 只在未被移除且非预着色的节点中选择
+        if (!removed.count(regNum) && !node->isPrecolored &&
+            !ABI::isReservedReg(regNum, assigningFloat)) {
+            int currentDegree = getCachedDegree(regNum);
+            // TODO: spillCost
+            if (currentDegree > maxDegree) {
+                maxDegree = currentDegree;
+                spillCandidate = regNum;
             }
         }
+    }
+
+    // 确保找到了一个候选
+    if (spillCandidate != 0) {
+        std::cout << "Spill candidate selected: reg " << spillCandidate
+                  << " with degree " << maxDegree << std::endl;
+        spilledRegs.insert(spillCandidate);
     }
 
     // 按栈顺序返回
@@ -850,9 +856,10 @@ bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
 void RegAllocChaitin::handleSpills() {
     auto spillCandidates = selectSpillCandidates();
 
-    for (unsigned reg : spillCandidates) {
-        insertSpillCode(reg);
-    }
+    // for (unsigned reg : spillCandidates) {
+    //     insertSpillCode(reg);
+    // }
+    insertSpillCode(spillCandidates[0]);
 
     // 清空状态重新开始
     interferenceGraph.clear();
