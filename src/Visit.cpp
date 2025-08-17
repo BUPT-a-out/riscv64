@@ -214,7 +214,6 @@ std::unique_ptr<RegisterOperand> Visitor::cloneRegister(RegisterOperand* reg_op,
         is_float ? RegisterType::Float : RegisterType::Integer);
 }
 
-
 // 确保操作数在浮点寄存器中，特殊处理零值
 std::unique_ptr<RegisterOperand> Visitor::ensureFloatReg(
     std::unique_ptr<MachineOperand> operand, BasicBlock* parent_bb) {
@@ -387,31 +386,10 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
         throw std::runtime_error("Not a GEP instruction: " + inst->toString());
     }
 
-    // 获取基地址
+    // 获取基地址 (延迟访问全局变量，便于常量折叠)
     const auto* base_ptr = gep_inst->getPointerOperand();
-    auto base_addr = visit(base_ptr, parent_bb);
-
-    // TODO: extract function
-    std::unique_ptr<RegisterOperand> base_addr_reg;
-    if (base_addr->getType() == OperandType::FrameIndex) {
-        // 处理基于栈帧的地址
-        auto get_base_addr_inst =
-            std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
-        base_addr_reg = codeGen_->allocateIntReg();
-        get_base_addr_inst->addOperand(std::make_unique<RegisterOperand>(
-            base_addr_reg->getRegNum(), base_addr_reg->isVirtual()));  // rd
-        get_base_addr_inst->addOperand(std::move(base_addr));          // FI
-        parent_bb->addInstruction(std::move(get_base_addr_inst));
-    } else if (base_addr->getType() == OperandType::Register) {
-        // 基地址已经在寄存器中（如全局变量地址）
-        auto* reg_operand = dynamic_cast<RegisterOperand*>(base_addr.get());
-        base_addr_reg = std::make_unique<RegisterOperand>(
-            reg_operand->getRegNum(), reg_operand->isVirtual());
-    } else {
-        throw std::runtime_error(
-            "Base address must be a frame index or register operand, got: " +
-            base_addr->toString());
-    }
+    auto* base_global = midend::dyn_cast<midend::GlobalVariable>(base_ptr);
+    std::unique_ptr<MachineOperand> base_addr;  // 只有在需要时才生成
 
     // 获取 strides 和索引
     auto strides = gep_inst->getStrides();
@@ -433,7 +411,64 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
         }
     }
 
+    // TODO: extract function
+    std::unique_ptr<RegisterOperand> base_addr_reg;
+    if (!base_global || !all_indices_const) {
+        // 普通路径：先获取基地址（可能生成 LA / FRAMEADDR 等）
+        if (!base_addr) base_addr = visit(base_ptr, parent_bb);
+    }
+
+    if (base_global && all_indices_const) {
+        // 占位：稍后在常量索引路径中直接生成 AUIPC+ADDI
+    } else if (base_addr->getType() == OperandType::FrameIndex) {
+        // 处理基于栈帧的地址
+        auto get_base_addr_inst =
+            std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
+        base_addr_reg = codeGen_->allocateIntReg();
+        get_base_addr_inst->addOperand(std::make_unique<RegisterOperand>(
+            base_addr_reg->getRegNum(), base_addr_reg->isVirtual()));  // rd
+        get_base_addr_inst->addOperand(std::move(base_addr));          // FI
+        parent_bb->addInstruction(std::move(get_base_addr_inst));
+    } else if (base_addr->getType() == OperandType::Register) {
+        // 基地址已经在寄存器中（如全局变量地址）
+        auto* reg_operand = dynamic_cast<RegisterOperand*>(base_addr.get());
+        base_addr_reg = std::make_unique<RegisterOperand>(
+            reg_operand->getRegNum(), reg_operand->isVirtual());
+    } else {
+        throw std::runtime_error(
+            "Base address must be a frame index or register operand, got: " +
+            base_addr->toString());
+    }
+
     if (all_indices_const) {
+        if (base_global != nullptr) {
+            // 直接生成 AUIPC + ADDI （PC 相对）序列：rd = global + offset
+            // 标签
+            auto final_addr_reg = codeGen_->allocateIntReg();
+            auto auipc_label_name =
+                ".L_AUIPC_" + std::to_string(final_addr_reg->getRegNum());
+            // auipc rd, %pcrel_hi(sym+off)
+            auto auipc_inst =
+                std::make_unique<Instruction>(Opcode::AUIPC, parent_bb);
+            auipc_inst->setPreInstLabel(auipc_label_name);
+            auipc_inst->addOperand(cloneRegister(final_addr_reg.get()));
+            auipc_inst->addOperand(std::make_unique<LabelOperand>(
+                base_global->getName(), const_total_indice,
+                LabelOperand::RelocKind::PCREL_HI));
+            parent_bb->addInstruction(std::move(auipc_inst));
+            // addi rd, rd, %pcrel_lo(.auipc_label)
+            auto addi_inst =
+                std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
+            addi_inst->addOperand(cloneRegister(final_addr_reg.get()));
+            addi_inst->addOperand(cloneRegister(final_addr_reg.get()));
+            addi_inst->addOperand(std::make_unique<LabelOperand>(
+                auipc_label_name, 0, LabelOperand::RelocKind::PCREL_LO));
+            parent_bb->addInstruction(std::move(addi_inst));
+            codeGen_->mapValueToReg(inst, final_addr_reg->getRegNum(),
+                                    final_addr_reg->isVirtual());
+            return cloneRegister(final_addr_reg.get());
+        }
+        // 普通（非全局）路径复用现有逻辑
         // 所有索引都为0，直接返回基地址
         if (const_total_indice == 0) {
             codeGen_->mapValueToReg(inst, base_addr_reg->getRegNum(),
@@ -442,8 +477,6 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
         }
 
         auto final_addr_reg = codeGen_->allocateIntReg();
-        
-        // 如果在立即数范围内，使用 ADDI 指令优化
         if (isValidImmediateOffset(const_total_indice)) {
             auto addi_inst =
                 std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
@@ -454,8 +487,9 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
             parent_bb->addInstruction(std::move(addi_inst));
         } else {
             // 偏移量超出立即数范围，使用 LI + ADD 序列
-            auto total_offset_reg = immToReg(
-                std::make_unique<ImmediateOperand>(const_total_indice), parent_bb);
+            auto total_offset_reg =
+                immToReg(std::make_unique<ImmediateOperand>(const_total_indice),
+                         parent_bb);
 
             auto final_add_inst =
                 std::make_unique<Instruction>(Opcode::ADD, parent_bb);
@@ -466,8 +500,8 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
         }
 
         // 建立GEP指令结果到寄存器的映射
-        codeGen_->mapValueToReg(inst, final_addr_reg->getRegNum(),
-                                final_addr_reg->isVirtual());
+        // codeGen_->mapValueToReg(inst, final_addr_reg->getRegNum(),
+        //                         final_addr_reg->isVirtual());
 
         return cloneRegister(final_addr_reg.get());
     }
@@ -1731,8 +1765,7 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
         // 使用正确的加载指令
         generateMemoryInstruction(load_opcode,
                                   cloneRegister(new_reg.get(), is_float_load),
-                                  cloneRegister(address_reg),
-                                  0, parent_bb);
+                                  cloneRegister(address_reg), 0, parent_bb);
 
         // 建立load指令结果值到寄存器的映射
         codeGen_->mapValueToReg(inst, new_reg->getRegNum(),
@@ -1760,10 +1793,8 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
 
         // 使用正确的加载指令
         generateMemoryInstruction(
-            load_opcode,
-            cloneRegister(new_reg.get(), is_float_load),
-            cloneRegister(global_addr_reg.get()),
-            0, parent_bb);
+            load_opcode, cloneRegister(new_reg.get(), is_float_load),
+            cloneRegister(global_addr_reg.get()), 0, parent_bb);
 
         // 建立load指令结果值到寄存器的映射
         codeGen_->mapValueToReg(inst, new_reg->getRegNum(),
@@ -3026,7 +3057,7 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
         // if (foundReg.has_value()) {
         //     lhs = cloneRegister(foundReg.value(), true);
         // } else {
-            lhs = visit(inst->getOperand(0), parent_bb);
+        lhs = visit(inst->getOperand(0), parent_bb);
         // }
     }
     std::unique_ptr<MachineOperand> rhs;
@@ -3035,7 +3066,7 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
         // if (foundReg.has_value()) {
         //     rhs = cloneRegister(foundReg.value(), true);
         // } else {
-            rhs = visit(inst->getOperand(1), parent_bb);
+        rhs = visit(inst->getOperand(1), parent_bb);
         // }
     }
 
@@ -3895,8 +3926,7 @@ std::unique_ptr<MachineOperand> Visitor::funcArgToReg(
     // 开始
     int64_t final_offset = 0 + arg_offset;
     generateMemoryInstruction(
-        load_opcode,
-        cloneRegister(arg_reg.get(), is_current_float),
+        load_opcode, cloneRegister(arg_reg.get(), is_current_float),
         std::make_unique<RegisterOperand>("s0"),  // 使用帧指针
         final_offset, parent_bb);
 
@@ -4049,10 +4079,9 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         } else {
             load_op = Opcode::LW;  // 普通 32-bit 值
         }
-        generateMemoryInstruction(
-            load_op,
-            cloneRegister(vreg.get(), is_float),
-            std::make_unique<RegisterOperand>("s0"), final_offset, parent_bb);
+        generateMemoryInstruction(load_op, cloneRegister(vreg.get(), is_float),
+                                  std::make_unique<RegisterOperand>("s0"),
+                                  final_offset, parent_bb);
         // 建立映射，后续可直接复用
         codeGen_->mapValueToReg(arg, vreg->getRegNum(), vreg->isVirtual());
         return cloneRegister(vreg.get(), is_float);
@@ -4092,7 +4121,8 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
 
             auto load_inst =
                 std::make_unique<Instruction>(load_opcode, parent_bb);
-            load_inst->addOperand(cloneRegister(value_reg.get(), is_float_value));
+            load_inst->addOperand(
+                cloneRegister(value_reg.get(), is_float_value));
             load_inst->addOperand(std::make_unique<MemoryOperand>(
                 std::make_unique<RegisterOperand>(global_addr_reg->getRegNum(),
                                                   global_addr_reg->isVirtual()),
@@ -4515,9 +4545,11 @@ ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
         std::cout << "Processing ConstantArray with "
                   << const_array->getNumElements() << " elements" << std::endl;
 
-        const auto* array_type = static_cast<const midend::ArrayType*>(init->getType());
+        const auto* array_type =
+            static_cast<const midend::ArrayType*>(init->getType());
         auto* element_type = array_type->getElementType();
-        std::cout << "Array element type: " << element_type->toString() << std::endl;
+        std::cout << "Array element type: " << element_type->toString()
+                  << std::endl;
 
         // 递归处理嵌套数组或基本类型元素
         if (element_type->isArrayType()) {
@@ -4525,16 +4557,20 @@ ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
             // 首先确定最终的基础类型
             const midend::Type* base_element_type = element_type;
             while (base_element_type->isArrayType()) {
-                auto* arr_type = static_cast<const midend::ArrayType*>(base_element_type);
+                auto* arr_type =
+                    static_cast<const midend::ArrayType*>(base_element_type);
                 base_element_type = arr_type->getElementType();
             }
 
             if (base_element_type->isIntegerType()) {
-                return processMultiDimArray<int32_t>(const_array, type, element_type, 0);
+                return processMultiDimArray<int32_t>(const_array, type,
+                                                     element_type, 0);
             } else if (base_element_type->isFloatType()) {
-                return processMultiDimArray<float>(const_array, type, element_type, 0.0f);
+                return processMultiDimArray<float>(const_array, type,
+                                                   element_type, 0.0f);
             } else {
-                throw std::runtime_error("Unsupported multi-dimensional array element type");
+                throw std::runtime_error(
+                    "Unsupported multi-dimensional array element type");
             }
 
         } else if (element_type->isIntegerType()) {
@@ -4564,7 +4600,8 @@ ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
         size_t total_elements = 1;
         const midend::Type* current_type = type;
         while (current_type->isArrayType()) {
-            auto* arr_type = static_cast<const midend::ArrayType*>(current_type);
+            auto* arr_type =
+                static_cast<const midend::ArrayType*>(current_type);
             total_elements *= arr_type->getNumElements();
             current_type = arr_type->getElementType();
         }
