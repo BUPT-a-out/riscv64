@@ -258,21 +258,41 @@ class MemoryOperand : public MachineOperand {
 // 派生类：标签操作数 (用于跳转指令)
 class LabelOperand : public MachineOperand {
    public:
+    // 重定位类型：用于打印 %pcrel_hi / %pcrel_lo 形式
+    enum class RelocKind { None, PCREL_HI, PCREL_LO };
+
     explicit LabelOperand(midend::BasicBlock* block)  // 指向基本块的指针
         : MachineOperand(OperandType::Label),
           block(block),
-          labelName(block->getName()) {}
+          labelName(block->getName()),
+          relocKind(RelocKind::None),
+          offset(0) {}
 
     // 支持字符串构造函数
     explicit LabelOperand(const std::string& labelName)
         : MachineOperand(OperandType::Label),
           block(nullptr),
-          labelName(labelName) {}
+          labelName(labelName),
+          relocKind(RelocKind::None),
+          offset(0) {}
 
     explicit LabelOperand(midend::BasicBlock* block, std::string labelName)
         : MachineOperand(OperandType::Label),
           block(block),
-          labelName(std::move(labelName)) {}
+          labelName(std::move(labelName)),
+          relocKind(RelocKind::None),
+          offset(0) {}
+
+    // 带偏移与重定位类型的构造函数（用于 auipc/addi PC 相对地址计算）
+    LabelOperand(std::string labelName, std::int64_t offset, RelocKind kind)
+        : MachineOperand(OperandType::Label),
+          block(nullptr),
+          labelName(std::move(labelName)),
+          relocKind(kind),
+          offset(offset) {}
+
+    RelocKind getRelocKind() const { return relocKind; }
+    std::int64_t getOffset() const { return offset; }
 
     midend::BasicBlock* getBlock() const { return block; }
     const std::string& getLabelName() const { return labelName; }
@@ -282,23 +302,25 @@ class LabelOperand : public MachineOperand {
    private:
     midend::BasicBlock* block;
     std::string labelName;
+    RelocKind relocKind;
+    std::int64_t offset;  // 可以为 0
 };
 
 }  // namespace riscv64
 
-
 // 为 RegisterOperand 定义哈希函数
 namespace std {
-    template <>
-    struct hash<riscv64::RegisterOperand> {
-        std::size_t operator()(const riscv64::RegisterOperand& reg) const {
-            // 将三个字段组合成一个哈希值
-            std::size_t h1 = std::hash<unsigned>{}(reg.getRegNum());
-            std::size_t h2 = std::hash<bool>{}(reg.isVirtual());
-            std::size_t h3 = std::hash<int>{}(static_cast<int>(reg.getRegisterType()));
-            
-            // 使用位移和异或来组合哈希值
-            return h1 ^ (h2 << 1) ^ (h3 << 2);
-        }
-    };
-}
+template <>
+struct hash<riscv64::RegisterOperand> {
+    std::size_t operator()(const riscv64::RegisterOperand& reg) const {
+        // 将三个字段组合成一个哈希值
+        std::size_t h1 = std::hash<unsigned>{}(reg.getRegNum());
+        std::size_t h2 = std::hash<bool>{}(reg.isVirtual());
+        std::size_t h3 =
+            std::hash<int>{}(static_cast<int>(reg.getRegisterType()));
+
+        // 使用位移和异或来组合哈希值
+        return h1 ^ (h2 << 1) ^ (h3 << 2);
+    }
+};
+}  // namespace std

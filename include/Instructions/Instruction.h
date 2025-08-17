@@ -236,6 +236,11 @@ class Instruction {
     BasicBlock* getParent() const { return parent; }
     void setParent(BasicBlock* bb) { parent = bb; }
 
+    // 设置预指令标签
+    void setPreInstLabel(const std::string& label) { pre_inst_label = label; }
+    // 获取预指令标签
+    const std::string& getPreInstLabel() const { return pre_inst_label; }
+
     // 生成文本表示
     std::string toString() const;
 
@@ -263,6 +268,8 @@ class Instruction {
 
     // 指向其所在的基本块 (可选，但非常有用) - 弱引用
     BasicBlock* parent{};
+
+    std::string pre_inst_label;
 };
 
 }  // namespace riscv64

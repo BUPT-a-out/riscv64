@@ -50,7 +50,32 @@ std::string ImmediateOperand::toString() const {
     return std::to_string(value);
 }
 
-std::string LabelOperand::toString() const { return getLabelName(); }
+std::string LabelOperand::toString() const {
+    // 动态查看是否带有重定位类型与偏移（通过 dynamic_cast 检查扩展字段）
+    // 由于我们在头文件中已经扩展了 LabelOperand，这里直接访问。
+    std::string base = getLabelName();
+    // 访问扩展字段（如果没有扩展，保持向后兼容）
+    // 这里使用 const_cast 规避没有提供访问器的问题，但字段已公开访问器。
+    const auto* self = this;
+    using RK = LabelOperand::RelocKind;
+    // 尝试获取 relocation kind，如果是 None 则直接返回 label 或 label+offset
+    auto kind = self->getRelocKind();
+    auto off = self->getOffset();
+    std::string with_off = base;
+    if (off != 0) {
+        // 打印成 symbol+offset
+        with_off += "+" + std::to_string(off);
+    }
+    switch (kind) {
+        case RK::None:
+            return with_off;
+        case RK::PCREL_HI:
+            return "%pcrel_hi(" + with_off + ")";
+        case RK::PCREL_LO:
+            return "%pcrel_lo(" + with_off + ")";
+    }
+    return with_off;
+}
 
 std::string MemoryOperand::toString() const {
     return std::to_string(getOffset()->getValue()) + "(" +
@@ -247,8 +272,17 @@ std::string getInstructionName(Opcode opcode) {
 }
 
 std::string Instruction::toString() const {
-    auto result = getInstructionName(opcode);
+    std::string result;
+    if (!pre_inst_label.empty()) {
+        result += (pre_inst_label + ": \n");
+    }
+
+    result += getInstructionName(opcode);
     auto operand_count = getOprandCount();
+    // 特殊：NOP + 单 LabelOperand 作为标签定义
+    if (opcode == Opcode::NOP && operand_count == 1 && getOperand(0)->getType() == OperandType::Label) {
+        return dynamic_cast<LabelOperand*>(getOperand(0))->getLabelName() + ":";
+    }
     if (operand_count == 0) {
         return result;
     }
