@@ -179,8 +179,7 @@ void RegisterRewriter::rewrite() {
                 auto fi_id = stackSlot2FrameIndex[slot];
 
                 // 分配数据寄存器和地址寄存器
-                unsigned dataReg =
-                    selectAvailablePhysicalDataReg(inst, assigningFloat);
+                unsigned dataReg = assigningFloat ? 33 : 6; // ft1/t1
                 unsigned addrReg = 5;  // t0 用于地址计算
 
                 // 更新原指令中的寄存器引用

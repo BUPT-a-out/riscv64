@@ -180,53 +180,62 @@ Module& RISCV64Target::basicBlockReorderingPass(riscv64::Module& module) {
 }
 
 Module& RISCV64Target::RAGreedyPass(riscv64::Module& module) {
-    std::cout << "\n=== Phase 2.0: SlotIndexGeneration ===" << std::endl;
+    std::cout << "\n=== Phase 2.0: RA Greedy ===" << std::endl;
 
+    std::cout << "=== Float Register Allocation Phase ===\n";
     SlotIndexesWrapperPass wrapper0;
     for (auto& function : module) {
+        std::cout << "=== SlotIndexGeneration ===\n";
         wrapper0.runOnFunction(function.get());
         auto& SI = wrapper0.getSI();
         SI.print(std::cout);
 
+        std::cout << "=== LiveIntervalGeneration ===\n";
         auto LISFloat =
             std::make_unique<LiveIntervals>(function.get(), &SI, true);
         LISFloat->analyze(*function);
         LISFloat->print(std::cout);
 
+        std::cout << "=== RAGreedy ===\n";
         auto RAGreedyFloat =
             RegAllocGreedy(function.get(), LISFloat.get(), true);
         RAGreedyFloat.run();
         RAGreedyFloat.print(std::cout);
 
+        std::cout << "=== RegisterRewrite ===\n";
         auto rewriterFloat =
             RegisterRewriter(function.get(), RAGreedyFloat.getVRM(), true);
         rewriterFloat.rewrite();
+
+        std::cout << function->toString() << std::endl;
     }
 
-    std::cout << "Alloc for float" << std::endl;
-    std::cout << module.toString() << std::endl;
-
+    std::cout << "=== Integer Register Allocation Phase ===\n";
     SlotIndexesWrapperPass wrapper1;
     for (auto& function : module) {
+        std::cout << "=== SlotIndexGeneration ===\n";
+
         wrapper1.runOnFunction(function.get());
         auto& SI = wrapper1.getSI();
         SI.print(std::cout);
 
+        std::cout << "=== LiveIntervalGeneration ===\n";
         auto LISInt = std::make_unique<LiveIntervals>(function.get(), &SI);
         LISInt->analyze(*function);
         LISInt->print(std::cout);
 
+        std::cout << "=== RAGreedy ===\n";
         auto RAGreedyInt = RegAllocGreedy(function.get(), LISInt.get());
         RAGreedyInt.run();
         RAGreedyInt.print(std::cout);
 
+        std::cout << "=== RegisterRewrite ===\n";
         auto rewriterInt =
             RegisterRewriter(function.get(), RAGreedyInt.getVRM());
         rewriterInt.rewrite();
-    }
 
-    std::cout << "Alloc for integer" << std::endl;
-    std::cout << module.toString() << std::endl;
+        std::cout << function->toString() << std::endl;
+    }
 
     return module;
 }
