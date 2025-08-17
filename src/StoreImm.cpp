@@ -34,19 +34,14 @@ std::unique_ptr<RegisterOperand> Visitor::floatImmToReg(
     // 分配临时整数寄存器用于地址计算
     auto addr_reg = codeGen_->allocateIntReg();
 
-    // 生成 lui 指令：加载高20位地址
-    auto lui_inst = std::make_unique<Instruction>(Opcode::LUI, parent_bb);
-    lui_inst->addOperand(cloneRegister(addr_reg.get()));
-    lui_inst->addOperand(
-        std::make_unique<LabelOperand>(label + "@hi"));  // %hi(label)
-    parent_bb->addInstruction(std::move(lui_inst));
-
-    // 生成 addi 指令：加载低12位地址
-    auto addi_inst = std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
-    addi_inst->addOperand(cloneRegister(addr_reg.get()));
-    addi_inst->addOperand(
-        std::make_unique<LabelOperand>(label + "@lo"));  // %lo(label)
-    parent_bb->addInstruction(std::move(addi_inst));
+    // 使用 LA 伪指令生成地址（会在指令选择/打印阶段展开为 auipc+addi）
+    // 之前使用 LUI+ADDI(hi/lo) 在 RV64 上只生成 32bit 截断的绝对地址，
+    // 当常量池符号地址超出 32bit 时会导致加载到错误地址，引发浮点常量错乱。
+    // 改为使用 "la"（PC 相对）可以由汇编器/链接器生成正确的重定位序列。
+    auto la_inst = std::make_unique<Instruction>(Opcode::LA, parent_bb);
+    la_inst->addOperand(cloneRegister(addr_reg.get()));  // rd
+    la_inst->addOperand(std::make_unique<LabelOperand>(label));  // symbol
+    parent_bb->addInstruction(std::move(la_inst));
 
     // 生成 flw 指令：从内存加载浮点数
     auto flw_inst = std::make_unique<Instruction>(Opcode::FLW, parent_bb);
