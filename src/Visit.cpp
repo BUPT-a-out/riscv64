@@ -4338,7 +4338,7 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
 
     if (midend::isa<midend::UndefValue>(value)) {
         // 未定义值，当做 0 处理
-        return std::make_unique<RegisterOperand>(0, true);
+        return std::make_unique<RegisterOperand>(0, false);
     }
 
     throw std::runtime_error(
