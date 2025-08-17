@@ -5,6 +5,7 @@
 #include "ConstantFoldingPass.h"
 #include "FrameIndexElimination.h"
 #include "IR/Function.h"
+#include "Pass/Analysis/LoopInfo.h"
 #include "RAGreedy/LiveIntervals.h"
 #include "RAGreedy/RegAllocGreedy.h"
 #include "RAGreedy/RegisterRewriter.h"
@@ -42,7 +43,7 @@ std::string RISCV64Target::compileToAssembly(
 
     // RAGreedyPass(riscv_module);
 
-    registerAllocationPass(riscv_module);     // 第二阶段
+    registerAllocationPass(riscv_module, analysisManager);     // 第二阶段
     frameIndexEliminationPass(riscv_module);  // 第三阶段
 
     return riscv_module.toString();
@@ -240,18 +241,32 @@ Module& RISCV64Target::RAGreedyPass(riscv64::Module& module) {
     return module;
 }
 
-Module& RISCV64Target::registerAllocationPass(riscv64::Module& module) {
+Module& RISCV64Target::registerAllocationPass(
+    riscv64::Module& module, const midend::AnalysisManager* analysisManager) {
     std::cout << "\n=== Phase 2: Register Allocation ===" << std::endl;
 
     for (auto& function : module) {
+        midend::Function* midend_function =
+            module.getMidendFunction(function->getName());
+
+        midend::LoopInfo* loopAnal = nullptr;
+        if (midend_function && analysisManager) {
+            auto name = midend::LoopAnalysis::getName();
+
+            loopAnal = const_cast<midend::AnalysisManager*>(analysisManager)
+                           ->getAnalysis<midend::LoopInfo>(
+                               name,
+                               *midend_function);
+        }
+
         std::cout << "RegAlloc for float" << std::endl;
-        RegAllocChaitin allocatorFloat(function.get(), true);
+        RegAllocChaitin allocatorFloat(function.get(), true, loopAnal);
         allocatorFloat.run();
 
         std::cout << function->toString() << std::endl;
 
         std::cout << "RegAlloc for int" << std::endl;
-        RegAllocChaitin allocatorInt(function.get(), false);
+        RegAllocChaitin allocatorInt(function.get(), false, loopAnal);
         allocatorInt.run();
 
         std::cout << function->toString() << std::endl;

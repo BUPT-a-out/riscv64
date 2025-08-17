@@ -10,6 +10,7 @@
 #include "Instructions/Function.h"
 #include "Instructions/Instruction.h"
 #include "Instructions/MachineOperand.h"
+#include "Pass/Analysis/LoopInfo.h"
 
 namespace riscv64 {
 
@@ -45,6 +46,7 @@ struct CoalesceInfo {
 class RegAllocChaitin {
    private:
     int assigningFloat = false;
+    const midend::LoopInfo* LoopAnal = nullptr;
 
     // 可用于分配的寄存器 (排除保留寄存器)
     std::vector<unsigned> availableRegs;
@@ -77,8 +79,12 @@ class RegAllocChaitin {
     void clearDegreeCache() { degreeCache.clear(); }
 
    public:
-    explicit RegAllocChaitin(Function* func, bool assigningFloat = false)
-        : assigningFloat(assigningFloat), function(func) {}
+    explicit RegAllocChaitin(
+        Function* func, bool assigningFloat = false,
+        const midend::LoopInfo* loopAnal = nullptr)
+        : assigningFloat(assigningFloat),
+          LoopAnal(loopAnal),
+          function(func) {}
 
     // 主要的寄存器分配接口
     void run();
@@ -102,7 +108,11 @@ class RegAllocChaitin {
     // 溢出处理
     void handleSpills();
     std::vector<unsigned> selectSpillCandidates();
+    unsigned selectSpillCandidate();
     void insertSpillCode(unsigned reg);
+
+    unsigned computeSpillCost(unsigned virtReg);
+    unsigned computeLoopWeight(BasicBlock* bb);
 
     // 重写指令中的寄存器
     void rewriteInstructions();
@@ -141,7 +151,7 @@ class RegAllocChaitin {
     bool isPhysicalReg(unsigned reg) const;
     unsigned getPhysicalReg(unsigned virtualReg) const;
     int getLifetimeLength(unsigned reg);
-    
+
     // ABI约束
     void initializeABIConstraints();
     void setFunctionSpecificConstraints();
@@ -150,7 +160,6 @@ class RegAllocChaitin {
     void setCallSiteConstraints();
     void setPreCallConstraints(BasicBlock* bb, Instruction* callInst);
     void setPostCallConstraints(BasicBlock* bb, Instruction* callInst);
-
 
     void addReservedPhysicalReg(unsigned physicalReg) {
         reservedPhysicalRegs.insert(physicalReg);
@@ -171,7 +180,7 @@ class RegAllocChaitin {
    private:
     // 乐观着色相关
     std::unordered_set<unsigned> optimisticNodes;  // 乐观移除的节点
-    bool enableOptimisticColoring = false;          // 启用乐观着色开关
+    bool enableOptimisticColoring = false;         // 启用乐观着色开关
 
     std::vector<unsigned> getOptimisticSimplificationOrder();
     bool attemptOptimisticColoring(const std::vector<unsigned>& order);

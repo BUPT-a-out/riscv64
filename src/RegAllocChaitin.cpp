@@ -1,6 +1,7 @@
 #include "RegAllocChaitin.h"
 
 #include <algorithm>
+#include <cfloat>
 #include <climits>
 #include <iostream>
 #include <limits>
@@ -501,6 +502,39 @@ std::vector<unsigned> RegAllocChaitin::getOptimisticSimplificationOrder() {
     return order;
 }
 
+unsigned RegAllocChaitin::computeSpillCost(unsigned virtReg) {
+    unsigned cost = 0;
+    for (auto& bb : *function) {
+        auto loopWeight = computeLoopWeight(bb.get());
+        for (auto& instr : *bb) {
+            unsigned localCost = 0;
+            auto usedRegs = getUsedRegs(instr.get());
+            auto definedRegs = getDefinedRegs(instr.get());
+            if (std::find(usedRegs.begin(), usedRegs.end(), virtReg) !=
+                usedRegs.end()) {
+                localCost += 1;
+            }
+
+            if (std::find(definedRegs.begin(), definedRegs.end(), virtReg) !=
+                definedRegs.end()) {
+                localCost += 1;
+            }
+
+            cost += localCost * loopWeight;
+        }
+    }
+    return cost;
+}
+
+unsigned RegAllocChaitin::computeLoopWeight(BasicBlock* bb) {
+    if (LoopAnal) {
+        auto midendBlock = function->getBasicBlock(bb);
+        return 1 << LoopAnal->getLoopDepth(midendBlock);
+    } else {
+        return 1;
+    }
+}
+
 // 选择乐观溢出候选者（溢出代价最小的）
 unsigned RegAllocChaitin::selectOptimisticSpillCandidate(
     const std::unordered_set<unsigned>& candidates) {
@@ -539,7 +573,6 @@ unsigned RegAllocChaitin::selectOptimisticSpillCandidate(
 }
 
 // 计算溢出代价 (简单)
-// TODO: 循环变量优化
 double RegAllocChaitin::calculateSpillCost(unsigned reg) {
     double cost = 0.0;
 
@@ -739,17 +772,35 @@ std::vector<unsigned> RegAllocChaitin::getSimplificationOrder() {
         invalidateDegreeCache(regNum);
     }
 
+    // unsigned spillCandidate = 0;
+    // int maxDegree = -1;
+
+    // for (auto const& [regNum, node] : interferenceGraph) {
+    //     // 只在未被移除且非预着色的节点中选择
+    //     if (!removed.count(regNum) && !node->isPrecolored &&
+    //         !ABI::isReservedReg(regNum, assigningFloat)) {
+    //         int currentDegree = getCachedDegree(regNum);
+    //         if (currentDegree > maxDegree) {
+    //             maxDegree = currentDegree;
+    //             spillCandidate = regNum;
+    //         }
+    //     }
+    // }
+
+    // TODO: sort list.
     unsigned spillCandidate = 0;
-    int maxDegree = -1;
+    double minCost = DBL_MAX;
 
     for (auto const& [regNum, node] : interferenceGraph) {
         // 只在未被移除且非预着色的节点中选择
         if (!removed.count(regNum) && !node->isPrecolored &&
             !ABI::isReservedReg(regNum, assigningFloat)) {
-            int currentDegree = getCachedDegree(regNum);
-            // TODO: spillCost
-            if (currentDegree > maxDegree) {
-                maxDegree = currentDegree;
+            int deg = getCachedDegree(regNum);
+            double currentCost = (double)computeSpillCost(regNum) / deg;
+            std::cout << "reg" << regNum << "cost" << currentCost << "deg"
+                      << deg << std::endl;
+            if (currentCost < minCost) {
+                minCost = currentCost;
                 spillCandidate = regNum;
             }
         }
@@ -758,7 +809,7 @@ std::vector<unsigned> RegAllocChaitin::getSimplificationOrder() {
     // 确保找到了一个候选
     if (spillCandidate != 0) {
         std::cout << "Spill candidate selected: reg " << spillCandidate
-                  << " with degree " << maxDegree << std::endl;
+                  << std::endl;
         spilledRegs.insert(spillCandidate);
     }
 
@@ -853,13 +904,18 @@ bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
 }
 
 /// Spill
+// TODO: adjust spill batch size
 void RegAllocChaitin::handleSpills() {
-    auto spillCandidates = selectSpillCandidates();
+    // auto spillCandidates = selectSpillCandidates();
 
     // for (unsigned reg : spillCandidates) {
     //     insertSpillCode(reg);
     // }
-    insertSpillCode(spillCandidates[0]);
+
+    auto spillCandidate = selectSpillCandidate();
+    if (spillCandidate) {
+        insertSpillCode(spillCandidate);
+    }
 
     // 清空状态重新开始
     interferenceGraph.clear();
@@ -873,6 +929,7 @@ void RegAllocChaitin::handleSpills() {
     clearDegreeCache();
 }
 
+// TODO: compute spill cost
 std::vector<unsigned> RegAllocChaitin::selectSpillCandidates() {
     std::vector<unsigned> candidates;
 
@@ -886,15 +943,28 @@ std::vector<unsigned> RegAllocChaitin::selectSpillCandidates() {
         }
     }
 
-    // 优先spill链深度较小的寄存器
     std::sort(candidates.begin(), candidates.end(),
               [this](unsigned a, unsigned b) {
-                  // 深度相同时，按度数排序
                   return interferenceGraph[a]->neighbors.size() >
                          interferenceGraph[b]->neighbors.size();
               });
 
     return candidates;
+}
+
+unsigned RegAllocChaitin::selectSpillCandidate() {
+    unsigned spillCandidate = 0;
+    unsigned minCost = UINT_MAX;
+    for (unsigned regNum : spilledRegs) {
+        if (!ABI::isReservedReg(regNum, assigningFloat)) {
+            auto currentCost = computeSpillCost(regNum);
+            if (currentCost < minCost) {
+                minCost = currentCost;
+                spillCandidate = regNum;
+            }
+        }
+    }
+    return spillCandidate;
 }
 
 void RegAllocChaitin::insertSpillCode(unsigned reg) {

@@ -15,7 +15,7 @@ namespace riscv64 {
 
 class StackFrameManager;     // 前向声明
 class BasicBlockReordering;  // 前向声明
-class Module;  // 前向声明
+class Module;                // 前向声明
 
 class Function {
    public:
@@ -25,7 +25,7 @@ class Function {
     explicit Function(std::string name)
         : name(std::move(name)),
           stackFrameManager_(std::make_unique<StackFrameManager>(this)) {}
-    
+
     explicit Function(std::string name, Module* parent_module)
         : name(std::move(name)),
           stackFrameManager_(std::make_unique<StackFrameManager>(this)),
@@ -101,8 +101,17 @@ class Function {
         throw std::runtime_error("BasicBlock " + bb->toString() +
                                  " not found in function: " + getName());
     }
+    midend::BasicBlock* getBasicBlock(BasicBlock* bb) const {
+        auto it = bbMapRev_.find(bb);
+        if (it != bbMapRev_.end()) {
+            return const_cast<midend::BasicBlock*>(it->second);
+        }
+        throw std::runtime_error("BasicBlock " + bb->toString() +
+                                 " not found in function: " + getName());
+    }
     void mapBasicBlock(const midend::BasicBlock* bb, BasicBlock* riscvBB) {
         bbMap_[bb] = riscvBB;
+        bbMapRev_[riscvBB] = bb;
     }
     StackFrameManager* getStackFrameManager() const {
         return stackFrameManager_.get();
@@ -140,6 +149,8 @@ class Function {
     std::vector<std::unique_ptr<BasicBlock>> basic_blocks;
     std::unique_ptr<StackFrameManager> stackFrameManager_;
     std::unordered_map<const midend::BasicBlock*, BasicBlock*> bbMap_;
+    std::unordered_map<BasicBlock*, const midend::BasicBlock*> bbMapRev_;
+
     Module* parent_module_ = nullptr;  // 指向父模块的指针
 };
 
