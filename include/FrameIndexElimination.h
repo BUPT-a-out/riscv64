@@ -108,27 +108,27 @@ class FrameIndexElimination {
 
         if (isValidImmediateOffset(imm)) {
             auto addInst = std::make_unique<Instruction>(Opcode::ADDI);
-            addInst->addOperand(
+            addInst->addOperand_(
                 std::make_unique<RegisterOperand>(dstReg, false));
-            addInst->addOperand(
+            addInst->addOperand_(
                 std::make_unique<RegisterOperand>(srcReg, false));
-            addInst->addOperand(std::make_unique<ImmediateOperand>(imm));
+            addInst->addOperand_(std::make_unique<ImmediateOperand>(imm));
             insts.push_back(std::move(addInst));
         } else {
             unsigned tmpReg = useT0 ? 5 : dstReg;
             // 使用临时寄存器处理大立即数
             auto liInst = std::make_unique<Instruction>(Opcode::LI);
-            liInst->addOperand(
+            liInst->addOperand_(
                 std::make_unique<RegisterOperand>(tmpReg, false));
-            liInst->addOperand(std::make_unique<ImmediateOperand>(imm));
+            liInst->addOperand_(std::make_unique<ImmediateOperand>(imm));
             insts.push_back(std::move(liInst));
 
             auto addInst = std::make_unique<Instruction>(Opcode::ADD);
-            addInst->addOperand(
+            addInst->addOperand_(
                 std::make_unique<RegisterOperand>(dstReg, false));
-            addInst->addOperand(
+            addInst->addOperand_(
                 std::make_unique<RegisterOperand>(srcReg, false));
-            addInst->addOperand(
+            addInst->addOperand_(
                 std::make_unique<RegisterOperand>(tmpReg, false));
             insts.push_back(std::move(addInst));
         }
@@ -145,26 +145,26 @@ class FrameIndexElimination {
         if (isValidImmediateOffset(-imm)) {
             // 可以用ADDI实现减法: dst = src + (-imm)
             auto addInst = std::make_unique<Instruction>(Opcode::ADDI);
-            addInst->addOperand(
+            addInst->addOperand_(
                 std::make_unique<RegisterOperand>(dstReg, false));
-            addInst->addOperand(
+            addInst->addOperand_(
                 std::make_unique<RegisterOperand>(srcReg, false));
-            addInst->addOperand(std::make_unique<ImmediateOperand>(-imm));
+            addInst->addOperand_(std::make_unique<ImmediateOperand>(-imm));
             insts.push_back(std::move(addInst));
         } else {
             // 使用临时寄存器处理大立即数
             auto liInst = std::make_unique<Instruction>(Opcode::LI);
-            liInst->addOperand(
+            liInst->addOperand_(
                 std::make_unique<RegisterOperand>(5, false));  // t0
-            liInst->addOperand(std::make_unique<ImmediateOperand>(imm));
+            liInst->addOperand_(std::make_unique<ImmediateOperand>(imm));
             insts.push_back(std::move(liInst));
 
             auto subInst = std::make_unique<Instruction>(Opcode::SUB);
-            subInst->addOperand(
+            subInst->addOperand_(
                 std::make_unique<RegisterOperand>(dstReg, false));
-            subInst->addOperand(
+            subInst->addOperand_(
                 std::make_unique<RegisterOperand>(srcReg, false));
-            subInst->addOperand(
+            subInst->addOperand_(
                 std::make_unique<RegisterOperand>(5, false));  // t0
             insts.push_back(std::move(subInst));
         }

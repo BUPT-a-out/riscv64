@@ -134,8 +134,8 @@ void ConstantFolding::foldInstruction(Instruction* inst,
     // 重写指令为 LI rd, imm
     inst->clearOperands();
     inst->setOpcode(Opcode::LI);
-    inst->addOperand(std::move(dest_clone));
-    inst->addOperand(std::make_unique<ImmediateOperand>(result.value()));
+    inst->addOperand_(std::move(dest_clone));
+    inst->addOperand_(std::make_unique<ImmediateOperand>(result.value()));
 
     DEBUG_OUT() << "Folded instruction: '" << original << "' to '"
                 << inst->toString() << "'" << std::endl;
@@ -182,9 +182,9 @@ void ConstantFolding::foldToITypeInst(Instruction* inst,
                 std::string original = inst->toString();
                 inst->clearOperands();
                 inst->setOpcode(Opcode::SGT);  // use pseudo greater-than
-                inst->addOperand(std::move(rdClone));
-                inst->addOperand(std::move(rsClone));
-                inst->addOperand(std::make_unique<ImmediateOperand>(immVal));
+                inst->addOperand_(std::move(rdClone));
+                inst->addOperand_(std::move(rsClone));
+                inst->addOperand_(std::make_unique<ImmediateOperand>(immVal));
                 DEBUG_OUT() << "Flip predicate (const-first SLT): '" << original
                             << "' -> '" << inst->toString() << "'" << std::endl;
                 // After rewriting, proceed with possible further peephole in
@@ -285,9 +285,9 @@ void ConstantFolding::foldToITypeInst(Instruction* inst,
 
     inst->clearOperands();
     inst->setOpcode(newOpcode);
-    inst->addOperand(std::move(rdClone));
-    inst->addOperand(std::move(rs1Clone));
-    inst->addOperand(std::make_unique<ImmediateOperand>(immValue));
+    inst->addOperand_(std::move(rdClone));
+    inst->addOperand_(std::move(rs1Clone));
+    inst->addOperand_(std::make_unique<ImmediateOperand>(immValue));
 
     DEBUG_OUT() << "Converted R-type to I-type instruction: '" << original
                 << "' -> '" << inst->toString() << "'" << std::endl;
@@ -330,9 +330,9 @@ void ConstantFolding::algebraicIdentitySimplify(Instruction* inst,
         auto srcClone = cloneReg(sourceRegOperand);        // clone before clear
         inst->clearOperands();
         inst->setOpcode(Opcode::ADDI);
-        inst->addOperand(std::move(destClone));
-        inst->addOperand(std::move(srcClone));
-        inst->addOperand(std::make_unique<ImmediateOperand>(0));
+        inst->addOperand_(std::move(destClone));
+        inst->addOperand_(std::move(srcClone));
+        inst->addOperand_(std::make_unique<ImmediateOperand>(0));
         // Constant propagation update
         auto itConst = virtualRegisterConstants.find(srcRegNum);
         if (itConst != virtualRegisterConstants.end()) {
@@ -350,8 +350,8 @@ void ConstantFolding::algebraicIdentitySimplify(Instruction* inst,
         auto destClone = Visitor::cloneRegister(destReg);
         inst->clearOperands();
         inst->setOpcode(Opcode::LI);
-        inst->addOperand(std::move(destClone));
-        inst->addOperand(std::make_unique<ImmediateOperand>(0));
+        inst->addOperand_(std::move(destClone));
+        inst->addOperand_(std::make_unique<ImmediateOperand>(0));
         mapRegToConstant(destRegNum, 0);
         DEBUG_OUT() << "Algebraic simplify: '" << original << "' -> '"
                     << inst->toString() << "'" << std::endl;
@@ -459,9 +459,9 @@ void ConstantFolding::strengthReduction(Instruction* inst,
         auto sourceClone = cloneRegOperand(fromReg);
         inst->clearOperands();
         inst->setOpcode(newOpcode);
-        inst->addOperand(std::move(destClone));
-        inst->addOperand(std::move(sourceClone));
-        inst->addOperand(std::make_unique<ImmediateOperand>(
+        inst->addOperand_(std::move(destClone));
+        inst->addOperand_(std::move(sourceClone));
+        inst->addOperand_(std::make_unique<ImmediateOperand>(
             static_cast<int64_t>(shiftAmount)));
         // Constant propagation update
         auto itConst = virtualRegisterConstants.find(sourceRegNum);
@@ -614,8 +614,8 @@ void ConstantFolding::bitwiseOperationSimplify(Instruction* inst,
         auto rdClone = cloneReg(rd);
         inst->clearOperands();
         inst->setOpcode(Opcode::LI);
-        inst->addOperand(std::move(rdClone));
-        inst->addOperand(
+        inst->addOperand_(std::move(rdClone));
+        inst->addOperand_(
             std::make_unique<ImmediateOperand>(static_cast<int64_t>(imm)));
         mapRegToConstant(rdNum, imm);
         DEBUG_OUT() << "Bitwise simplify: '" << original << "' -> '"
@@ -631,9 +631,9 @@ void ConstantFolding::bitwiseOperationSimplify(Instruction* inst,
         auto srcClone = cloneReg(src);
         inst->clearOperands();
         inst->setOpcode(Opcode::ADDI);
-        inst->addOperand(std::move(rdClone));
-        inst->addOperand(std::move(srcClone));
-        inst->addOperand(std::make_unique<ImmediateOperand>(0));
+        inst->addOperand_(std::move(rdClone));
+        inst->addOperand_(std::move(srcClone));
+        inst->addOperand_(std::make_unique<ImmediateOperand>(0));
         auto it = virtualRegisterConstants.find(srcNum);
         if (it != virtualRegisterConstants.end()) {
             mapRegToConstant(rdNum, it->second);
@@ -653,8 +653,8 @@ void ConstantFolding::bitwiseOperationSimplify(Instruction* inst,
         auto srcClone = cloneReg(src);
         inst->clearOperands();
         inst->setOpcode(Opcode::NOT);  // 伪指令：后续可降为 XORI rd, rs, -1
-        inst->addOperand(std::move(rdClone));
-        inst->addOperand(std::move(srcClone));
+        inst->addOperand_(std::move(rdClone));
+        inst->addOperand_(std::move(srcClone));
         auto it = virtualRegisterConstants.find(srcNum);
         if (it != virtualRegisterConstants.end()) {
             int32_t v = static_cast<int32_t>(it->second);
@@ -776,9 +776,9 @@ void ConstantFolding::mvToAddiw(Instruction* inst, BasicBlock* parent_bb) {
 
     inst->clearOperands();
     inst->setOpcode(ADDIW);
-    inst->addOperand(std::move(dest_op));
-    inst->addOperand(std::move(src_op));
-    inst->addOperand(std::make_unique<ImmediateOperand>(0));
+    inst->addOperand_(std::move(dest_op));
+    inst->addOperand_(std::move(src_op));
+    inst->addOperand_(std::make_unique<ImmediateOperand>(0));
 }
 
 void ConstantFolding::instructionReassociateAndCombine(Instruction* inst,
@@ -831,9 +831,9 @@ void ConstantFolding::instructionReassociateAndCombine(Instruction* inst,
 
             inst->clearOperands();
             // inst->setOpcode(inst->getOpcode() == ADDI ? ADDI : ADDIW);
-            inst->addOperand(std::move(dest_clone));
-            inst->addOperand(std::move(new_src));
-            inst->addOperand(std::make_unique<ImmediateOperand>(new_imm_val));
+            inst->addOperand_(std::move(dest_clone));
+            inst->addOperand_(std::move(new_src));
+            inst->addOperand_(std::make_unique<ImmediateOperand>(new_imm_val));
             DEBUG_OUT() << "Reassociate and combine: '" << original << "' -> '"
                         << inst->toString() << "'" << std::endl;
         }
@@ -854,8 +854,8 @@ void ConstantFolding::useZeroReg(Instruction* inst, BasicBlock* parent_bb) {
                     << std::endl;
         inst->clearOperands();
         inst->setOpcode(MV);
-        inst->addOperand(std::move(dest_reg));                   // rd
-        inst->addOperand(std::make_unique<RegisterOperand>("zero"));  // zero
+        inst->addOperand_(std::move(dest_reg));                        // rd
+        inst->addOperand_(std::make_unique<RegisterOperand>("zero"));  // zero
     }
 }
 

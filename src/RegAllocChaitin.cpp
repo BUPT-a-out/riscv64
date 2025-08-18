@@ -1001,9 +1001,9 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
                 // 1. 首先生成frameaddr指令获取溢出槽地址
                 auto frameAddrInst =
                     std::make_unique<Instruction>(Opcode::FRAMEADDR);
-                frameAddrInst->addOperand(
+                frameAddrInst->addOperand_(
                     std::make_unique<RegisterOperand>(addrReg, false));
-                frameAddrInst->addOperand(
+                frameAddrInst->addOperand_(
                     std::make_unique<FrameIndexOperand>(fi_id));
                 it = bb->insert(it, std::move(frameAddrInst));
                 ++it;
@@ -1011,18 +1011,18 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
                 // 2. 生成load指令从溢出槽加载值
                 if (assigningFloat) {
                     auto loadInst = std::make_unique<Instruction>(Opcode::FLW);
-                    loadInst->addOperand(
+                    loadInst->addOperand_(
                         std::make_unique<RegisterOperand>(dataReg, false));
-                    loadInst->addOperand(std::make_unique<MemoryOperand>(
+                    loadInst->addOperand_(std::make_unique<MemoryOperand>(
                         std::make_unique<RegisterOperand>(addrReg, false),
                         std::make_unique<ImmediateOperand>(0)));
                     it = bb->insert(it, std::move(loadInst));
                     ++it;
                 } else {
                     auto loadInst = std::make_unique<Instruction>(Opcode::LD);
-                    loadInst->addOperand(
+                    loadInst->addOperand_(
                         std::make_unique<RegisterOperand>(dataReg, false));
-                    loadInst->addOperand(std::make_unique<MemoryOperand>(
+                    loadInst->addOperand_(std::make_unique<MemoryOperand>(
                         std::make_unique<RegisterOperand>(addrReg, false),
                         std::make_unique<ImmediateOperand>(0)));
                     it = bb->insert(it, std::move(loadInst));
@@ -1050,9 +1050,9 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
 
                 auto frameAddrInst =
                     std::make_unique<Instruction>(Opcode::FRAMEADDR);
-                frameAddrInst->addOperand(
+                frameAddrInst->addOperand_(
                     std::make_unique<RegisterOperand>(addrReg, false));
-                frameAddrInst->addOperand(
+                frameAddrInst->addOperand_(
                     std::make_unique<FrameIndexOperand>(fi_id));
                 it = bb->insert(it, std::move(frameAddrInst));
                 ++it;
@@ -1060,17 +1060,17 @@ void RegAllocChaitin::insertSpillCode(unsigned reg) {
                 // 生成store指令将值存储到溢出槽
                 if (assigningFloat) {
                     auto storeInst = std::make_unique<Instruction>(Opcode::FSW);
-                    storeInst->addOperand(
+                    storeInst->addOperand_(
                         std::make_unique<RegisterOperand>(dataReg, false));
-                    storeInst->addOperand(std::make_unique<MemoryOperand>(
+                    storeInst->addOperand_(std::make_unique<MemoryOperand>(
                         std::make_unique<RegisterOperand>(addrReg, false),
                         std::make_unique<ImmediateOperand>(0)));
                     it = bb->insert(it, std::move(storeInst));
                 } else {
                     auto storeInst = std::make_unique<Instruction>(Opcode::SD);
-                    storeInst->addOperand(
+                    storeInst->addOperand_(
                         std::make_unique<RegisterOperand>(dataReg, false));
-                    storeInst->addOperand(std::make_unique<MemoryOperand>(
+                    storeInst->addOperand_(std::make_unique<MemoryOperand>(
                         std::make_unique<RegisterOperand>(addrReg, false),
                         std::make_unique<ImmediateOperand>(0)));
                     it = bb->insert(it, std::move(storeInst));

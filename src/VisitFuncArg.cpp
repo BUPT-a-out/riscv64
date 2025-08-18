@@ -30,8 +30,8 @@ void riscv64::Visitor::preProcessFuncArgs(const midend::Function* midend_func,
                     source_reg_operand->isFloatRegister()) {
                     auto fmov_inst = std::make_unique<Instruction>(
                         Opcode::FMOV_S, first_riscv_bb);
-                    fmov_inst->addOperand(std::move(dest_reg));
-                    fmov_inst->addOperand(std::move(source_reg));
+                    fmov_inst->addOperand_(std::move(dest_reg));
+                    fmov_inst->addOperand_(std::move(source_reg));
                     first_riscv_bb->addInstruction(std::move(fmov_inst));
                 } else {
                     storeOperandToReg(std::move(source_reg),

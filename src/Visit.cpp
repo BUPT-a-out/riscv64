@@ -242,10 +242,10 @@ std::unique_ptr<RegisterOperand> Visitor::ensureFloatReg(
         // 生成 FMV_W_X 指令：将整数寄存器的位模式移动到浮点寄存器
         auto fmv_inst =
             std::make_unique<Instruction>(Opcode::FMV_W_X, parent_bb);
-        fmv_inst->addOperand(std::make_unique<RegisterOperand>(
+        fmv_inst->addOperand_(std::make_unique<RegisterOperand>(
             float_reg->getRegNum(), float_reg->isVirtual(),
             RegisterType::Float));  // rd (浮点目标寄存器)
-        fmv_inst->addOperand(std::make_unique<RegisterOperand>(
+        fmv_inst->addOperand_(std::make_unique<RegisterOperand>(
             reg_op->getRegNum(), reg_op->isVirtual(),
             RegisterType::Integer));  // rs1 (整数源寄存器)
         parent_bb->addInstruction(std::move(fmv_inst));
@@ -275,10 +275,10 @@ std::unique_ptr<RegisterOperand> Visitor::ensureFloatReg(
             // 使用 fcvt.s.w 指令将整数零转换为浮点零
             auto fcvt_inst =
                 std::make_unique<Instruction>(Opcode::FCVT_S_W, parent_bb);
-            fcvt_inst->addOperand(std::make_unique<RegisterOperand>(
+            fcvt_inst->addOperand_(std::make_unique<RegisterOperand>(
                 float_reg->getRegNum(), float_reg->isVirtual(),
                 RegisterType::Float));  // rd (float)
-            fcvt_inst->addOperand(
+            fcvt_inst->addOperand_(
                 std::make_unique<RegisterOperand>("zero"));  // rs1 (int zero)
             parent_bb->addInstruction(std::move(fcvt_inst));
 
@@ -316,9 +316,9 @@ std::unique_ptr<MachineOperand> Visitor::visitCastInst(
             auto rs1 = immToReg(std::move(src_operand), parent_bb);
             auto instruction =
                 std::make_unique<Instruction>(Opcode::SLTIU, parent_bb);
-            instruction->addOperand(std::move(new_reg));  // rd
-            instruction->addOperand(std::move(rs1));      // rs1
-            instruction->addOperand(
+            instruction->addOperand_(std::move(new_reg));  // rd
+            instruction->addOperand_(std::move(rs1));      // rs1
+            instruction->addOperand_(
                 std::make_unique<ImmediateOperand>(1));  // imm
 
             parent_bb->addInstruction(std::move(instruction));
@@ -340,11 +340,11 @@ std::unique_ptr<MachineOperand> Visitor::visitCastInst(
 
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FCVT_W_S, parent_bb);
-            instruction->addOperand(std::make_unique<RegisterOperand>(
+            instruction->addOperand_(std::make_unique<RegisterOperand>(
                 new_reg_ptr->getRegNum(), new_reg_ptr->isVirtual(),
-                RegisterType::Integer));                      // rd (integer)
-            instruction->addOperand(std::move(src_operand));  // rs1 (float)
-            instruction->addOperand(
+                RegisterType::Integer));                       // rd (integer)
+            instruction->addOperand_(std::move(src_operand));  // rs1 (float)
+            instruction->addOperand_(
                 std::make_unique<LabelOperand>("rtz"));  // rtz, 截断到零
             parent_bb->addInstruction(std::move(instruction));
             return std::make_unique<RegisterOperand>(new_reg_ptr->getRegNum(),
@@ -365,10 +365,10 @@ std::unique_ptr<MachineOperand> Visitor::visitCastInst(
 
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FCVT_S_W, parent_bb);
-            instruction->addOperand(std::make_unique<RegisterOperand>(
+            instruction->addOperand_(std::make_unique<RegisterOperand>(
                 new_reg_ptr->getRegNum(), new_reg_ptr->isVirtual(),
                 RegisterType::Float));  // rd (float)
-            instruction->addOperand(std::make_unique<RegisterOperand>(
+            instruction->addOperand_(std::make_unique<RegisterOperand>(
                 src_reg->getRegNum(), src_reg->isVirtual(),
                 RegisterType::Integer));  // rs1 (integer)
             parent_bb->addInstruction(std::move(instruction));
@@ -429,9 +429,9 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
             // 步骤 1: 使用 'la' 加载全局变量的基地址到一个临时寄存器
             auto base_addr_reg = codeGen_->allocateIntReg();
             auto la_inst = std::make_unique<Instruction>(Opcode::LA, parent_bb);
-            la_inst->addOperand(cloneRegister(base_addr_reg.get()));
+            la_inst->addOperand_(cloneRegister(base_addr_reg.get()));
             // 注意：这里的 LabelOperand 只包含符号名，没有任何偏移量 (addend)！
-            la_inst->addOperand(std::make_unique<LabelOperand>(
+            la_inst->addOperand_(std::make_unique<LabelOperand>(
                 base_global->getName()));  // 偏移量必须为 0
             parent_bb->addInstruction(std::move(la_inst));
 
@@ -442,9 +442,9 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
                 if (isValidImmediateOffset(total_const_offset)) {
                     auto addi_inst =
                         std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
-                    addi_inst->addOperand(cloneRegister(final_addr_reg.get()));
-                    addi_inst->addOperand(cloneRegister(base_addr_reg.get()));
-                    addi_inst->addOperand(
+                    addi_inst->addOperand_(cloneRegister(final_addr_reg.get()));
+                    addi_inst->addOperand_(cloneRegister(base_addr_reg.get()));
+                    addi_inst->addOperand_(
                         std::make_unique<ImmediateOperand>(total_const_offset));
                     parent_bb->addInstruction(std::move(addi_inst));
                 } else {
@@ -454,9 +454,9 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
                     auto add_inst =
                         std::make_unique<Instruction>(Opcode::ADD, parent_bb);
                     final_addr_reg = codeGen_->allocateIntReg();
-                    add_inst->addOperand(cloneRegister(final_addr_reg.get()));
-                    add_inst->addOperand(cloneRegister(base_addr_reg.get()));
-                    add_inst->addOperand(std::move(offset_reg));
+                    add_inst->addOperand_(cloneRegister(final_addr_reg.get()));
+                    add_inst->addOperand_(cloneRegister(base_addr_reg.get()));
+                    add_inst->addOperand_(std::move(offset_reg));
                     parent_bb->addInstruction(std::move(add_inst));
                 }
             } else {
@@ -479,8 +479,8 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
         current_addr_reg = codeGen_->allocateIntReg();
         auto get_base_addr_inst =
             std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
-        get_base_addr_inst->addOperand(cloneRegister(current_addr_reg.get()));
-        get_base_addr_inst->addOperand(std::move(base_addr_operand));
+        get_base_addr_inst->addOperand_(cloneRegister(current_addr_reg.get()));
+        get_base_addr_inst->addOperand_(std::move(base_addr_operand));
         parent_bb->addInstruction(std::move(get_base_addr_inst));
     } else if (base_addr_operand->getType() == OperandType::Register) {
         auto* reg_op = dynamic_cast<RegisterOperand*>(base_addr_operand.get());
@@ -512,9 +512,9 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
             if (isValidImmediateOffset(offset)) {
                 auto addi_inst =
                     std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
-                addi_inst->addOperand(cloneRegister(new_addr_reg.get()));
-                addi_inst->addOperand(cloneRegister(current_addr_reg.get()));
-                addi_inst->addOperand(
+                addi_inst->addOperand_(cloneRegister(new_addr_reg.get()));
+                addi_inst->addOperand_(cloneRegister(current_addr_reg.get()));
+                addi_inst->addOperand_(
                     std::make_unique<ImmediateOperand>(offset));
                 parent_bb->addInstruction(std::move(addi_inst));
             } else {
@@ -522,9 +522,9 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
                     std::make_unique<ImmediateOperand>(offset), parent_bb);
                 auto add_inst =
                     std::make_unique<Instruction>(Opcode::ADD, parent_bb);
-                add_inst->addOperand(cloneRegister(new_addr_reg.get()));
-                add_inst->addOperand(cloneRegister(current_addr_reg.get()));
-                add_inst->addOperand(std::move(offset_reg));
+                add_inst->addOperand_(cloneRegister(new_addr_reg.get()));
+                add_inst->addOperand_(cloneRegister(current_addr_reg.get()));
+                add_inst->addOperand_(std::move(offset_reg));
                 parent_bb->addInstruction(std::move(add_inst));
             }
             current_addr_reg = std::move(new_addr_reg);
@@ -542,9 +542,9 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
                 offset_reg = codeGen_->allocateIntReg();
                 auto slli_inst =
                     std::make_unique<Instruction>(Opcode::SLLI, parent_bb);
-                slli_inst->addOperand(cloneRegister(offset_reg.get()));
-                slli_inst->addOperand(std::move(index_reg));
-                slli_inst->addOperand(
+                slli_inst->addOperand_(cloneRegister(offset_reg.get()));
+                slli_inst->addOperand_(std::move(index_reg));
+                slli_inst->addOperand_(
                     std::make_unique<ImmediateOperand>(shift_amount));
                 parent_bb->addInstruction(std::move(slli_inst));
             } else {  // 一般情况
@@ -555,18 +555,18 @@ std::unique_ptr<MachineOperand> Visitor::visitGEPInst(
                 offset_reg = codeGen_->allocateIntReg();
                 auto mul_inst =
                     std::make_unique<Instruction>(Opcode::MUL, parent_bb);
-                mul_inst->addOperand(cloneRegister(offset_reg.get()));
-                mul_inst->addOperand(std::move(index_reg));
-                mul_inst->addOperand(std::move(stride_reg));
+                mul_inst->addOperand_(cloneRegister(offset_reg.get()));
+                mul_inst->addOperand_(std::move(index_reg));
+                mul_inst->addOperand_(std::move(stride_reg));
                 parent_bb->addInstruction(std::move(mul_inst));
             }
 
             auto new_addr_reg = codeGen_->allocateIntReg();
             auto add_inst =
                 std::make_unique<Instruction>(Opcode::ADD, parent_bb);
-            add_inst->addOperand(cloneRegister(new_addr_reg.get()));
-            add_inst->addOperand(cloneRegister(current_addr_reg.get()));
-            add_inst->addOperand(std::move(offset_reg));
+            add_inst->addOperand_(cloneRegister(new_addr_reg.get()));
+            add_inst->addOperand_(cloneRegister(current_addr_reg.get()));
+            add_inst->addOperand_(std::move(offset_reg));
             parent_bb->addInstruction(std::move(add_inst));
             current_addr_reg = std::move(new_addr_reg);
         }
@@ -641,27 +641,27 @@ std::unique_ptr<MachineOperand> Visitor::visitCallInst(
         if (isValidImmediateOffset(-stack_space)) {
             auto stack_alloc_inst =
                 std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
-            stack_alloc_inst->addOperand(
+            stack_alloc_inst->addOperand_(
                 std::make_unique<RegisterOperand>("sp"));
-            stack_alloc_inst->addOperand(
+            stack_alloc_inst->addOperand_(
                 std::make_unique<RegisterOperand>("sp"));
-            stack_alloc_inst->addOperand(std::make_unique<ImmediateOperand>(
+            stack_alloc_inst->addOperand_(std::make_unique<ImmediateOperand>(
                 -static_cast<int64_t>(stack_space)));
             parent_bb->addInstruction(std::move(stack_alloc_inst));
         } else {
             auto li_inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
             auto li_reg = codeGen_->allocateIntReg();
-            li_inst->addOperand(std::make_unique<RegisterOperand>(
+            li_inst->addOperand_(std::make_unique<RegisterOperand>(
                 li_reg->getRegNum(), li_reg->isVirtual()));
-            li_inst->addOperand(std::make_unique<ImmediateOperand>(
+            li_inst->addOperand_(std::make_unique<ImmediateOperand>(
                 -static_cast<int64_t>(stack_space)));
             parent_bb->addInstruction(std::move(li_inst));
 
             auto add_inst =
                 std::make_unique<Instruction>(Opcode::ADD, parent_bb);
-            add_inst->addOperand(std::make_unique<RegisterOperand>("sp"));
-            add_inst->addOperand(std::make_unique<RegisterOperand>("sp"));
-            add_inst->addOperand(std::make_unique<RegisterOperand>(
+            add_inst->addOperand_(std::make_unique<RegisterOperand>("sp"));
+            add_inst->addOperand_(std::make_unique<RegisterOperand>("sp"));
+            add_inst->addOperand_(std::make_unique<RegisterOperand>(
                 li_reg->getRegNum(), li_reg->isVirtual()));
             parent_bb->addInstruction(std::move(add_inst));
         }
@@ -744,7 +744,7 @@ std::unique_ptr<MachineOperand> Visitor::visitCallInst(
     // 生成调用指令
     auto riscv_call_inst =
         std::make_unique<Instruction>(Opcode::CALL, parent_bb);
-    riscv_call_inst->addOperand(
+    riscv_call_inst->addOperand_(
         std::make_unique<LabelOperand>(called_func->getName()));  // 函数名
     parent_bb->addInstruction(std::move(riscv_call_inst));
 
@@ -756,27 +756,27 @@ std::unique_ptr<MachineOperand> Visitor::visitCallInst(
             // 栈空间在立即数范围内，直接使用 addi
             auto stack_restore_inst =
                 std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
-            stack_restore_inst->addOperand(
+            stack_restore_inst->addOperand_(
                 std::make_unique<RegisterOperand>("sp"));
-            stack_restore_inst->addOperand(
+            stack_restore_inst->addOperand_(
                 std::make_unique<RegisterOperand>("sp"));
-            stack_restore_inst->addOperand(
+            stack_restore_inst->addOperand_(
                 std::make_unique<ImmediateOperand>(positive_space));
             parent_bb->addInstruction(std::move(stack_restore_inst));
         } else {
             // 栈空间超出立即数范围，使用 li + add
             auto li_inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
-            li_inst->addOperand(
+            li_inst->addOperand_(
                 std::make_unique<RegisterOperand>(5, false));  // t0
-            li_inst->addOperand(std::make_unique<ImmediateOperand>(
+            li_inst->addOperand_(std::make_unique<ImmediateOperand>(
                 static_cast<int64_t>(stack_space)));
             parent_bb->addInstruction(std::move(li_inst));
 
             auto add_inst =
                 std::make_unique<Instruction>(Opcode::ADD, parent_bb);
-            add_inst->addOperand(std::make_unique<RegisterOperand>("sp"));
-            add_inst->addOperand(std::make_unique<RegisterOperand>("sp"));
-            add_inst->addOperand(
+            add_inst->addOperand_(std::make_unique<RegisterOperand>("sp"));
+            add_inst->addOperand_(std::make_unique<RegisterOperand>("sp"));
+            add_inst->addOperand_(
                 std::make_unique<RegisterOperand>(5, false));  // t0
             parent_bb->addInstruction(std::move(add_inst));
         }
@@ -963,12 +963,12 @@ void Visitor::generateParallelCopyForEdge(
                 std::make_unique<Instruction>(Opcode::FRAMEADDR, pred_bb);
 
             // 操作数1: 目标寄存器 (我们新分配的临时寄存器)
-            frameaddr_inst->addOperand(std::make_unique<RegisterOperand>(
+            frameaddr_inst->addOperand_(std::make_unique<RegisterOperand>(
                 temp_addr_reg->getRegNum(), temp_addr_reg->isVirtual(),
                 RegisterType::Integer));
 
             // 操作数2: 源 (使用你的 FrameIndexOperand)
-            frameaddr_inst->addOperand(
+            frameaddr_inst->addOperand_(
                 std::make_unique<FrameIndexOperand>(frame_index));
 
             // 将指令插入到前驱块的终结符之前
@@ -1138,18 +1138,18 @@ void Visitor::generateCopyInstruction(
 
             // 先加载立即数到临时整数寄存器
             auto li_inst = std::make_unique<Instruction>(Opcode::LI, bb);
-            li_inst->addOperand(std::make_unique<RegisterOperand>(
+            li_inst->addOperand_(std::make_unique<RegisterOperand>(
                 temp_reg->getRegNum(), temp_reg->isVirtual(),
                 RegisterType::Integer));
-            li_inst->addOperand(std::move(src_operand));
+            li_inst->addOperand_(std::move(src_operand));
             bb->insert(insert_pos, std::move(li_inst));
 
             // 然后从整数寄存器移动到浮点寄存器
             auto fmv_inst = std::make_unique<Instruction>(Opcode::FMV_W_X, bb);
-            fmv_inst->addOperand(std::make_unique<RegisterOperand>(
+            fmv_inst->addOperand_(std::make_unique<RegisterOperand>(
                 dest_reg->getRegNum(), dest_reg->isVirtual(),
                 RegisterType::Float));
-            fmv_inst->addOperand(std::make_unique<RegisterOperand>(
+            fmv_inst->addOperand_(std::make_unique<RegisterOperand>(
                 temp_reg->getRegNum(), temp_reg->isVirtual(),
                 RegisterType::Integer));
             bb->insert(insert_pos, std::move(fmv_inst));
@@ -1159,21 +1159,21 @@ void Visitor::generateCopyInstruction(
                 // 使用 addi rd, x0, imm
                 auto addi_inst =
                     std::make_unique<Instruction>(Opcode::ADDI, bb);
-                addi_inst->addOperand(std::make_unique<RegisterOperand>(
+                addi_inst->addOperand_(std::make_unique<RegisterOperand>(
                     dest_reg->getRegNum(), dest_reg->isVirtual(),
                     dest_reg->getRegisterType()));
-                addi_inst->addOperand(std::make_unique<RegisterOperand>(
+                addi_inst->addOperand_(std::make_unique<RegisterOperand>(
                     0, false, RegisterType::Integer));  // x0
-                addi_inst->addOperand(
+                addi_inst->addOperand_(
                     std::make_unique<ImmediateOperand>(value));
                 bb->insert(insert_pos, std::move(addi_inst));
             } else {
                 // 使用 li 指令
                 auto li_inst = std::make_unique<Instruction>(Opcode::LI, bb);
-                li_inst->addOperand(std::make_unique<RegisterOperand>(
+                li_inst->addOperand_(std::make_unique<RegisterOperand>(
                     dest_reg->getRegNum(), dest_reg->isVirtual(),
                     dest_reg->getRegisterType()));
-                li_inst->addOperand(std::make_unique<ImmediateOperand>(value));
+                li_inst->addOperand_(std::make_unique<ImmediateOperand>(value));
                 bb->insert(insert_pos, std::move(li_inst));
             }
         }
@@ -1185,23 +1185,23 @@ void Visitor::generateCopyInstruction(
             // 浮点寄存器之间的拷贝，使用 fsgnj.s 指令
             auto fsgnj_inst =
                 std::make_unique<Instruction>(Opcode::FSGNJ_S, bb);
-            fsgnj_inst->addOperand(std::make_unique<RegisterOperand>(
+            fsgnj_inst->addOperand_(std::make_unique<RegisterOperand>(
                 dest_reg->getRegNum(), dest_reg->isVirtual(),
                 dest_reg->getRegisterType()));
-            fsgnj_inst->addOperand(std::make_unique<RegisterOperand>(
+            fsgnj_inst->addOperand_(std::make_unique<RegisterOperand>(
                 src_reg->getRegNum(), src_reg->isVirtual(),
                 src_reg->getRegisterType()));
-            fsgnj_inst->addOperand(std::make_unique<RegisterOperand>(
+            fsgnj_inst->addOperand_(std::make_unique<RegisterOperand>(
                 src_reg->getRegNum(), src_reg->isVirtual(),
                 src_reg->getRegisterType()));  // FSGNJ.S 需要两个源操作数
             bb->insert(insert_pos, std::move(fsgnj_inst));
         } else {
             // 整数寄存器拷贝，使用 mv 指令
             auto mv_inst = std::make_unique<Instruction>(Opcode::MV, bb);
-            mv_inst->addOperand(std::make_unique<RegisterOperand>(
+            mv_inst->addOperand_(std::make_unique<RegisterOperand>(
                 dest_reg->getRegNum(), dest_reg->isVirtual(),
                 dest_reg->getRegisterType()));
-            mv_inst->addOperand(std::move(src_operand));
+            mv_inst->addOperand_(std::move(src_operand));
             bb->insert(insert_pos, std::move(mv_inst));
         }
     }
@@ -1257,10 +1257,10 @@ void Visitor::processDeferredPhiNode(const midend::Instruction* inst,
                 auto temp_reg = codeGen_->allocateIntReg();
                 auto li_inst =
                     std::make_unique<Instruction>(Opcode::LI, incoming_bb);
-                li_inst->addOperand(std::make_unique<RegisterOperand>(
+                li_inst->addOperand_(std::make_unique<RegisterOperand>(
                     temp_reg->getRegNum(), temp_reg->isVirtual(),
                     RegisterType::Integer));
-                li_inst->addOperand(
+                li_inst->addOperand_(
                     std::make_unique<ImmediateOperand>(value_int));
                 incoming_bb->insert(insert_pos, std::move(li_inst));
                 value_operand = std::make_unique<RegisterOperand>(
@@ -1282,20 +1282,20 @@ void Visitor::processDeferredPhiNode(const midend::Instruction* inst,
 
             auto li_inst =
                 std::make_unique<Instruction>(Opcode::LI, incoming_bb);
-            li_inst->addOperand(std::make_unique<RegisterOperand>(
+            li_inst->addOperand_(std::make_unique<RegisterOperand>(
                 temp_reg->getRegNum(), temp_reg->isVirtual(),
                 RegisterType::Integer));
-            li_inst->addOperand(
+            li_inst->addOperand_(
                 std::make_unique<ImmediateOperand>(converter.i));
             incoming_bb->insert(insert_pos, std::move(li_inst));
 
             auto fmv_inst =
                 std::make_unique<Instruction>(Opcode::FMV_W_X, incoming_bb);
             auto float_reg = codeGen_->allocateFloatReg();
-            fmv_inst->addOperand(std::make_unique<RegisterOperand>(
+            fmv_inst->addOperand_(std::make_unique<RegisterOperand>(
                 float_reg->getRegNum(), float_reg->isVirtual(),
                 RegisterType::Float));
-            fmv_inst->addOperand(std::make_unique<RegisterOperand>(
+            fmv_inst->addOperand_(std::make_unique<RegisterOperand>(
                 temp_reg->getRegNum(), temp_reg->isVirtual(),
                 RegisterType::Integer));
             incoming_bb->insert(insert_pos, std::move(fmv_inst));
@@ -1346,7 +1346,7 @@ void Visitor::visitBranchInst(const midend::Instruction* inst,
         // 处理无条件跳转
         auto* target_bb = branch_inst->getTargetBB();
         auto instruction = std::make_unique<Instruction>(Opcode::J, parent_bb);
-        instruction->addOperand(std::make_unique<LabelOperand>(target_bb));
+        instruction->addOperand_(std::make_unique<LabelOperand>(target_bb));
         parent_bb->addInstruction(std::move(instruction));
     } else {
         // 处理条件跳转
@@ -1362,14 +1362,14 @@ void Visitor::visitBranchInst(const midend::Instruction* inst,
                 // 条件为真，跳转到真分支
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::J, parent_bb);
-                instruction->addOperand(
+                instruction->addOperand_(
                     std::make_unique<LabelOperand>(true_bb));
                 parent_bb->addInstruction(std::move(instruction));
             } else {
                 // 条件为假，跳转到假分支
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::J, parent_bb);
-                instruction->addOperand(
+                instruction->addOperand_(
                     std::make_unique<LabelOperand>(false_bb));
                 parent_bb->addInstruction(std::move(instruction));
             }
@@ -1383,24 +1383,24 @@ void Visitor::visitBranchInst(const midend::Instruction* inst,
 
         // 保存条件值到临时寄存器
         auto mv_inst = std::make_unique<Instruction>(Opcode::MV, parent_bb);
-        mv_inst->addOperand(std::make_unique<RegisterOperand>(
+        mv_inst->addOperand_(std::make_unique<RegisterOperand>(
             temp_condition_reg->getRegNum(), temp_condition_reg->isVirtual()));
-        mv_inst->addOperand(std::move(condition_reg));
+        mv_inst->addOperand_(std::move(condition_reg));
         parent_bb->addInstruction(std::move(mv_inst));
 
         // 使用临时寄存器进行条件跳转
         auto instruction =
             std::make_unique<Instruction>(Opcode::BNEZ, parent_bb);
-        instruction->addOperand(std::make_unique<RegisterOperand>(
+        instruction->addOperand_(std::make_unique<RegisterOperand>(
             temp_condition_reg->getRegNum(), temp_condition_reg->isVirtual()));
-        instruction->addOperand(
+        instruction->addOperand_(
             std::make_unique<LabelOperand>(true_bb));  // 真分支标签
         parent_bb->addInstruction(std::move(instruction));
 
         // 生成无条件跳转到假分支的指令
         auto false_instruction =
             std::make_unique<Instruction>(Opcode::J, parent_bb);
-        false_instruction->addOperand(
+        false_instruction->addOperand_(
             std::make_unique<LabelOperand>(false_bb));  // 跳转到假分支标签
         parent_bb->addInstruction(std::move(false_instruction));
     }
@@ -1546,9 +1546,9 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
         auto frame_addr_reg = codeGen_->allocateIntReg();
         auto store_frame_addr_inst =
             std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
-        store_frame_addr_inst->addOperand(std::make_unique<RegisterOperand>(
+        store_frame_addr_inst->addOperand_(std::make_unique<RegisterOperand>(
             frame_addr_reg->getRegNum(), frame_addr_reg->isVirtual()));  // rd
-        store_frame_addr_inst->addOperand(
+        store_frame_addr_inst->addOperand_(
             std::make_unique<FrameIndexOperand>(frame_id));  // FI
         parent_bb->addInstruction(std::move(store_frame_addr_inst));
 
@@ -1566,9 +1566,9 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
                     << std::endl;
         auto store_inst_new =
             std::make_unique<Instruction>(store_opcode, parent_bb);
-        store_inst_new->addOperand(
+        store_inst_new->addOperand_(
             std::move(value_operand));  // source register
-        store_inst_new->addOperand(std::make_unique<MemoryOperand>(
+        store_inst_new->addOperand_(std::make_unique<MemoryOperand>(
             cloneRegister(frame_addr_reg.get()),
             std::make_unique<ImmediateOperand>(0)));  // memory address
         parent_bb->addInstruction(std::move(store_inst_new));
@@ -1600,9 +1600,9 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
                     << std::endl;
         auto store_inst_new =
             std::make_unique<Instruction>(store_opcode, parent_bb);
-        store_inst_new->addOperand(
+        store_inst_new->addOperand_(
             std::move(value_operand));  // source register
-        store_inst_new->addOperand(std::make_unique<MemoryOperand>(
+        store_inst_new->addOperand_(std::make_unique<MemoryOperand>(
             std::make_unique<RegisterOperand>(address_reg->getRegNum(),
                                               address_reg->isVirtual()),
             std::make_unique<ImmediateOperand>(0)));  // memory address
@@ -1615,9 +1615,9 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
         auto global_addr_reg = codeGen_->allocateIntReg();
         auto global_addr_inst =
             std::make_unique<Instruction>(Opcode::LA, parent_bb);
-        global_addr_inst->addOperand(std::make_unique<RegisterOperand>(
+        global_addr_inst->addOperand_(std::make_unique<RegisterOperand>(
             global_addr_reg->getRegNum(), global_addr_reg->isVirtual()));  // rd
-        global_addr_inst->addOperand(std::make_unique<LabelOperand>(
+        global_addr_inst->addOperand_(std::make_unique<LabelOperand>(
             global_var->getName()));  // global symbol
         parent_bb->addInstruction(std::move(global_addr_inst));
 
@@ -1634,9 +1634,9 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
                     << std::endl;
         auto store_inst_new =
             std::make_unique<Instruction>(store_opcode, parent_bb);
-        store_inst_new->addOperand(
+        store_inst_new->addOperand_(
             std::move(value_operand));  // source register
-        store_inst_new->addOperand(std::make_unique<MemoryOperand>(
+        store_inst_new->addOperand_(std::make_unique<MemoryOperand>(
             std::make_unique<RegisterOperand>(global_addr_reg->getRegNum(),
                                               global_addr_reg->isVirtual()),
             std::make_unique<ImmediateOperand>(0)));  // memory address
@@ -1684,9 +1684,9 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
         auto frame_addr_reg = codeGen_->allocateIntReg();
         auto load_frame_addr_inst =
             std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
-        load_frame_addr_inst->addOperand(std::make_unique<RegisterOperand>(
+        load_frame_addr_inst->addOperand_(std::make_unique<RegisterOperand>(
             frame_addr_reg->getRegNum(), frame_addr_reg->isVirtual()));  // rd
-        load_frame_addr_inst->addOperand(
+        load_frame_addr_inst->addOperand_(
             std::make_unique<FrameIndexOperand>(frame_id));  // FI
         parent_bb->addInstruction(std::move(load_frame_addr_inst));
 
@@ -1743,9 +1743,9 @@ std::unique_ptr<MachineOperand> Visitor::visitLoadInst(
         auto global_addr_reg = codeGen_->allocateIntReg();
         auto global_addr_inst =
             std::make_unique<Instruction>(Opcode::LA, parent_bb);
-        global_addr_inst->addOperand(std::make_unique<RegisterOperand>(
+        global_addr_inst->addOperand_(std::make_unique<RegisterOperand>(
             global_addr_reg->getRegNum(), global_addr_reg->isVirtual()));  // rd
-        global_addr_inst->addOperand(std::make_unique<LabelOperand>(
+        global_addr_inst->addOperand_(std::make_unique<LabelOperand>(
             global_var->getName()));  // global symbol
         parent_bb->addInstruction(std::move(global_addr_inst));
 
@@ -1815,10 +1815,10 @@ std::unique_ptr<MachineOperand> Visitor::visitUnaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual(),
                     RegisterType::Integer));
-                instruction->addOperand(std::make_unique<ImmediateOperand>(
+                instruction->addOperand_(std::make_unique<ImmediateOperand>(
                     imm_operand->getValue()));
                 parent_bb->addInstruction(std::move(instruction));
             }
@@ -1857,10 +1857,10 @@ std::unique_ptr<MachineOperand> Visitor::visitUnaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual(),
                     RegisterType::Integer));
-                instruction->addOperand(
+                instruction->addOperand_(
                     std::make_unique<ImmediateOperand>(result));
                 parent_bb->addInstruction(std::move(instruction));
             }
@@ -1880,10 +1880,10 @@ std::unique_ptr<MachineOperand> Visitor::visitUnaryOp(
             auto new_reg = codeGen_->allocateFloatReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FNEG_S, parent_bb);
-            instruction->addOperand(std::make_unique<RegisterOperand>(
+            instruction->addOperand_(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual(),
-                RegisterType::Float));                        // rd
-            instruction->addOperand(std::move(operand_reg));  // rs1
+                RegisterType::Float));                         // rd
+            instruction->addOperand_(std::move(operand_reg));  // rs1
             parent_bb->addInstruction(std::move(instruction));
 
             codeGen_->mapValueToReg(inst, new_reg->getRegNum(),
@@ -1896,11 +1896,11 @@ std::unique_ptr<MachineOperand> Visitor::visitUnaryOp(
             auto new_reg = codeGen_->allocateIntReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::SUB, parent_bb);
-            instruction->addOperand(std::make_unique<RegisterOperand>(
+            instruction->addOperand_(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-            instruction->addOperand(std::make_unique<RegisterOperand>(
+            instruction->addOperand_(std::make_unique<RegisterOperand>(
                 "zero"));  // rs1 (zero register)
-            instruction->addOperand(std::move(operand_reg));  // rs2
+            instruction->addOperand_(std::move(operand_reg));  // rs2
             parent_bb->addInstruction(std::move(instruction));
 
             codeGen_->mapValueToReg(inst, new_reg->getRegNum(),
@@ -1929,10 +1929,10 @@ std::unique_ptr<MachineOperand> Visitor::visitUnaryOp(
         auto new_reg = codeGen_->allocateIntReg();
         auto instruction =
             std::make_unique<Instruction>(Opcode::SLTIU, parent_bb);
-        instruction->addOperand(std::make_unique<RegisterOperand>(
-            new_reg->getRegNum(), new_reg->isVirtual()));                // rd
-        instruction->addOperand(std::move(operand_reg));                 // rs1
-        instruction->addOperand(std::make_unique<ImmediateOperand>(1));  // imm
+        instruction->addOperand_(std::make_unique<RegisterOperand>(
+            new_reg->getRegNum(), new_reg->isVirtual()));                 // rd
+        instruction->addOperand_(std::move(operand_reg));                 // rs1
+        instruction->addOperand_(std::make_unique<ImmediateOperand>(1));  // imm
         parent_bb->addInstruction(std::move(instruction));
 
         codeGen_->mapValueToReg(inst, new_reg->getRegNum(),
@@ -2015,10 +2015,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     new_reg = codeGen_->allocateIntReg();
                     auto instruction =
                         std::make_unique<Instruction>(Opcode::LI, parent_bb);
-                    instruction->addOperand(std::make_unique<RegisterOperand>(
+                    instruction->addOperand_(std::make_unique<RegisterOperand>(
                         new_reg->getRegNum(), new_reg->isVirtual(),
                         RegisterType::Integer));
-                    instruction->addOperand(
+                    instruction->addOperand_(
                         std::make_unique<ImmediateOperand>(result));
                     parent_bb->addInstruction(std::move(instruction));
                 }
@@ -2034,11 +2034,11 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateFloatReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::FADD_S, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual(),
-                    RegisterType::Float));                // rd
-                instruction->addOperand(std::move(lhs));  // rs1
-                instruction->addOperand(std::move(rhs));  // rs2
+                    RegisterType::Float));                 // rd
+                instruction->addOperand_(std::move(lhs));  // rs1
+                instruction->addOperand_(std::move(rhs));  // rs2
                 parent_bb->addInstruction(std::move(instruction));
             } else {
                 // 整数加法：原有逻辑
@@ -2057,12 +2057,12 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                         (lhs->getType() == OperandType::Register ? lhs.get()
                                                                  : rhs.get()));
 
-                    instruction->addOperand(std::make_unique<RegisterOperand>(
+                    instruction->addOperand_(std::make_unique<RegisterOperand>(
                         new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                    instruction->addOperand(std::make_unique<RegisterOperand>(
+                    instruction->addOperand_(std::make_unique<RegisterOperand>(
                         reg_operand->getRegNum(),
                         reg_operand->isVirtual()));  // rs1
-                    instruction->addOperand(std::make_unique<ImmediateOperand>(
+                    instruction->addOperand_(std::make_unique<ImmediateOperand>(
                         imm_operand->getValue()));  // imm
 
                     parent_bb->addInstruction(std::move(instruction));
@@ -2071,10 +2071,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     new_reg = codeGen_->allocateIntReg();
                     auto instruction =
                         std::make_unique<Instruction>(Opcode::ADDW, parent_bb);
-                    instruction->addOperand(std::make_unique<RegisterOperand>(
+                    instruction->addOperand_(std::make_unique<RegisterOperand>(
                         new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                    instruction->addOperand(std::move(lhs));           // rs1
-                    instruction->addOperand(std::move(rhs));           // rs2
+                    instruction->addOperand_(std::move(lhs));          // rs1
+                    instruction->addOperand_(std::move(rhs));          // rs2
                     parent_bb->addInstruction(std::move(instruction));
                 }
             }
@@ -2101,9 +2101,9 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     new_reg = codeGen_->allocateIntReg();
                     auto instruction =
                         std::make_unique<Instruction>(Opcode::LI, parent_bb);
-                    instruction->addOperand(std::make_unique<RegisterOperand>(
+                    instruction->addOperand_(std::make_unique<RegisterOperand>(
                         new_reg->getRegNum(), new_reg->isVirtual()));
-                    instruction->addOperand(
+                    instruction->addOperand_(
                         std::make_unique<ImmediateOperand>(result));
                     parent_bb->addInstruction(std::move(instruction));
                 }
@@ -2112,11 +2112,11 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateFloatReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::FSUB_S, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual(),
-                    RegisterType::Float));                // rd
-                instruction->addOperand(std::move(lhs));  // rs1
-                instruction->addOperand(std::move(rhs));  // rs2
+                    RegisterType::Float));                 // rd
+                instruction->addOperand_(std::move(lhs));  // rs1
+                instruction->addOperand_(std::move(rhs));  // rs2
                 parent_bb->addInstruction(std::move(instruction));
             } else {
                 // 整数减法：原有逻辑
@@ -2126,10 +2126,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     new_reg = codeGen_->allocateIntReg();
                     auto instruction =
                         std::make_unique<Instruction>(Opcode::ADDIW, parent_bb);
-                    instruction->addOperand(std::make_unique<RegisterOperand>(
+                    instruction->addOperand_(std::make_unique<RegisterOperand>(
                         new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                    instruction->addOperand(std::move(lhs));           // rs1
-                    instruction->addOperand(std::make_unique<ImmediateOperand>(
+                    instruction->addOperand_(std::move(lhs));          // rs1
+                    instruction->addOperand_(std::make_unique<ImmediateOperand>(
                         -rhs_imm->getValue()));  // -imm
                     parent_bb->addInstruction(std::move(instruction));
                 } else {
@@ -2140,10 +2140,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     new_reg = codeGen_->allocateIntReg();
                     auto instruction =
                         std::make_unique<Instruction>(Opcode::SUBW, parent_bb);
-                    instruction->addOperand(std::make_unique<RegisterOperand>(
+                    instruction->addOperand_(std::make_unique<RegisterOperand>(
                         new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                    instruction->addOperand(std::move(lhs_reg));       // rs1
-                    instruction->addOperand(std::move(rhs_reg));       // rs2
+                    instruction->addOperand_(std::move(lhs_reg));      // rs1
+                    instruction->addOperand_(std::move(rhs_reg));      // rs2
 
                     parent_bb->addInstruction(std::move(instruction));
                 }
@@ -2171,9 +2171,9 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));
-                instruction->addOperand(
+                instruction->addOperand_(
                     std::make_unique<ImmediateOperand>(result));
                 parent_bb->addInstruction(std::move(instruction));
             } else {
@@ -2183,10 +2183,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::MULW, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                instruction->addOperand(std::move(lhs_reg));       // rs1
-                instruction->addOperand(std::move(rhs_reg));       // rs2
+                instruction->addOperand_(std::move(lhs_reg));      // rs1
+                instruction->addOperand_(std::move(rhs_reg));      // rs2
 
                 parent_bb->addInstruction(std::move(instruction));
             }
@@ -2215,9 +2215,9 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));
-                instruction->addOperand(
+                instruction->addOperand_(
                     std::make_unique<ImmediateOperand>(result));
                 parent_bb->addInstruction(std::move(instruction));
             } else {
@@ -2247,11 +2247,11 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                         new_reg = codeGen_->allocateIntReg();
                         auto instruction = std::make_unique<Instruction>(
                             Opcode::SRAIW, parent_bb);
-                        instruction->addOperand(
+                        instruction->addOperand_(
                             std::make_unique<RegisterOperand>(
                                 new_reg->getRegNum(), new_reg->isVirtual()));
-                        instruction->addOperand(std::move(lhs_reg));
-                        instruction->addOperand(
+                        instruction->addOperand_(std::move(lhs_reg));
+                        instruction->addOperand_(
                             std::make_unique<ImmediateOperand>(shift_amount));
 
                         parent_bb->addInstruction(std::move(instruction));
@@ -2276,10 +2276,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::DIVW, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                instruction->addOperand(std::move(lhs_reg));       // rs1
-                instruction->addOperand(std::move(rhs_reg));       // rs2
+                instruction->addOperand_(std::move(lhs_reg));      // rs1
+                instruction->addOperand_(std::move(rhs_reg));      // rs2
 
                 parent_bb->addInstruction(std::move(instruction));
             }
@@ -2303,9 +2303,9 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));
-                instruction->addOperand(
+                instruction->addOperand_(
                     std::make_unique<ImmediateOperand>(result));
                 parent_bb->addInstruction(std::move(instruction));
             } else {
@@ -2332,10 +2332,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::REMW, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                instruction->addOperand(std::move(lhs_reg));       // rs1
-                instruction->addOperand(std::move(rhs_reg));       // rs2
+                instruction->addOperand_(std::move(lhs_reg));      // rs1
+                instruction->addOperand_(std::move(rhs_reg));      // rs2
 
                 parent_bb->addInstruction(std::move(instruction));
             }
@@ -2366,12 +2366,12 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     (lhs->getType() == OperandType::Register ? lhs.get()
                                                              : rhs.get()));
 
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     reg_operand->getRegNum(),
                     reg_operand->isVirtual()));  // rs1
-                instruction->addOperand(std::make_unique<ImmediateOperand>(
+                instruction->addOperand_(std::make_unique<ImmediateOperand>(
                     imm_operand->getValue()));  // imm
 
                 parent_bb->addInstruction(std::move(instruction));
@@ -2382,10 +2382,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::AND, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                instruction->addOperand(std::move(lhs_reg));       // rs1
-                instruction->addOperand(std::move(rhs_reg));       // rs2
+                instruction->addOperand_(std::move(lhs_reg));      // rs1
+                instruction->addOperand_(std::move(rhs_reg));      // rs2
 
                 parent_bb->addInstruction(std::move(instruction));
             }
@@ -2416,12 +2416,12 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     (lhs->getType() == OperandType::Register ? lhs.get()
                                                              : rhs.get()));
 
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     reg_operand->getRegNum(),
                     reg_operand->isVirtual()));  // rs1
-                instruction->addOperand(std::make_unique<ImmediateOperand>(
+                instruction->addOperand_(std::make_unique<ImmediateOperand>(
                     imm_operand->getValue()));  // imm
 
                 parent_bb->addInstruction(std::move(instruction));
@@ -2432,10 +2432,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::OR, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                instruction->addOperand(std::move(lhs_reg));       // rs1
-                instruction->addOperand(std::move(rhs_reg));       // rs2
+                instruction->addOperand_(std::move(lhs_reg));      // rs1
+                instruction->addOperand_(std::move(rhs_reg));      // rs2
 
                 parent_bb->addInstruction(std::move(instruction));
             }
@@ -2466,12 +2466,12 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                     (lhs->getType() == OperandType::Register ? lhs.get()
                                                              : rhs.get()));
 
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     reg_operand->getRegNum(),
                     reg_operand->isVirtual()));  // rs1
-                instruction->addOperand(std::make_unique<ImmediateOperand>(
+                instruction->addOperand_(std::make_unique<ImmediateOperand>(
                     imm_operand->getValue()));  // imm
 
                 parent_bb->addInstruction(std::move(instruction));
@@ -2482,10 +2482,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::XOR, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                instruction->addOperand(std::move(lhs_reg));       // rs1
-                instruction->addOperand(std::move(rhs_reg));       // rs2
+                instruction->addOperand_(std::move(lhs_reg));      // rs1
+                instruction->addOperand_(std::move(rhs_reg));      // rs2
 
                 parent_bb->addInstruction(std::move(instruction));
             }
@@ -2508,10 +2508,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::SLLIW, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                instruction->addOperand(std::move(lhs));           // rs1
-                instruction->addOperand(std::make_unique<ImmediateOperand>(
+                instruction->addOperand_(std::move(lhs));          // rs1
+                instruction->addOperand_(std::make_unique<ImmediateOperand>(
                     rhs_imm->getValue()));  // shamt
                 parent_bb->addInstruction(std::move(instruction));
             } else {
@@ -2521,10 +2521,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::SLLW, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                instruction->addOperand(std::move(lhs_reg));       // rs1
-                instruction->addOperand(std::move(rhs_reg));       // rs2
+                instruction->addOperand_(std::move(lhs_reg));      // rs1
+                instruction->addOperand_(std::move(rhs_reg));      // rs2
 
                 parent_bb->addInstruction(std::move(instruction));
             }
@@ -2548,10 +2548,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::SRAIW, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                instruction->addOperand(std::move(lhs));           // rs1
-                instruction->addOperand(std::make_unique<ImmediateOperand>(
+                instruction->addOperand_(std::move(lhs));          // rs1
+                instruction->addOperand_(std::make_unique<ImmediateOperand>(
                     rhs_imm->getValue()));  // shamt
                 parent_bb->addInstruction(std::move(instruction));
             } else {
@@ -2562,10 +2562,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 // 使用算术右移（保持符号位）
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::SRAW, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                instruction->addOperand(std::move(lhs_reg));       // rs1
-                instruction->addOperand(std::move(rhs_reg));       // rs2
+                instruction->addOperand_(std::move(lhs_reg));      // rs1
+                instruction->addOperand_(std::move(rhs_reg));      // rs2
 
                 parent_bb->addInstruction(std::move(instruction));
             }
@@ -2591,10 +2591,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual(),
                     RegisterType::Integer));
-                instruction->addOperand(
+                instruction->addOperand_(
                     std::make_unique<ImmediateOperand>(result));
                 parent_bb->addInstruction(std::move(instruction));
 
@@ -2613,10 +2613,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto slti_inst =
                     std::make_unique<Instruction>(Opcode::SLTI, parent_bb);
-                slti_inst->addOperand(std::make_unique<RegisterOperand>(
+                slti_inst->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                slti_inst->addOperand(std::move(lhs));             // rs1
-                slti_inst->addOperand(std::make_unique<ImmediateOperand>(
+                slti_inst->addOperand_(std::move(lhs));            // rs1
+                slti_inst->addOperand_(std::make_unique<ImmediateOperand>(
                     rhs_imm->getValue() + 1));  // imm+1
                 parent_bb->addInstruction(std::move(slti_inst));
 
@@ -2624,12 +2624,12 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto result_reg = codeGen_->allocateIntReg();
                 auto xori_inst =
                     std::make_unique<Instruction>(Opcode::XORI, parent_bb);
-                xori_inst->addOperand(std::make_unique<RegisterOperand>(
+                xori_inst->addOperand_(std::make_unique<RegisterOperand>(
                     result_reg->getRegNum(),
                     result_reg->isVirtual()));  // rd
-                xori_inst->addOperand(std::make_unique<RegisterOperand>(
+                xori_inst->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rs1
-                xori_inst->addOperand(
+                xori_inst->addOperand_(
                     std::make_unique<ImmediateOperand>(1));  // 1
                 parent_bb->addInstruction(std::move(xori_inst));
 
@@ -2642,10 +2642,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::SGT, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                instruction->addOperand(std::move(lhs_reg));       // rs1
-                instruction->addOperand(std::move(rhs_reg));       // rs2
+                instruction->addOperand_(std::move(lhs_reg));      // rs1
+                instruction->addOperand_(std::move(rhs_reg));      // rs2
 
                 parent_bb->addInstruction(std::move(instruction));
             }
@@ -2664,10 +2664,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual(),
                     RegisterType::Integer));
-                instruction->addOperand(
+                instruction->addOperand_(
                     std::make_unique<ImmediateOperand>(result));
                 parent_bb->addInstruction(std::move(instruction));
 
@@ -2693,21 +2693,21 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto sub_reg = codeGen_->allocateIntReg();
                 auto addi_inst =
                     std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
-                addi_inst->addOperand(std::make_unique<RegisterOperand>(
+                addi_inst->addOperand_(std::make_unique<RegisterOperand>(
                     sub_reg->getRegNum(), sub_reg->isVirtual()));  // rd
-                addi_inst->addOperand(std::make_unique<RegisterOperand>(
+                addi_inst->addOperand_(std::make_unique<RegisterOperand>(
                     reg_operand->getRegNum(),
                     reg_operand->isVirtual()));  // rs1
-                addi_inst->addOperand(std::make_unique<ImmediateOperand>(
+                addi_inst->addOperand_(std::make_unique<ImmediateOperand>(
                     -imm_operand->getValue()));  // -imm
                 parent_bb->addInstruction(std::move(addi_inst));
 
                 new_reg = codeGen_->allocateIntReg();
                 auto seqz_inst =
                     std::make_unique<Instruction>(Opcode::SEQZ, parent_bb);
-                seqz_inst->addOperand(std::make_unique<RegisterOperand>(
+                seqz_inst->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                seqz_inst->addOperand(std::make_unique<RegisterOperand>(
+                seqz_inst->addOperand_(std::make_unique<RegisterOperand>(
                     sub_reg->getRegNum(), sub_reg->isVirtual()));  // rs1
                 parent_bb->addInstruction(std::move(seqz_inst));
             } else {
@@ -2718,18 +2718,18 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto xor_reg = codeGen_->allocateIntReg();
                 auto xor_inst =
                     std::make_unique<Instruction>(Opcode::XOR, parent_bb);
-                xor_inst->addOperand(std::make_unique<RegisterOperand>(
+                xor_inst->addOperand_(std::make_unique<RegisterOperand>(
                     xor_reg->getRegNum(), xor_reg->isVirtual()));  // rd
-                xor_inst->addOperand(std::move(lhs_reg));          // rs1
-                xor_inst->addOperand(std::move(rhs_reg));          // rs2
+                xor_inst->addOperand_(std::move(lhs_reg));         // rs1
+                xor_inst->addOperand_(std::move(rhs_reg));         // rs2
                 parent_bb->addInstruction(std::move(xor_inst));
 
                 new_reg = codeGen_->allocateIntReg();
                 auto seqz_inst =
                     std::make_unique<Instruction>(Opcode::SEQZ, parent_bb);
-                seqz_inst->addOperand(std::make_unique<RegisterOperand>(
+                seqz_inst->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                seqz_inst->addOperand(std::move(xor_reg));         // rs1
+                seqz_inst->addOperand_(std::move(xor_reg));        // rs1
                 parent_bb->addInstruction(std::move(seqz_inst));
             }
             break;
@@ -2747,10 +2747,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual(),
                     RegisterType::Integer));
-                instruction->addOperand(
+                instruction->addOperand_(
                     std::make_unique<ImmediateOperand>(result));
                 parent_bb->addInstruction(std::move(instruction));
 
@@ -2776,21 +2776,21 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto sub_reg = codeGen_->allocateIntReg();
                 auto addi_inst =
                     std::make_unique<Instruction>(Opcode::ADDI, parent_bb);
-                addi_inst->addOperand(std::make_unique<RegisterOperand>(
+                addi_inst->addOperand_(std::make_unique<RegisterOperand>(
                     sub_reg->getRegNum(), sub_reg->isVirtual()));  // rd
-                addi_inst->addOperand(std::make_unique<RegisterOperand>(
+                addi_inst->addOperand_(std::make_unique<RegisterOperand>(
                     reg_operand->getRegNum(),
                     reg_operand->isVirtual()));  // rs1
-                addi_inst->addOperand(std::make_unique<ImmediateOperand>(
+                addi_inst->addOperand_(std::make_unique<ImmediateOperand>(
                     -imm_operand->getValue()));  // -imm
                 parent_bb->addInstruction(std::move(addi_inst));
 
                 new_reg = codeGen_->allocateIntReg();
                 auto snez_inst =
                     std::make_unique<Instruction>(Opcode::SNEZ, parent_bb);
-                snez_inst->addOperand(std::make_unique<RegisterOperand>(
+                snez_inst->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                snez_inst->addOperand(std::make_unique<RegisterOperand>(
+                snez_inst->addOperand_(std::make_unique<RegisterOperand>(
                     sub_reg->getRegNum(), sub_reg->isVirtual()));  // rs1
                 parent_bb->addInstruction(std::move(snez_inst));
             } else {
@@ -2801,18 +2801,18 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto xor_reg = codeGen_->allocateIntReg();
                 auto xor_inst =
                     std::make_unique<Instruction>(Opcode::XOR, parent_bb);
-                xor_inst->addOperand(std::make_unique<RegisterOperand>(
+                xor_inst->addOperand_(std::make_unique<RegisterOperand>(
                     xor_reg->getRegNum(), xor_reg->isVirtual()));  // rd
-                xor_inst->addOperand(std::move(lhs_reg));          // rs1
-                xor_inst->addOperand(std::move(rhs_reg));          // rs2
+                xor_inst->addOperand_(std::move(lhs_reg));         // rs1
+                xor_inst->addOperand_(std::move(rhs_reg));         // rs2
                 parent_bb->addInstruction(std::move(xor_inst));
 
                 new_reg = codeGen_->allocateIntReg();
                 auto snez_inst =
                     std::make_unique<Instruction>(Opcode::SNEZ, parent_bb);
-                snez_inst->addOperand(std::make_unique<RegisterOperand>(
+                snez_inst->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                snez_inst->addOperand(std::move(xor_reg));         // rs1
+                snez_inst->addOperand_(std::move(xor_reg));        // rs1
                 parent_bb->addInstruction(std::move(snez_inst));
             }
             break;
@@ -2837,10 +2837,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual(),
                     RegisterType::Integer));
-                instruction->addOperand(
+                instruction->addOperand_(
                     std::make_unique<ImmediateOperand>(result));
                 parent_bb->addInstruction(std::move(instruction));
 
@@ -2857,10 +2857,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 auto* rhs_imm = dynamic_cast<ImmediateOperand*>(rhs.get());
                 auto slti_inst =
                     std::make_unique<Instruction>(Opcode::SLTI, parent_bb);
-                slti_inst->addOperand(std::make_unique<RegisterOperand>(
+                slti_inst->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                slti_inst->addOperand(std::move(lhs));             // rs1
-                slti_inst->addOperand(std::make_unique<ImmediateOperand>(
+                slti_inst->addOperand_(std::move(lhs));            // rs1
+                slti_inst->addOperand_(std::make_unique<ImmediateOperand>(
                     rhs_imm->getValue()));  // imm
 
                 parent_bb->addInstruction(std::move(slti_inst));
@@ -2871,10 +2871,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 // 使用 slt 指令
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::SLT, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-                instruction->addOperand(std::move(lhs_reg));       // rs1
-                instruction->addOperand(std::move(rhs_reg));       // rs2
+                instruction->addOperand_(std::move(lhs_reg));      // rs1
+                instruction->addOperand_(std::move(rhs_reg));      // rs2
 
                 parent_bb->addInstruction(std::move(instruction));
             }
@@ -2893,10 +2893,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual(),
                     RegisterType::Integer));
-                instruction->addOperand(
+                instruction->addOperand_(
                     std::make_unique<ImmediateOperand>(result));
                 parent_bb->addInstruction(std::move(instruction));
 
@@ -2915,18 +2915,18 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             auto sgt_reg = codeGen_->allocateIntReg();
             auto sgt_inst =
                 std::make_unique<Instruction>(Opcode::SGT, parent_bb);
-            sgt_inst->addOperand(std::make_unique<RegisterOperand>(
+            sgt_inst->addOperand_(std::make_unique<RegisterOperand>(
                 sgt_reg->getRegNum(), sgt_reg->isVirtual()));  // rd
-            sgt_inst->addOperand(std::move(lhs_reg));          // rs1
-            sgt_inst->addOperand(std::move(rhs_reg));          // rs2
+            sgt_inst->addOperand_(std::move(lhs_reg));         // rs1
+            sgt_inst->addOperand_(std::move(rhs_reg));         // rs2
             parent_bb->addInstruction(std::move(sgt_inst));
 
             new_reg = codeGen_->allocateIntReg();
             auto seqz_inst =
                 std::make_unique<Instruction>(Opcode::SEQZ, parent_bb);
-            seqz_inst->addOperand(std::make_unique<RegisterOperand>(
+            seqz_inst->addOperand_(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-            seqz_inst->addOperand(std::move(sgt_reg));         // rs1
+            seqz_inst->addOperand_(std::move(sgt_reg));        // rs1
             parent_bb->addInstruction(std::move(seqz_inst));
             break;
         }
@@ -2943,10 +2943,10 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
                 new_reg = codeGen_->allocateIntReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::LI, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual(),
                     RegisterType::Integer));
-                instruction->addOperand(
+                instruction->addOperand_(
                     std::make_unique<ImmediateOperand>(result));
                 parent_bb->addInstruction(std::move(instruction));
 
@@ -2965,18 +2965,18 @@ std::unique_ptr<MachineOperand> Visitor::visitBinaryOp(
             auto slt_reg = codeGen_->allocateIntReg();
             auto slt_inst =
                 std::make_unique<Instruction>(Opcode::SLT, parent_bb);
-            slt_inst->addOperand(std::make_unique<RegisterOperand>(
+            slt_inst->addOperand_(std::make_unique<RegisterOperand>(
                 slt_reg->getRegNum(), slt_reg->isVirtual()));  // rd
-            slt_inst->addOperand(std::move(lhs_reg));          // rs1
-            slt_inst->addOperand(std::move(rhs_reg));          // rs2
+            slt_inst->addOperand_(std::move(lhs_reg));         // rs1
+            slt_inst->addOperand_(std::move(rhs_reg));         // rs2
             parent_bb->addInstruction(std::move(slt_inst));
 
             new_reg = codeGen_->allocateIntReg();
             auto seqz_inst =
                 std::make_unique<Instruction>(Opcode::SEQZ, parent_bb);
-            seqz_inst->addOperand(std::make_unique<RegisterOperand>(
+            seqz_inst->addOperand_(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual()));  // rd
-            seqz_inst->addOperand(std::move(slt_reg));         // rs1
+            seqz_inst->addOperand_(std::move(slt_reg));        // rs1
             parent_bb->addInstruction(std::move(seqz_inst));
             break;
         }
@@ -3052,11 +3052,11 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
             new_reg = codeGen_->allocateFloatReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FADD_S, parent_bb);
-            instruction->addOperand(std::make_unique<RegisterOperand>(
+            instruction->addOperand_(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual(),
-                RegisterType::Float));                // rd
-            instruction->addOperand(std::move(lhs));  // rs1
-            instruction->addOperand(std::move(rhs));  // rs2
+                RegisterType::Float));                 // rd
+            instruction->addOperand_(std::move(lhs));  // rs1
+            instruction->addOperand_(std::move(rhs));  // rs2
             parent_bb->addInstruction(std::move(instruction));
 
             break;
@@ -3076,11 +3076,11 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
             new_reg = codeGen_->allocateFloatReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FSUB_S, parent_bb);
-            instruction->addOperand(std::make_unique<RegisterOperand>(
+            instruction->addOperand_(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual(),
-                RegisterType::Float));                // rd
-            instruction->addOperand(std::move(lhs));  // rs1
-            instruction->addOperand(std::move(rhs));  // rs2
+                RegisterType::Float));                 // rd
+            instruction->addOperand_(std::move(lhs));  // rs1
+            instruction->addOperand_(std::move(rhs));  // rs2
             parent_bb->addInstruction(std::move(instruction));
 
             break;
@@ -3100,11 +3100,11 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
             new_reg = codeGen_->allocateFloatReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FMUL_S, parent_bb);
-            instruction->addOperand(std::make_unique<RegisterOperand>(
+            instruction->addOperand_(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual(),
-                RegisterType::Float));                // rd
-            instruction->addOperand(std::move(lhs));  // rs1
-            instruction->addOperand(std::move(rhs));  // rs2
+                RegisterType::Float));                 // rd
+            instruction->addOperand_(std::move(lhs));  // rs1
+            instruction->addOperand_(std::move(rhs));  // rs2
             parent_bb->addInstruction(std::move(instruction));
 
             break;
@@ -3127,11 +3127,11 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
             new_reg = codeGen_->allocateFloatReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FDIV_S, parent_bb);
-            instruction->addOperand(std::make_unique<RegisterOperand>(
+            instruction->addOperand_(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual(),
-                RegisterType::Float));                // rd
-            instruction->addOperand(std::move(lhs));  // rs1
-            instruction->addOperand(std::move(rhs));  // rs2
+                RegisterType::Float));                 // rd
+            instruction->addOperand_(std::move(lhs));  // rs1
+            instruction->addOperand_(std::move(rhs));  // rs2
             parent_bb->addInstruction(std::move(instruction));
 
             break;
@@ -3156,11 +3156,11 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
             new_reg = codeGen_->allocateIntReg();  // 比较结果是整数
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FEQ_S, parent_bb);
-            instruction->addOperand(std::make_unique<RegisterOperand>(
+            instruction->addOperand_(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual(),
-                RegisterType::Integer));                  // rd
-            instruction->addOperand(std::move(lhs_reg));  // rs1
-            instruction->addOperand(std::move(rhs_reg));  // rs2
+                RegisterType::Integer));                   // rd
+            instruction->addOperand_(std::move(lhs_reg));  // rs1
+            instruction->addOperand_(std::move(rhs_reg));  // rs2
             parent_bb->addInstruction(std::move(instruction));
 
             break;
@@ -3185,21 +3185,21 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
             new_reg = codeGen_->allocateIntReg();
             auto feq_inst =
                 std::make_unique<Instruction>(Opcode::FEQ_S, parent_bb);
-            feq_inst->addOperand(std::make_unique<RegisterOperand>(
+            feq_inst->addOperand_(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual(),
-                RegisterType::Integer));               // rd
-            feq_inst->addOperand(std::move(lhs_reg));  // rs1
-            feq_inst->addOperand(std::move(rhs_reg));  // rs2
+                RegisterType::Integer));                // rd
+            feq_inst->addOperand_(std::move(lhs_reg));  // rs1
+            feq_inst->addOperand_(std::move(rhs_reg));  // rs2
             parent_bb->addInstruction(std::move(feq_inst));
 
             // 使用 seqz 指令取反（如果相等结果为0，则设置为1；否则设置为0）
             auto result_reg = codeGen_->allocateIntReg();
             auto seqz_inst =
                 std::make_unique<Instruction>(Opcode::SEQZ, parent_bb);
-            seqz_inst->addOperand(std::make_unique<RegisterOperand>(
+            seqz_inst->addOperand_(std::make_unique<RegisterOperand>(
                 result_reg->getRegNum(), result_reg->isVirtual(),
                 RegisterType::Integer));  // rd
-            seqz_inst->addOperand(std::make_unique<RegisterOperand>(
+            seqz_inst->addOperand_(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual(),
                 RegisterType::Integer));  // rs1
             parent_bb->addInstruction(std::move(seqz_inst));
@@ -3228,11 +3228,11 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
             new_reg = codeGen_->allocateIntReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FLT_S, parent_bb);
-            instruction->addOperand(std::make_unique<RegisterOperand>(
+            instruction->addOperand_(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual(),
-                RegisterType::Integer));                  // rd
-            instruction->addOperand(std::move(lhs_reg));  // rs1
-            instruction->addOperand(std::move(rhs_reg));  // rs2
+                RegisterType::Integer));                   // rd
+            instruction->addOperand_(std::move(lhs_reg));  // rs1
+            instruction->addOperand_(std::move(rhs_reg));  // rs2
             parent_bb->addInstruction(std::move(instruction));
 
             break;
@@ -3257,11 +3257,11 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
             new_reg = codeGen_->allocateIntReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FLE_S, parent_bb);
-            instruction->addOperand(std::make_unique<RegisterOperand>(
+            instruction->addOperand_(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual(),
-                RegisterType::Integer));                  // rd
-            instruction->addOperand(std::move(lhs_reg));  // rs1
-            instruction->addOperand(std::move(rhs_reg));  // rs2
+                RegisterType::Integer));                   // rd
+            instruction->addOperand_(std::move(lhs_reg));  // rs1
+            instruction->addOperand_(std::move(rhs_reg));  // rs2
             parent_bb->addInstruction(std::move(instruction));
 
             break;
@@ -3286,12 +3286,12 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
             new_reg = codeGen_->allocateIntReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FLT_S, parent_bb);
-            instruction->addOperand(std::make_unique<RegisterOperand>(
+            instruction->addOperand_(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual(),
                 RegisterType::Integer));  // rd
-            instruction->addOperand(
+            instruction->addOperand_(
                 std::move(rhs_reg));  // rs1 (交换：rhs < lhs)
-            instruction->addOperand(std::move(lhs_reg));  // rs2
+            instruction->addOperand_(std::move(lhs_reg));  // rs2
             parent_bb->addInstruction(std::move(instruction));
 
             break;
@@ -3316,12 +3316,12 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
             new_reg = codeGen_->allocateIntReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FLE_S, parent_bb);
-            instruction->addOperand(std::make_unique<RegisterOperand>(
+            instruction->addOperand_(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual(),
                 RegisterType::Integer));  // rd
-            instruction->addOperand(
+            instruction->addOperand_(
                 std::move(rhs_reg));  // rs1 (交换：rhs <= lhs)
-            instruction->addOperand(std::move(lhs_reg));  // rs2
+            instruction->addOperand_(std::move(lhs_reg));  // rs2
             parent_bb->addInstruction(std::move(instruction));
 
             break;
@@ -3346,12 +3346,12 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
             new_reg = codeGen_->allocateIntReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FLT_S, parent_bb);
-            instruction->addOperand(std::make_unique<RegisterOperand>(
+            instruction->addOperand_(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual(),
                 RegisterType::Integer));  // rd
-            instruction->addOperand(
+            instruction->addOperand_(
                 std::move(rhs_reg));  // rs1 (交换：rhs < lhs)
-            instruction->addOperand(std::move(lhs_reg));  // rs2
+            instruction->addOperand_(std::move(lhs_reg));  // rs2
             parent_bb->addInstruction(std::move(instruction));
 
             break;
@@ -3376,11 +3376,11 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
             new_reg = codeGen_->allocateIntReg();
             auto instruction =
                 std::make_unique<Instruction>(Opcode::FLT_S, parent_bb);
-            instruction->addOperand(std::make_unique<RegisterOperand>(
+            instruction->addOperand_(std::make_unique<RegisterOperand>(
                 new_reg->getRegNum(), new_reg->isVirtual(),
-                RegisterType::Integer));                  // rd
-            instruction->addOperand(std::move(lhs_reg));  // rs1
-            instruction->addOperand(std::move(rhs_reg));  // rs2
+                RegisterType::Integer));                   // rd
+            instruction->addOperand_(std::move(lhs_reg));  // rs1
+            instruction->addOperand_(std::move(rhs_reg));  // rs2
             parent_bb->addInstruction(std::move(instruction));
 
             break;
@@ -3407,11 +3407,11 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
                 new_reg = codeGen_->allocateFloatReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::FMUL_S, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual(),
-                    RegisterType::Float));                    // rd
-                instruction->addOperand(std::move(lhs_reg));  // rs1
-                instruction->addOperand(std::move(rhs_reg));  // rs2
+                    RegisterType::Float));                     // rd
+                instruction->addOperand_(std::move(lhs_reg));  // rs1
+                instruction->addOperand_(std::move(rhs_reg));  // rs2
                 parent_bb->addInstruction(std::move(instruction));
 
                 break;
@@ -3445,11 +3445,11 @@ std::unique_ptr<MachineOperand> Visitor::visitFloatBinaryOp(
                 new_reg = codeGen_->allocateFloatReg();
                 auto instruction =
                     std::make_unique<Instruction>(Opcode::FDIV_S, parent_bb);
-                instruction->addOperand(std::make_unique<RegisterOperand>(
+                instruction->addOperand_(std::make_unique<RegisterOperand>(
                     new_reg->getRegNum(), new_reg->isVirtual(),
-                    RegisterType::Float));                    // rd
-                instruction->addOperand(std::move(lhs_reg));  // rs1
-                instruction->addOperand(std::move(rhs_reg));  // rs2
+                    RegisterType::Float));                     // rd
+                instruction->addOperand_(std::move(lhs_reg));  // rs1
+                instruction->addOperand_(std::move(rhs_reg));  // rs2
                 parent_bb->addInstruction(std::move(instruction));
 
                 break;
@@ -3501,16 +3501,16 @@ std::unique_ptr<MachineOperand> Visitor::visitLogicalOp(
     // 将左操作数转换为布尔值（0或1）
     auto lhs_bool_reg = codeGen_->allocateIntReg();
     auto lhs_snez_inst = std::make_unique<Instruction>(Opcode::SNEZ, parent_bb);
-    lhs_snez_inst->addOperand(std::make_unique<RegisterOperand>(
+    lhs_snez_inst->addOperand_(std::make_unique<RegisterOperand>(
         lhs_bool_reg->getRegNum(), lhs_bool_reg->isVirtual()));
-    lhs_snez_inst->addOperand(std::move(lhs_reg));
+    lhs_snez_inst->addOperand_(std::move(lhs_reg));
     parent_bb->addInstruction(std::move(lhs_snez_inst));
 
     // 临时存储左操作数结果到result_reg
     auto mv_left_inst = std::make_unique<Instruction>(Opcode::MV, parent_bb);
-    mv_left_inst->addOperand(std::make_unique<RegisterOperand>(
+    mv_left_inst->addOperand_(std::make_unique<RegisterOperand>(
         result_reg->getRegNum(), result_reg->isVirtual()));
-    mv_left_inst->addOperand(std::make_unique<RegisterOperand>(
+    mv_left_inst->addOperand_(std::make_unique<RegisterOperand>(
         lhs_bool_reg->getRegNum(), lhs_bool_reg->isVirtual()));
     parent_bb->addInstruction(std::move(mv_left_inst));
 
@@ -3525,9 +3525,9 @@ std::unique_ptr<MachineOperand> Visitor::visitLogicalOp(
 
         // 如果左操作数为假（0），跳过右操作数的计算
         auto beqz_inst = std::make_unique<Instruction>(Opcode::BEQZ, parent_bb);
-        beqz_inst->addOperand(std::make_unique<RegisterOperand>(
+        beqz_inst->addOperand_(std::make_unique<RegisterOperand>(
             lhs_bool_reg->getRegNum(), lhs_bool_reg->isVirtual()));
-        beqz_inst->addOperand(std::make_unique<LabelOperand>(skip_label));
+        beqz_inst->addOperand_(std::make_unique<LabelOperand>(skip_label));
         parent_bb->addInstruction(std::move(beqz_inst));
 
         // 左操作数为真，计算右操作数
@@ -3537,18 +3537,18 @@ std::unique_ptr<MachineOperand> Visitor::visitLogicalOp(
         auto rhs_bool_reg = codeGen_->allocateIntReg();
         auto rhs_snez_inst =
             std::make_unique<Instruction>(Opcode::SNEZ, parent_bb);
-        rhs_snez_inst->addOperand(std::make_unique<RegisterOperand>(
+        rhs_snez_inst->addOperand_(std::make_unique<RegisterOperand>(
             rhs_bool_reg->getRegNum(), rhs_bool_reg->isVirtual()));
-        rhs_snez_inst->addOperand(std::move(rhs_reg));
+        rhs_snez_inst->addOperand_(std::move(rhs_reg));
         parent_bb->addInstruction(std::move(rhs_snez_inst));
 
         // 结果 = lhs_bool && rhs_bool（都是0或1，用按位与实现）
         auto and_inst = std::make_unique<Instruction>(Opcode::AND, parent_bb);
-        and_inst->addOperand(std::make_unique<RegisterOperand>(
+        and_inst->addOperand_(std::make_unique<RegisterOperand>(
             result_reg->getRegNum(), result_reg->isVirtual()));
-        and_inst->addOperand(std::make_unique<RegisterOperand>(
+        and_inst->addOperand_(std::make_unique<RegisterOperand>(
             lhs_bool_reg->getRegNum(), lhs_bool_reg->isVirtual()));
-        and_inst->addOperand(std::make_unique<RegisterOperand>(
+        and_inst->addOperand_(std::make_unique<RegisterOperand>(
             rhs_bool_reg->getRegNum(), rhs_bool_reg->isVirtual()));
         parent_bb->addInstruction(std::move(and_inst));
 
@@ -3565,9 +3565,9 @@ std::unique_ptr<MachineOperand> Visitor::visitLogicalOp(
 
         // 如果左操作数为真（非0），跳过右操作数的计算
         auto bnez_inst = std::make_unique<Instruction>(Opcode::BNEZ, parent_bb);
-        bnez_inst->addOperand(std::make_unique<RegisterOperand>(
+        bnez_inst->addOperand_(std::make_unique<RegisterOperand>(
             lhs_bool_reg->getRegNum(), lhs_bool_reg->isVirtual()));
-        bnez_inst->addOperand(std::make_unique<LabelOperand>(skip_label));
+        bnez_inst->addOperand_(std::make_unique<LabelOperand>(skip_label));
         parent_bb->addInstruction(std::move(bnez_inst));
 
         // 左操作数为假，计算右操作数
@@ -3577,16 +3577,16 @@ std::unique_ptr<MachineOperand> Visitor::visitLogicalOp(
         auto rhs_bool_reg = codeGen_->allocateIntReg();
         auto rhs_snez_inst =
             std::make_unique<Instruction>(Opcode::SNEZ, parent_bb);
-        rhs_snez_inst->addOperand(std::make_unique<RegisterOperand>(
+        rhs_snez_inst->addOperand_(std::make_unique<RegisterOperand>(
             rhs_bool_reg->getRegNum(), rhs_bool_reg->isVirtual()));
-        rhs_snez_inst->addOperand(std::move(rhs_reg));
+        rhs_snez_inst->addOperand_(std::move(rhs_reg));
         parent_bb->addInstruction(std::move(rhs_snez_inst));
 
         // 结果 = 右操作数的布尔值（因为左操作数为假）
         auto mv_rhs_inst = std::make_unique<Instruction>(Opcode::MV, parent_bb);
-        mv_rhs_inst->addOperand(std::make_unique<RegisterOperand>(
+        mv_rhs_inst->addOperand_(std::make_unique<RegisterOperand>(
             result_reg->getRegNum(), result_reg->isVirtual()));
-        mv_rhs_inst->addOperand(std::make_unique<RegisterOperand>(
+        mv_rhs_inst->addOperand_(std::make_unique<RegisterOperand>(
             rhs_bool_reg->getRegNum(), rhs_bool_reg->isVirtual()));
         parent_bb->addInstruction(std::move(mv_rhs_inst));
 
@@ -3628,18 +3628,18 @@ void Visitor::storeOperandToReg(
                     // 1. li temp_reg, imm
                     auto li_inst =
                         std::make_unique<Instruction>(Opcode::LI, parent_bb);
-                    li_inst->addOperand(std::make_unique<RegisterOperand>(
+                    li_inst->addOperand_(std::make_unique<RegisterOperand>(
                         temp_reg->getRegNum(), temp_reg->isVirtual(),
                         RegisterType::Integer));
-                    li_inst->addOperand(std::make_unique<ImmediateOperand>(
+                    li_inst->addOperand_(std::make_unique<ImmediateOperand>(
                         source_imm->getValue()));
                     parent_bb->insert(insert_pos, std::move(li_inst));
 
                     // 2. fmv.w.x dest_reg, temp_reg
                     auto fmv_inst = std::make_unique<Instruction>(
                         Opcode::FMV_W_X, parent_bb);
-                    fmv_inst->addOperand(std::move(dest_reg));
-                    fmv_inst->addOperand(std::make_unique<RegisterOperand>(
+                    fmv_inst->addOperand_(std::move(dest_reg));
+                    fmv_inst->addOperand_(std::make_unique<RegisterOperand>(
                         temp_reg->getRegNum(), temp_reg->isVirtual(),
                         RegisterType::Integer));
                     parent_bb->insert(insert_pos, std::move(fmv_inst));
@@ -3647,8 +3647,8 @@ void Visitor::storeOperandToReg(
                     // 整数寄存器：直接使用 li 指令
                     auto li_inst =
                         std::make_unique<Instruction>(Opcode::LI, parent_bb);
-                    li_inst->addOperand(std::move(dest_reg));  // rd
-                    li_inst->addOperand(std::make_unique<ImmediateOperand>(
+                    li_inst->addOperand_(std::move(dest_reg));  // rd
+                    li_inst->addOperand_(std::make_unique<ImmediateOperand>(
                         source_imm->getValue()));  // imm
                     parent_bb->insert(insert_pos, std::move(li_inst));
                 }
@@ -3686,8 +3686,8 @@ void Visitor::storeOperandToReg(
                 auto inst =
                     std::make_unique<Instruction>(move_opcode, parent_bb);
 
-                inst->addOperand(std::move(dest_reg));  // rd
-                inst->addOperand(std::make_unique<RegisterOperand>(
+                inst->addOperand_(std::move(dest_reg));  // rd
+                inst->addOperand_(std::make_unique<RegisterOperand>(
                     reg_source->getRegNum(), reg_source->isVirtual(),
                     reg_source->getRegisterType()));  // rs，保持原有类型
                 parent_bb->insert(insert_pos, std::move(inst));
@@ -3699,8 +3699,8 @@ void Visitor::storeOperandToReg(
                 auto* frame_source =
                     dynamic_cast<FrameIndexOperand*>(source_operand.get());
 
-                inst->addOperand(std::move(dest_reg));  // rd
-                inst->addOperand(std::make_unique<FrameIndexOperand>(
+                inst->addOperand_(std::move(dest_reg));  // rd
+                inst->addOperand_(std::make_unique<FrameIndexOperand>(
                     frame_source->getIndex()));  // FI
                 parent_bb->insert(insert_pos, std::move(inst));
                 break;
@@ -3915,18 +3915,18 @@ std::unique_ptr<RegisterOperand> Visitor::handleLargeOffset(
 
     // 将偏移量加载到临时寄存器
     auto li_inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
-    li_inst->addOperand(std::make_unique<RegisterOperand>(
+    li_inst->addOperand_(std::make_unique<RegisterOperand>(
         temp_reg->getRegNum(), temp_reg->isVirtual()));
-    li_inst->addOperand(std::make_unique<ImmediateOperand>(offset));
+    li_inst->addOperand_(std::make_unique<ImmediateOperand>(offset));
     parent_bb->addInstruction(std::move(li_inst));
 
     // 计算最终地址：base + offset
     auto addr_reg = codeGen_->allocateIntReg();
     auto add_inst = std::make_unique<Instruction>(Opcode::ADD, parent_bb);
-    add_inst->addOperand(std::make_unique<RegisterOperand>(
+    add_inst->addOperand_(std::make_unique<RegisterOperand>(
         addr_reg->getRegNum(), addr_reg->isVirtual()));
-    add_inst->addOperand(std::move(base_reg));
-    add_inst->addOperand(std::move(temp_reg));
+    add_inst->addOperand_(std::move(base_reg));
+    add_inst->addOperand_(std::move(temp_reg));
     parent_bb->addInstruction(std::move(add_inst));
 
     return addr_reg;
@@ -3940,8 +3940,8 @@ void Visitor::generateMemoryInstruction(
     if (isValidImmediateOffset(offset)) {
         // 偏移量在有效范围内，直接生成指令
         auto inst = std::make_unique<Instruction>(opcode, parent_bb);
-        inst->addOperand(std::move(target_reg));
-        inst->addOperand(std::make_unique<MemoryOperand>(
+        inst->addOperand_(std::move(target_reg));
+        inst->addOperand_(std::make_unique<MemoryOperand>(
             std::move(base_reg), std::make_unique<ImmediateOperand>(offset)));
         parent_bb->addInstruction(std::move(inst));
     } else {
@@ -3951,8 +3951,8 @@ void Visitor::generateMemoryInstruction(
 
         // 使用计算出的地址和 0 偏移量生成指令
         auto inst = std::make_unique<Instruction>(opcode, parent_bb);
-        inst->addOperand(std::move(target_reg));
-        inst->addOperand(std::make_unique<MemoryOperand>(
+        inst->addOperand_(std::move(target_reg));
+        inst->addOperand_(std::make_unique<MemoryOperand>(
             std::move(addr_reg), std::make_unique<ImmediateOperand>(0)));
         parent_bb->addInstruction(std::move(inst));
     }
@@ -4067,9 +4067,9 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         auto global_addr_reg = codeGen_->allocateIntReg();
         auto global_addr_inst =
             std::make_unique<Instruction>(Opcode::LA, parent_bb);
-        global_addr_inst->addOperand(std::make_unique<RegisterOperand>(
+        global_addr_inst->addOperand_(std::make_unique<RegisterOperand>(
             global_addr_reg->getRegNum(), global_addr_reg->isVirtual()));  // rd
-        global_addr_inst->addOperand(std::make_unique<LabelOperand>(
+        global_addr_inst->addOperand_(std::make_unique<LabelOperand>(
             global_var->getName()));  // global symbol
         parent_bb->addInstruction(std::move(global_addr_inst));
 
@@ -4089,9 +4089,9 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
 
             auto load_inst =
                 std::make_unique<Instruction>(load_opcode, parent_bb);
-            load_inst->addOperand(
+            load_inst->addOperand_(
                 cloneRegister(value_reg.get(), is_float_value));
-            load_inst->addOperand(std::make_unique<MemoryOperand>(
+            load_inst->addOperand_(std::make_unique<MemoryOperand>(
                 std::make_unique<RegisterOperand>(global_addr_reg->getRegNum(),
                                                   global_addr_reg->isVirtual()),
                 std::make_unique<ImmediateOperand>(0)));
@@ -4123,10 +4123,10 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
                 // 不进行全局映射，避免跨基本块依赖
                 auto fcvt_inst =
                     std::make_unique<Instruction>(Opcode::FCVT_S_W, parent_bb);
-                fcvt_inst->addOperand(std::make_unique<RegisterOperand>(
+                fcvt_inst->addOperand_(std::make_unique<RegisterOperand>(
                     float_reg->getRegNum(), float_reg->isVirtual(),
                     RegisterType::Float));
-                fcvt_inst->addOperand(
+                fcvt_inst->addOperand_(
                     std::make_unique<RegisterOperand>("zero"));
                 parent_bb->addInstruction(std::move(fcvt_inst));
                 return std::make_unique<RegisterOperand>(float_reg->getRegNum(),
@@ -4137,9 +4137,9 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
             // 对于非零浮点值，使用 LI + FMV_W_X 序列
             auto int_reg = codeGen_->allocateIntReg();
             auto li_inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
-            li_inst->addOperand(std::make_unique<RegisterOperand>(
+            li_inst->addOperand_(std::make_unique<RegisterOperand>(
                 int_reg->getRegNum(), int_reg->isVirtual()));
-            li_inst->addOperand(std::make_unique<ImmediateOperand>(int_value));
+            li_inst->addOperand_(std::make_unique<ImmediateOperand>(int_value));
             parent_bb->addInstruction(std::move(li_inst));
 
             auto float_reg = codeGen_->allocateFloatReg();
@@ -4147,10 +4147,10 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
 
             auto fmv_inst =
                 std::make_unique<Instruction>(Opcode::FMV_W_X, parent_bb);
-            fmv_inst->addOperand(std::make_unique<RegisterOperand>(
+            fmv_inst->addOperand_(std::make_unique<RegisterOperand>(
                 float_reg->getRegNum(), float_reg->isVirtual(),
                 RegisterType::Float));
-            fmv_inst->addOperand(std::make_unique<RegisterOperand>(
+            fmv_inst->addOperand_(std::make_unique<RegisterOperand>(
                 int_reg->getRegNum(), int_reg->isVirtual(),
                 RegisterType::Integer));
             parent_bb->addInstruction(std::move(fmv_inst));
@@ -4177,10 +4177,10 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         // codeGen_->mapValueToReg(value, new_reg->getRegNum(),
         //                         new_reg->isVirtual());
         auto inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
-        inst->addOperand(
+        inst->addOperand_(
             std::make_unique<RegisterOperand>(new_reg->getRegNum(),
                                               new_reg->isVirtual()));  // rd
-        inst->addOperand(std::make_unique<ImmediateOperand>(value_int));
+        inst->addOperand_(std::make_unique<ImmediateOperand>(value_int));
         parent_bb->addInstruction(std::move(inst));
         // 返回新分配的寄存器操作数
         return std::make_unique<RegisterOperand>(new_reg->getRegNum(),
@@ -4203,10 +4203,10 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
             // 使用 fcvt.s.w 指令将整数零转换为浮点零
             auto fcvt_inst =
                 std::make_unique<Instruction>(Opcode::FCVT_S_W, parent_bb);
-            fcvt_inst->addOperand(std::make_unique<RegisterOperand>(
+            fcvt_inst->addOperand_(std::make_unique<RegisterOperand>(
                 float_reg->getRegNum(), float_reg->isVirtual(),
                 RegisterType::Float));  // rd (float)
-            fcvt_inst->addOperand(
+            fcvt_inst->addOperand_(
                 std::make_unique<RegisterOperand>("zero"));  // rs1 (int zero)
             parent_bb->addInstruction(std::move(fcvt_inst));
 
@@ -4227,9 +4227,9 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         // 1. 分配整数寄存器用于加载位模式
         auto int_reg = codeGen_->allocateIntReg();
         auto li_inst = std::make_unique<Instruction>(Opcode::LI, parent_bb);
-        li_inst->addOperand(std::make_unique<RegisterOperand>(
+        li_inst->addOperand_(std::make_unique<RegisterOperand>(
             int_reg->getRegNum(), int_reg->isVirtual()));  // rd
-        li_inst->addOperand(std::make_unique<ImmediateOperand>(bit_pattern));
+        li_inst->addOperand_(std::make_unique<ImmediateOperand>(bit_pattern));
         parent_bb->addInstruction(std::move(li_inst));
 
         // 2. 分配浮点寄存器
@@ -4241,10 +4241,10 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         // 3. 生成fmv.w.x指令：将位模式从整数寄存器移动到浮点寄存器
         auto fmv_inst =
             std::make_unique<Instruction>(Opcode::FMV_W_X, parent_bb);
-        fmv_inst->addOperand(std::make_unique<RegisterOperand>(
+        fmv_inst->addOperand_(std::make_unique<RegisterOperand>(
             float_reg->getRegNum(), float_reg->isVirtual(),
             RegisterType::Float));  // rd (float)
-        fmv_inst->addOperand(std::make_unique<RegisterOperand>(
+        fmv_inst->addOperand_(std::make_unique<RegisterOperand>(
             int_reg->getRegNum(), int_reg->isVirtual(),
             RegisterType::Integer));  // rs1 (int)
         parent_bb->addInstruction(std::move(fmv_inst));

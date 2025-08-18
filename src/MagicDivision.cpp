@@ -106,9 +106,9 @@ auto MagicDivision::generateLoadImmediate(int64_t value, BasicBlock* parent_bb)
     auto new_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
 
     auto instruction = std::make_unique<Instruction>(Opcode::LI, parent_bb);
-    instruction->addOperand(std::make_unique<RegisterOperand>(
+    instruction->addOperand_(std::make_unique<RegisterOperand>(
         new_reg->getRegNum(), new_reg->isVirtual()));
-    instruction->addOperand(std::make_unique<ImmediateOperand>(value));
+    instruction->addOperand_(std::make_unique<ImmediateOperand>(value));
 
     parent_bb->addInstruction(std::move(instruction));
 
@@ -150,42 +150,42 @@ auto MagicDivision::generatePowerOfTwoDivision(
     // 1. 获取符号位：srai sign_reg, dividend, 31
     auto sign_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
     auto sign_instr = std::make_unique<Instruction>(Opcode::SRAI, parent_bb);
-    sign_instr->addOperand(std::make_unique<RegisterOperand>(
+    sign_instr->addOperand_(std::make_unique<RegisterOperand>(
         sign_reg->getRegNum(), sign_reg->isVirtual()));
-    sign_instr->addOperand(std::make_unique<RegisterOperand>(
+    sign_instr->addOperand_(std::make_unique<RegisterOperand>(
         dividend_reg->getRegNum(), dividend_reg->isVirtual()));
-    sign_instr->addOperand(std::make_unique<ImmediateOperand>(SIGN_BIT_SHIFT));
+    sign_instr->addOperand_(std::make_unique<ImmediateOperand>(SIGN_BIT_SHIFT));
     parent_bb->addInstruction(std::move(sign_instr));
 
     // 2. 计算调整值：andi adjust_reg, sign_reg, (divisor - 1)
     auto adjust_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
     auto andi_instr = std::make_unique<Instruction>(Opcode::ANDI, parent_bb);
-    andi_instr->addOperand(std::make_unique<RegisterOperand>(
+    andi_instr->addOperand_(std::make_unique<RegisterOperand>(
         adjust_reg->getRegNum(), adjust_reg->isVirtual()));
-    andi_instr->addOperand(std::make_unique<RegisterOperand>(
+    andi_instr->addOperand_(std::make_unique<RegisterOperand>(
         sign_reg->getRegNum(), sign_reg->isVirtual()));
-    andi_instr->addOperand(std::make_unique<ImmediateOperand>(divisor - 1));
+    andi_instr->addOperand_(std::make_unique<ImmediateOperand>(divisor - 1));
     parent_bb->addInstruction(std::move(andi_instr));
 
     // 3. 加法调整：add temp_reg, dividend, adjust_reg
     auto temp_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
     auto add_instr = std::make_unique<Instruction>(Opcode::ADDW, parent_bb);
-    add_instr->addOperand(std::make_unique<RegisterOperand>(
+    add_instr->addOperand_(std::make_unique<RegisterOperand>(
         temp_reg->getRegNum(), temp_reg->isVirtual()));
-    add_instr->addOperand(std::make_unique<RegisterOperand>(
+    add_instr->addOperand_(std::make_unique<RegisterOperand>(
         dividend_reg->getRegNum(), dividend_reg->isVirtual()));
-    add_instr->addOperand(std::make_unique<RegisterOperand>(
+    add_instr->addOperand_(std::make_unique<RegisterOperand>(
         adjust_reg->getRegNum(), adjust_reg->isVirtual()));
     parent_bb->addInstruction(std::move(add_instr));
 
     // 4. 算术右移：srai result_reg, temp_reg, shift_amount
     auto result_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
     auto srai_instr = std::make_unique<Instruction>(Opcode::SRAI, parent_bb);
-    srai_instr->addOperand(std::make_unique<RegisterOperand>(
+    srai_instr->addOperand_(std::make_unique<RegisterOperand>(
         result_reg->getRegNum(), result_reg->isVirtual()));
-    srai_instr->addOperand(std::make_unique<RegisterOperand>(
+    srai_instr->addOperand_(std::make_unique<RegisterOperand>(
         temp_reg->getRegNum(), temp_reg->isVirtual()));
-    srai_instr->addOperand(std::make_unique<ImmediateOperand>(shift_amount));
+    srai_instr->addOperand_(std::make_unique<ImmediateOperand>(shift_amount));
     parent_bb->addInstruction(std::move(srai_instr));
 
     return result_reg;
@@ -202,31 +202,31 @@ auto MagicDivision::generatePowerOfTwoModulo(
     // 1. 获取符号位：srai sign_reg, dividend, 31
     auto sign_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
     auto sign_instr = std::make_unique<Instruction>(Opcode::SRAI, parent_bb);
-    sign_instr->addOperand(std::make_unique<RegisterOperand>(
+    sign_instr->addOperand_(std::make_unique<RegisterOperand>(
         sign_reg->getRegNum(), sign_reg->isVirtual()));
-    sign_instr->addOperand(std::make_unique<RegisterOperand>(
+    sign_instr->addOperand_(std::make_unique<RegisterOperand>(
         dividend_reg->getRegNum(), dividend_reg->isVirtual()));
-    sign_instr->addOperand(std::make_unique<ImmediateOperand>(SIGN_BIT_SHIFT));
+    sign_instr->addOperand_(std::make_unique<ImmediateOperand>(SIGN_BIT_SHIFT));
     parent_bb->addInstruction(std::move(sign_instr));
 
     // 2. 计算调整值：andi adjust_reg, sign_reg, (divisor - 1)
     auto adjust_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
     auto andi_instr = std::make_unique<Instruction>(Opcode::ANDI, parent_bb);
-    andi_instr->addOperand(std::make_unique<RegisterOperand>(
+    andi_instr->addOperand_(std::make_unique<RegisterOperand>(
         adjust_reg->getRegNum(), adjust_reg->isVirtual()));
-    andi_instr->addOperand(std::make_unique<RegisterOperand>(
+    andi_instr->addOperand_(std::make_unique<RegisterOperand>(
         sign_reg->getRegNum(), sign_reg->isVirtual()));
-    andi_instr->addOperand(std::make_unique<ImmediateOperand>(divisor - 1));
+    andi_instr->addOperand_(std::make_unique<ImmediateOperand>(divisor - 1));
     parent_bb->addInstruction(std::move(andi_instr));
 
     // 3. 加法调整：addw temp_reg, dividend, adjust_reg
     auto temp_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
     auto add_instr = std::make_unique<Instruction>(Opcode::ADDW, parent_bb);
-    add_instr->addOperand(std::make_unique<RegisterOperand>(
+    add_instr->addOperand_(std::make_unique<RegisterOperand>(
         temp_reg->getRegNum(), temp_reg->isVirtual()));
-    add_instr->addOperand(std::make_unique<RegisterOperand>(
+    add_instr->addOperand_(std::make_unique<RegisterOperand>(
         dividend_reg->getRegNum(), dividend_reg->isVirtual()));
-    add_instr->addOperand(std::make_unique<RegisterOperand>(
+    add_instr->addOperand_(std::make_unique<RegisterOperand>(
         adjust_reg->getRegNum(), adjust_reg->isVirtual()));
     parent_bb->addInstruction(std::move(add_instr));
 
@@ -234,22 +234,22 @@ auto MagicDivision::generatePowerOfTwoModulo(
     auto masked_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
     auto and_mask_instr =
         std::make_unique<Instruction>(Opcode::ANDI, parent_bb);
-    and_mask_instr->addOperand(std::make_unique<RegisterOperand>(
+    and_mask_instr->addOperand_(std::make_unique<RegisterOperand>(
         masked_reg->getRegNum(), masked_reg->isVirtual()));
-    and_mask_instr->addOperand(std::make_unique<RegisterOperand>(
+    and_mask_instr->addOperand_(std::make_unique<RegisterOperand>(
         temp_reg->getRegNum(), temp_reg->isVirtual()));
-    and_mask_instr->addOperand(std::make_unique<ImmediateOperand>(
+    and_mask_instr->addOperand_(std::make_unique<ImmediateOperand>(
         static_cast<int32_t>(~static_cast<uint32_t>(divisor - 1))));
     parent_bb->addInstruction(std::move(and_mask_instr));
 
     // 5. 计算最终结果：subw result_reg, dividend, masked_reg
     auto result_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
     auto sub_instr = std::make_unique<Instruction>(Opcode::SUBW, parent_bb);
-    sub_instr->addOperand(std::make_unique<RegisterOperand>(
+    sub_instr->addOperand_(std::make_unique<RegisterOperand>(
         result_reg->getRegNum(), result_reg->isVirtual()));
-    sub_instr->addOperand(std::make_unique<RegisterOperand>(
+    sub_instr->addOperand_(std::make_unique<RegisterOperand>(
         dividend_reg->getRegNum(), dividend_reg->isVirtual()));
-    sub_instr->addOperand(std::make_unique<RegisterOperand>(
+    sub_instr->addOperand_(std::make_unique<RegisterOperand>(
         masked_reg->getRegNum(), masked_reg->isVirtual()));
     parent_bb->addInstruction(std::move(sub_instr));
 
@@ -283,11 +283,11 @@ auto MagicDivision::generateMagicDivision(
 
         // subw result, zero, dividend  (result = 0 - dividend)
         auto neg_instr = std::make_unique<Instruction>(Opcode::SUBW, parent_bb);
-        neg_instr->addOperand(std::make_unique<RegisterOperand>(
+        neg_instr->addOperand_(std::make_unique<RegisterOperand>(
             result_reg->getRegNum(), result_reg->isVirtual()));
-        neg_instr->addOperand(
+        neg_instr->addOperand_(
             std::make_unique<RegisterOperand>(0, false));  // zero reg
-        neg_instr->addOperand(std::make_unique<RegisterOperand>(
+        neg_instr->addOperand_(std::make_unique<RegisterOperand>(
             dividend_reg->getRegNum(), dividend_reg->isVirtual()));
         parent_bb->addInstruction(std::move(neg_instr));
 
@@ -309,22 +309,22 @@ auto MagicDivision::generateMagicDivision(
     // 2. 执行乘法：magic * dividend
     auto mul_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
     auto mul_instr = std::make_unique<Instruction>(Opcode::MUL, parent_bb);
-    mul_instr->addOperand(std::make_unique<RegisterOperand>(
+    mul_instr->addOperand_(std::make_unique<RegisterOperand>(
         mul_reg->getRegNum(), mul_reg->isVirtual()));
-    mul_instr->addOperand(std::make_unique<RegisterOperand>(
+    mul_instr->addOperand_(std::make_unique<RegisterOperand>(
         magic_reg->getRegNum(), magic_reg->isVirtual()));
-    mul_instr->addOperand(std::make_unique<RegisterOperand>(
+    mul_instr->addOperand_(std::make_unique<RegisterOperand>(
         dividend_reg->getRegNum(), dividend_reg->isVirtual()));
     parent_bb->addInstruction(std::move(mul_instr));
 
     // 3. 提取高32位：srai result, mul_result, 32
     auto high_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
     auto srai_instr = std::make_unique<Instruction>(Opcode::SRAI, parent_bb);
-    srai_instr->addOperand(std::make_unique<RegisterOperand>(
+    srai_instr->addOperand_(std::make_unique<RegisterOperand>(
         high_reg->getRegNum(), high_reg->isVirtual()));
-    srai_instr->addOperand(std::make_unique<RegisterOperand>(
+    srai_instr->addOperand_(std::make_unique<RegisterOperand>(
         mul_reg->getRegNum(), mul_reg->isVirtual()));
-    srai_instr->addOperand(std::make_unique<ImmediateOperand>(SHIFT_32_BITS));
+    srai_instr->addOperand_(std::make_unique<ImmediateOperand>(SHIFT_32_BITS));
     parent_bb->addInstruction(std::move(srai_instr));
 
     auto current_reg = std::move(high_reg);
@@ -333,11 +333,11 @@ auto MagicDivision::generateMagicDivision(
     if (constants.add_flag) {
         auto add_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
         auto add_instr = std::make_unique<Instruction>(Opcode::ADD, parent_bb);
-        add_instr->addOperand(std::make_unique<RegisterOperand>(
+        add_instr->addOperand_(std::make_unique<RegisterOperand>(
             add_reg->getRegNum(), add_reg->isVirtual()));
-        add_instr->addOperand(std::make_unique<RegisterOperand>(
+        add_instr->addOperand_(std::make_unique<RegisterOperand>(
             current_reg->getRegNum(), current_reg->isVirtual()));
-        add_instr->addOperand(std::make_unique<RegisterOperand>(
+        add_instr->addOperand_(std::make_unique<RegisterOperand>(
             dividend_reg->getRegNum(), dividend_reg->isVirtual()));
         parent_bb->addInstruction(std::move(add_instr));
 
@@ -350,11 +350,11 @@ auto MagicDivision::generateMagicDivision(
             std::make_unique<RegisterOperand>(next_reg_num++, true);
         auto shift_instr =
             std::make_unique<Instruction>(Opcode::SRAI, parent_bb);
-        shift_instr->addOperand(std::make_unique<RegisterOperand>(
+        shift_instr->addOperand_(std::make_unique<RegisterOperand>(
             shift_reg->getRegNum(), shift_reg->isVirtual()));
-        shift_instr->addOperand(std::make_unique<RegisterOperand>(
+        shift_instr->addOperand_(std::make_unique<RegisterOperand>(
             current_reg->getRegNum(), current_reg->isVirtual()));
-        shift_instr->addOperand(
+        shift_instr->addOperand_(
             std::make_unique<ImmediateOperand>(constants.shift));
         parent_bb->addInstruction(std::move(shift_instr));
 
@@ -364,11 +364,11 @@ auto MagicDivision::generateMagicDivision(
     // 6. 计算符号位：srai sign_reg, dividend, 31
     auto sign_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
     auto sign_instr = std::make_unique<Instruction>(Opcode::SRAI, parent_bb);
-    sign_instr->addOperand(std::make_unique<RegisterOperand>(
+    sign_instr->addOperand_(std::make_unique<RegisterOperand>(
         sign_reg->getRegNum(), sign_reg->isVirtual()));
-    sign_instr->addOperand(std::make_unique<RegisterOperand>(
+    sign_instr->addOperand_(std::make_unique<RegisterOperand>(
         dividend_reg->getRegNum(), dividend_reg->isVirtual()));
-    sign_instr->addOperand(std::make_unique<ImmediateOperand>(SIGN_BIT_SHIFT));
+    sign_instr->addOperand_(std::make_unique<ImmediateOperand>(SIGN_BIT_SHIFT));
     parent_bb->addInstruction(std::move(sign_instr));
 
     // 7. 最终调整
@@ -377,21 +377,21 @@ auto MagicDivision::generateMagicDivision(
     if (divisor > 0) {
         // subw final, result, sign
         auto sub_instr = std::make_unique<Instruction>(Opcode::SUBW, parent_bb);
-        sub_instr->addOperand(std::make_unique<RegisterOperand>(
+        sub_instr->addOperand_(std::make_unique<RegisterOperand>(
             final_reg->getRegNum(), final_reg->isVirtual()));
-        sub_instr->addOperand(std::make_unique<RegisterOperand>(
+        sub_instr->addOperand_(std::make_unique<RegisterOperand>(
             current_reg->getRegNum(), current_reg->isVirtual()));
-        sub_instr->addOperand(std::make_unique<RegisterOperand>(
+        sub_instr->addOperand_(std::make_unique<RegisterOperand>(
             sign_reg->getRegNum(), sign_reg->isVirtual()));
         parent_bb->addInstruction(std::move(sub_instr));
     } else {
         // subw final, sign, result
         auto sub_instr = std::make_unique<Instruction>(Opcode::SUBW, parent_bb);
-        sub_instr->addOperand(std::make_unique<RegisterOperand>(
+        sub_instr->addOperand_(std::make_unique<RegisterOperand>(
             final_reg->getRegNum(), final_reg->isVirtual()));
-        sub_instr->addOperand(std::make_unique<RegisterOperand>(
+        sub_instr->addOperand_(std::make_unique<RegisterOperand>(
             sign_reg->getRegNum(), sign_reg->isVirtual()));
-        sub_instr->addOperand(std::make_unique<RegisterOperand>(
+        sub_instr->addOperand_(std::make_unique<RegisterOperand>(
             current_reg->getRegNum(), current_reg->isVirtual()));
         parent_bb->addInstruction(std::move(sub_instr));
     }
@@ -427,22 +427,22 @@ auto MagicDivision::generateMagicModulo(
     static int next_reg_num = VIRTUAL_REG_START;
     auto product_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
     auto mul_instr = std::make_unique<Instruction>(Opcode::MULW, parent_bb);
-    mul_instr->addOperand(std::make_unique<RegisterOperand>(
+    mul_instr->addOperand_(std::make_unique<RegisterOperand>(
         product_reg->getRegNum(), product_reg->isVirtual()));
-    mul_instr->addOperand(std::make_unique<RegisterOperand>(
+    mul_instr->addOperand_(std::make_unique<RegisterOperand>(
         quotient_reg->getRegNum(), quotient_reg->isVirtual()));
-    mul_instr->addOperand(std::make_unique<RegisterOperand>(
+    mul_instr->addOperand_(std::make_unique<RegisterOperand>(
         divisor_reg->getRegNum(), divisor_reg->isVirtual()));
     parent_bb->addInstruction(std::move(mul_instr));
 
     // 计算 dividend - (quotient * divisor)
     auto result_reg = std::make_unique<RegisterOperand>(next_reg_num++, true);
     auto sub_instr = std::make_unique<Instruction>(Opcode::SUBW, parent_bb);
-    sub_instr->addOperand(std::make_unique<RegisterOperand>(
+    sub_instr->addOperand_(std::make_unique<RegisterOperand>(
         result_reg->getRegNum(), result_reg->isVirtual()));
-    sub_instr->addOperand(std::make_unique<RegisterOperand>(
+    sub_instr->addOperand_(std::make_unique<RegisterOperand>(
         dividend_reg_num, dividend_is_virtual));
-    sub_instr->addOperand(std::make_unique<RegisterOperand>(
+    sub_instr->addOperand_(std::make_unique<RegisterOperand>(
         product_reg->getRegNum(), product_reg->isVirtual()));
     parent_bb->addInstruction(std::move(sub_instr));
 

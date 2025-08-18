@@ -468,11 +468,11 @@ void SpillCodeOptimizer::replaceWithMoveInstruction(Instruction* inst,
 
     // 添加目标寄存器操作数
     auto targetOperand = std::make_unique<RegisterOperand>(targetReg, false, T);
-    inst->addOperand(std::move(targetOperand));
+    inst->addOperand_(std::move(targetOperand));
 
     // 添加源寄存器操作数
     auto sourceOperand = std::make_unique<RegisterOperand>(sourceReg, false, T);
-    inst->addOperand(std::move(sourceOperand));
+    inst->addOperand_(std::move(sourceOperand));
 
     DEBUG_OUT() << "Replaced instruction with " << (isFloat ? "FMV" : "MV")
                 << " r" << targetReg << ", r" << sourceReg << std::endl;

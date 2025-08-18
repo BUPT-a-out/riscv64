@@ -241,9 +241,9 @@ auto ValueReusePass::modifyInstruction(
                     // 替换为 MV 指令
                     inst->setOpcode(Opcode::MV);
                     inst->clearOperands();
-                    inst->addOperand(std::make_unique<RegisterOperand>(
+                    inst->addOperand_(std::make_unique<RegisterOperand>(
                         dest_reg_num, dest_is_virtual, dest_reg_type));
-                    inst->addOperand(std::make_unique<RegisterOperand>(
+                    inst->addOperand_(std::make_unique<RegisterOperand>(
                         existing_reg_num, existing_is_virtual,
                         existing_reg_type));
 

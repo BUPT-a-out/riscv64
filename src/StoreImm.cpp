@@ -15,9 +15,9 @@ std::unique_ptr<RegisterOperand> Visitor::floatImmToReg(
         // 使用 fcvt.s.w 指令将整数零转换为浮点零
         auto fcvt_inst =
             std::make_unique<Instruction>(Opcode::FCVT_S_W, parent_bb);
-        fcvt_inst->addOperand(
+        fcvt_inst->addOperand_(
             cloneRegister(float_reg.get(), true));  // rd (float)
-        fcvt_inst->addOperand(
+        fcvt_inst->addOperand_(
             std::make_unique<RegisterOperand>("zero"));  // rs1 (int zero)
         parent_bb->addInstruction(std::move(fcvt_inst));
 
@@ -39,14 +39,14 @@ std::unique_ptr<RegisterOperand> Visitor::floatImmToReg(
     // 当常量池符号地址超出 32bit 时会导致加载到错误地址，引发浮点常量错乱。
     // 改为使用 "la"（PC 相对）可以由汇编器/链接器生成正确的重定位序列。
     auto la_inst = std::make_unique<Instruction>(Opcode::LA, parent_bb);
-    la_inst->addOperand(cloneRegister(addr_reg.get()));  // rd
-    la_inst->addOperand(std::make_unique<LabelOperand>(label));  // symbol
+    la_inst->addOperand_(cloneRegister(addr_reg.get()));          // rd
+    la_inst->addOperand_(std::make_unique<LabelOperand>(label));  // symbol
     parent_bb->addInstruction(std::move(la_inst));
 
     // 生成 flw 指令：从内存加载浮点数
     auto flw_inst = std::make_unique<Instruction>(Opcode::FLW, parent_bb);
-    flw_inst->addOperand(cloneRegister(float_reg.get(), true));
-    flw_inst->addOperand(std::make_unique<MemoryOperand>(
+    flw_inst->addOperand_(cloneRegister(float_reg.get(), true));
+    flw_inst->addOperand_(std::make_unique<MemoryOperand>(
         std::make_unique<RegisterOperand>(addr_reg->getRegNum(),
                                           addr_reg->isVirtual()),
         std::make_unique<ImmediateOperand>(0)));
@@ -75,8 +75,8 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
         auto new_reg = codeGen_->allocateIntReg();
         auto instruction =
             std::make_unique<Instruction>(Opcode::FRAMEADDR, parent_bb);
-        instruction->addOperand(cloneRegister(new_reg.get()));  // rd
-        instruction->addOperand(std::make_unique<FrameIndexOperand>(
+        instruction->addOperand_(cloneRegister(new_reg.get()));  // rd
+        instruction->addOperand_(std::make_unique<FrameIndexOperand>(
             frame_operand->getIndex()));  // FI
         parent_bb->addInstruction(std::move(instruction));
 
@@ -109,8 +109,8 @@ std::unique_ptr<RegisterOperand> Visitor::immToReg(
         // 生成一个新的寄存器，并将立即数加载到该寄存器中
         auto instruction = std::make_unique<Instruction>(Opcode::LI, parent_bb);
         auto new_reg = codeGen_->allocateIntReg();  // 分配一个新的寄存器
-        instruction->addOperand(cloneRegister(new_reg.get()));  // rd
-        instruction->addOperand(std::make_unique<ImmediateOperand>(
+        instruction->addOperand_(cloneRegister(new_reg.get()));  // rd
+        instruction->addOperand_(std::make_unique<ImmediateOperand>(
             imm_operand->getValue()));  // imm
         parent_bb->addInstruction(std::move(instruction));
 

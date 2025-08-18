@@ -138,9 +138,9 @@ void RegisterRewriter::rewrite() {
                 // 1. 插入 FRAMEADDR 指令
                 auto frameAddrInst =
                     std::make_unique<Instruction>(Opcode::FRAMEADDR);
-                frameAddrInst->addOperand(
+                frameAddrInst->addOperand_(
                     std::make_unique<RegisterOperand>(addrReg, false));
-                frameAddrInst->addOperand(
+                frameAddrInst->addOperand_(
                     std::make_unique<FrameIndexOperand>(fi_id));
                 it = BB->insert(it, std::move(frameAddrInst));
                 ++it;
@@ -148,18 +148,18 @@ void RegisterRewriter::rewrite() {
                 // 2. 插入 LOAD 指令
                 if (assigningFloat) {
                     auto loadInst = std::make_unique<Instruction>(Opcode::FLW);
-                    loadInst->addOperand(
+                    loadInst->addOperand_(
                         std::make_unique<RegisterOperand>(dataReg, false));
-                    loadInst->addOperand(std::make_unique<MemoryOperand>(
+                    loadInst->addOperand_(std::make_unique<MemoryOperand>(
                         std::make_unique<RegisterOperand>(addrReg, false),
                         std::make_unique<ImmediateOperand>(0)));
                     it = BB->insert(it, std::move(loadInst));
                     ++it;
                 } else {
                     auto loadInst = std::make_unique<Instruction>(Opcode::LD);
-                    loadInst->addOperand(
+                    loadInst->addOperand_(
                         std::make_unique<RegisterOperand>(dataReg, false));
-                    loadInst->addOperand(std::make_unique<MemoryOperand>(
+                    loadInst->addOperand_(std::make_unique<MemoryOperand>(
                         std::make_unique<RegisterOperand>(addrReg, false),
                         std::make_unique<ImmediateOperand>(0)));
                     it = BB->insert(it, std::move(loadInst));
@@ -192,9 +192,9 @@ void RegisterRewriter::rewrite() {
                 // 1. 插入 FRAMEADDR 指令
                 auto frameAddrInst =
                     std::make_unique<Instruction>(Opcode::FRAMEADDR);
-                frameAddrInst->addOperand(
+                frameAddrInst->addOperand_(
                     std::make_unique<RegisterOperand>(addrReg, false));
-                frameAddrInst->addOperand(
+                frameAddrInst->addOperand_(
                     std::make_unique<FrameIndexOperand>(fi_id));
                 it = BB->insert(it, std::move(frameAddrInst));
                 ++it;
@@ -202,18 +202,18 @@ void RegisterRewriter::rewrite() {
                 // 2. 插入 STORE 指令
                 if (assigningFloat) {
                     auto storeInst = std::make_unique<Instruction>(Opcode::FSW);
-                    storeInst->addOperand(
+                    storeInst->addOperand_(
                         std::make_unique<RegisterOperand>(dataReg, false));
-                    storeInst->addOperand(std::make_unique<MemoryOperand>(
+                    storeInst->addOperand_(std::make_unique<MemoryOperand>(
                         std::make_unique<RegisterOperand>(addrReg, false),
                         std::make_unique<ImmediateOperand>(0)));
                     it = BB->insert(it, std::move(storeInst));
                     ++it;
                 } else {
                     auto storeInst = std::make_unique<Instruction>(Opcode::SD);
-                    storeInst->addOperand(
+                    storeInst->addOperand_(
                         std::make_unique<RegisterOperand>(dataReg, false));
-                    storeInst->addOperand(std::make_unique<MemoryOperand>(
+                    storeInst->addOperand_(std::make_unique<MemoryOperand>(
                         std::make_unique<RegisterOperand>(addrReg, false),
                         std::make_unique<ImmediateOperand>(0)));
                     it = BB->insert(it, std::move(storeInst));

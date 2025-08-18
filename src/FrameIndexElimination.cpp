@@ -347,15 +347,18 @@ FrameIndexElimination::generateAddressComputation(int offset) {
     std::vector<std::unique_ptr<Instruction>> insts;
 
     auto liOffsetInst = std::make_unique<Instruction>(Opcode::LI);
-    liOffsetInst->addOperand(
+    liOffsetInst->addOperand_(
         std::make_unique<RegisterOperand>(5, false));  // t0
-    liOffsetInst->addOperand(std::make_unique<ImmediateOperand>(offset));
+    liOffsetInst->addOperand_(std::make_unique<ImmediateOperand>(offset));
     insts.push_back(std::move(liOffsetInst));
 
     auto addAddrInst = std::make_unique<Instruction>(Opcode::ADD);
-    addAddrInst->addOperand(std::make_unique<RegisterOperand>(5, false));  // t0
-    addAddrInst->addOperand(std::make_unique<RegisterOperand>(2, false));  // sp
-    addAddrInst->addOperand(std::make_unique<RegisterOperand>(5, false));  // t0
+    addAddrInst->addOperand_(
+        std::make_unique<RegisterOperand>(5, false));  // t0
+    addAddrInst->addOperand_(
+        std::make_unique<RegisterOperand>(2, false));  // sp
+    addAddrInst->addOperand_(
+        std::make_unique<RegisterOperand>(5, false));  // t0
     insts.push_back(std::move(addAddrInst));
 
     return insts;
@@ -382,11 +385,11 @@ FrameIndexElimination::generateRegisterSave(int regNum, int offset,
     std::vector<std::unique_ptr<Instruction>> insts;
 
     auto saveReg = std::make_unique<Instruction>(opcode);
-    saveReg->addOperand(std::make_unique<RegisterOperand>(regNum, false));
+    saveReg->addOperand_(std::make_unique<RegisterOperand>(regNum, false));
 
     if (isValidImmediateOffset(offset)) {
         // 直接使用偏移量
-        saveReg->addOperand(generateMemoryOperand(offset, true));
+        saveReg->addOperand_(generateMemoryOperand(offset, true));
         insts.push_back(std::move(saveReg));
     } else {
         // 使用地址计算
@@ -396,7 +399,7 @@ FrameIndexElimination::generateRegisterSave(int regNum, int offset,
                   std::back_inserter(insts));
 
         // 然后添加保存指令，使用t0寄存器，偏移为0
-        saveReg->addOperand(
+        saveReg->addOperand_(
             generateMemoryOperand(0, false));  // 使用t0寄存器，偏移为0
         insts.push_back(std::move(saveReg));
     }
@@ -410,7 +413,7 @@ FrameIndexElimination::restoreRegister(int regNum, int offset, Opcode opcode) {
     std::vector<std::unique_ptr<Instruction>> insts;
 
     auto restoreReg = std::make_unique<Instruction>(opcode);
-    restoreReg->addOperand(std::make_unique<RegisterOperand>(regNum, false));
+    restoreReg->addOperand_(std::make_unique<RegisterOperand>(regNum, false));
 
     bool useDirectOffset = isValidImmediateOffset(offset);
     if (!useDirectOffset) {
@@ -420,7 +423,7 @@ FrameIndexElimination::restoreRegister(int regNum, int offset, Opcode opcode) {
                   std::back_inserter(insts));
     }
 
-    restoreReg->addOperand(generateMemoryOperand(offset, useDirectOffset));
+    restoreReg->addOperand_(generateMemoryOperand(offset, useDirectOffset));
     insts.push_back(std::move(restoreReg));
 
     return insts;
