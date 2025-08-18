@@ -66,9 +66,9 @@ class MachineOperand : midend::Value {
 
    protected:
     explicit MachineOperand(OperandType t)
-        : Value(getVoidType(), midend::ValueKind::ReturnInst,
-                this->toString()),
-          type(t) {}
+        : Value(getVoidType(), midend::ValueKind::ReturnInst, ""), type(t) {}
+
+   private:
     OperandType type;
 };
 
