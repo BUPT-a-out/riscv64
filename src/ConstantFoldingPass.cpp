@@ -879,6 +879,13 @@ std::optional<int64_t> ConstantFolding::calculateInstructionValue(
 
     switch (op) {
         // Binary arithmetic (signed) wrap in 32-bit
+        case Opcode::MV: {
+            if (source_operands.size() != 1) {
+                return std::nullopt;  // MV should have one source operand
+            }
+            int32_t value = as_i32(source_operands[0]);
+            return value;
+        }
         case Opcode::ADD:
         case Opcode::ADDW:
         case Opcode::ADDI:
