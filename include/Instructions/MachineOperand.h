@@ -8,7 +8,15 @@
 
 #include "../ABI.h"
 #include "IR/BasicBlock.h"
+#include "IR/Type.h"
 // #include "Function.h"
+
+inline auto getContext() {
+    static const auto context = std::make_unique<midend::Context>();
+    return context.get();
+}
+
+inline auto getVoidType() { return getContext()->getVoidType(); }
 
 namespace riscv64 {
 
@@ -29,7 +37,7 @@ enum class RegisterType {
 };
 
 // 操作数基类
-class MachineOperand {
+class MachineOperand : midend::Value {
    public:
     virtual ~MachineOperand() = default;
     OperandType getType() const { return type; }
@@ -57,7 +65,10 @@ class MachineOperand {
     bool isFrameIndex() const { return type == OperandType::FrameIndex; }
 
    protected:
-    explicit MachineOperand(OperandType t) : type(t) {}
+    explicit MachineOperand(OperandType t)
+        : Value(getVoidType(), midend::ValueKind::ReturnInst,
+                this->toString()),
+          type(t) {}
     OperandType type;
 };
 
