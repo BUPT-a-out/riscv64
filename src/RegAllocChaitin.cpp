@@ -963,7 +963,6 @@ std::vector<unsigned> RegAllocChaitin::selectSpillCandidates() {
         cand.assign(candidates.begin(), candidates.begin() + BATCH_SIZE);
         return cand;
     }
-
 }
 
 unsigned RegAllocChaitin::selectSpillCandidate() {
@@ -1527,8 +1526,8 @@ bool RegAllocChaitin::canCoalesce(unsigned src, unsigned dst) {
 
 bool RegAllocChaitin::canCoalesceWithABI(unsigned src, unsigned dst) const {
     // 不能合并保留寄存器
-    if (ABI::isReservedReg(src, assigningFloat) ||
-        ABI::isReservedReg(dst, assigningFloat)) {
+    if ((ABI::isReservedReg(src, assigningFloat) && src != 0) ||
+        (ABI::isReservedReg(dst, assigningFloat) && dst != 0)) {
         return false;
     }
 
