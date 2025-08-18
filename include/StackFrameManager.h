@@ -9,6 +9,14 @@
 #include "Instructions/Function.h"
 #include "Instructions/MachineOperand.h"
 
+// Debug output macro - only outputs when A_OUT_DEBUG is defined
+#ifdef A_OUT_DEBUG
+#define DEBUG_OUT() std::cerr
+#else
+#define DEBUG_OUT() \
+    if constexpr (false) std::cerr
+#endif
+
 namespace riscv64 {
 
 // 栈帧中的对象类型
@@ -106,9 +114,9 @@ class StackFrameManager {
         addStackObject(std::move(stack_obj));
         mapAllocaToStackSlot(inst, fi_id);
 
-        std::cout << "Created abstract Frame Index FI(" << fi_id
-                  << ") for alloca, size: " << typeSize << " bytes"
-                  << std::endl;
+        DEBUG_OUT() << "Created abstract Frame Index FI(" << fi_id
+                    << ") for alloca, size: " << typeSize << " bytes"
+                    << std::endl;
         return fi_id;
     }
 
@@ -123,9 +131,9 @@ class StackFrameManager {
         spill_obj->identifier = fi_id;
         addStackObject(std::move(spill_obj));
 
-        std::cout << "Created spill Frame Index FI(" << fi_id
-                  << ") for register " << reg
-                  << " [nextId: " << nextFrameIndexId << "]" << std::endl;
+        DEBUG_OUT() << "Created spill Frame Index FI(" << fi_id
+                    << ") for register " << reg
+                    << " [nextId: " << nextFrameIndexId << "]" << std::endl;
         return fi_id;
     }
 

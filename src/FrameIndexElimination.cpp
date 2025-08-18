@@ -4,12 +4,20 @@
 #include <iostream>
 #include <set>
 
+// Debug output macro - only outputs when A_OUT_DEBUG is defined
+#ifdef A_OUT_DEBUG
+#define DEBUG_OUT() std::cout
+#else
+#define DEBUG_OUT() \
+    if constexpr (false) std::cout
+#endif
+
 // TODO: preserve emergency  stack slot
 namespace riscv64 {
 
 void FrameIndexElimination::run() {
-    std::cout << "\n=== Running Frame Index Elimination (Phase 3) ==="
-              << std::endl;
+    DEBUG_OUT() << "\n=== Running Frame Index Elimination (Phase 3) ==="
+                << std::endl;
 
     // 第三阶段：计算最终布局并消除Frame Index
     computeFinalFrameLayout();
@@ -20,8 +28,8 @@ void FrameIndexElimination::run() {
 }
 
 void FrameIndexElimination::computeFinalFrameLayout() {
-    std::cout << "Computing final frame layout for function: "
-              << function->getName() << std::endl;
+    DEBUG_OUT() << "Computing final frame layout for function: "
+                << function->getName() << std::endl;
 
     assignFinalOffsets();
 }
@@ -53,18 +61,19 @@ void FrameIndexElimination::assignFinalOffsets() {
             localVarSize += alignTo(obj->size, obj->alignment);
         } else if (obj->type == StackObjectType::SpilledRegister) {
             spillSize += alignTo(obj->size, obj->alignment);
-            spillCount ++;
+            spillCount++;
         }
     }
 
     // 应对溢出时寄存器高压情况
-    int emergencySpace = 4 * 8; 
+    int emergencySpace = 4 * 8;
 
     // 计算调用参数在s0正偏移, 不计算在内
 
     // 计算总栈帧大小：基础保存寄存器 + 局部变量 + 溢出寄存器 +
     int safetySpace = 16;  // 额外的安全空间，确保所有栈对象都在栈帧范围内
-    int totalSize = savedRegSize + localVarSize + spillSize + safetySpace + emergencySpace;
+    int totalSize =
+        savedRegSize + localVarSize + spillSize + safetySpace + emergencySpace;
     layout.totalFrameSize = alignTo(totalSize, 16);  // 16字节对齐
 
     // 计算各区域偏移
@@ -94,23 +103,26 @@ void FrameIndexElimination::assignFinalOffsets() {
             currentLocalOffset = (currentLocalOffset / 8) * 8;
             layout.frameIndexToOffset[obj->identifier] = currentLocalOffset;
 
-            std::cout << "FI(" << obj->identifier << ") [alloca] -> s0"
-                      << currentLocalOffset << " (size: " << obj->size
-                      << ", alignment: " << obj->alignment << ")" << std::endl;
+            DEBUG_OUT() << "FI(" << obj->identifier << ") [alloca] -> s0"
+                        << currentLocalOffset << " (size: " << obj->size
+                        << ", alignment: " << obj->alignment << ")"
+                        << std::endl;
         } else if (obj->type == StackObjectType::SpilledRegister) {
             currentSpillOffset -= alignTo(obj->size, obj->alignment);
             // 确保偏移量是8的倍数（RISCV64要求）- 向下对齐负偏移量
             currentSpillOffset = (currentSpillOffset / 8) * 8;
             layout.frameIndexToOffset[obj->identifier] = currentSpillOffset;
 
-            std::cout << "FI(" << obj->identifier << ") [spill reg "
-                      << obj->regNum << "] -> s0" << currentSpillOffset
-                      << " (size: " << obj->size
-                      << ", alignment: " << obj->alignment << ")" << std::endl;
+            DEBUG_OUT() << "FI(" << obj->identifier << ") [spill reg "
+                        << obj->regNum << "] -> s0" << currentSpillOffset
+                        << " (size: " << obj->size
+                        << ", alignment: " << obj->alignment << ")"
+                        << std::endl;
         }
     }
 
-    std::cout << "Total " << spillCount << " registers are spilled" << std::endl;
+    DEBUG_OUT() << "Total " << spillCount << " registers are spilled"
+                << std::endl;
 }
 
 int FrameIndexElimination::calculateSavedRegisterSize() {
@@ -173,8 +185,8 @@ int FrameIndexElimination::calculateMaxCallArgSize() {
 }
 
 void FrameIndexElimination::generateFinalPrologueEpilogue() {
-    std::cout << "Generating final prologue/epilogue for frame size: "
-              << layout.totalFrameSize << std::endl;
+    DEBUG_OUT() << "Generating final prologue/epilogue for frame size: "
+                << layout.totalFrameSize << std::endl;
 
     // 收集需要保存的寄存器
     std::vector<int> savedIntRegs = collectSavedIntegerRegisters();
@@ -310,7 +322,7 @@ std::vector<int> FrameIndexElimination::collectSavedFloatRegisters() {
 }
 
 void FrameIndexElimination::eliminateFrameIndices() {
-    std::cout << "Eliminating frameaddr instructions..." << std::endl;
+    DEBUG_OUT() << "Eliminating frameaddr instructions..." << std::endl;
 
     for (auto& bb : *function) {
         for (auto it = bb->begin(); it != bb->end();) {
@@ -439,15 +451,15 @@ void FrameIndexElimination::eliminateFrameIndexInstruction(
 
     int offset = offsetIt->second;
 
-    std::cout << "Eliminating frameaddr " << destReg->toString() << ", FI("
-              << fiIndex << ") -> ";
+    DEBUG_OUT() << "Eliminating frameaddr " << destReg->toString() << ", FI("
+                << fiIndex << ") -> ";
 
     if (isValidImmediateOffset(offset)) {
-        std::cout << "addi " << destReg->toString() << ", s0, " << offset
-                  << std::endl;
+        DEBUG_OUT() << "addi " << destReg->toString() << ", s0, " << offset
+                    << std::endl;
     } else {
-        std::cout << "li t0, " << offset << "; add " << destReg->toString()
-                  << ", s0, t0" << std::endl;
+        DEBUG_OUT() << "li t0, " << offset << "; add " << destReg->toString()
+                    << ", s0, t0" << std::endl;
     }
 
     auto destRegNum = destReg->getRegNum();
@@ -467,18 +479,18 @@ int FrameIndexElimination::alignTo(int value, int alignment) const {
 }
 
 void FrameIndexElimination::printFinalLayout() const {
-    std::cout << "\n=== Final Frame Layout ===" << std::endl;
-    std::cout << "Function: " << function->getName() << std::endl;
-    std::cout << "Total frame size: " << layout.totalFrameSize << " bytes"
-              << std::endl;
-    std::cout << "Return address at: sp+" << layout.returnAddressOffset
-              << std::endl;
-    std::cout << "Frame pointer at: sp+" << layout.framePointerOffset
-              << std::endl;
-    std::cout << "Final Frame Index mappings:" << std::endl;
+    DEBUG_OUT() << "\n=== Final Frame Layout ===" << std::endl;
+    DEBUG_OUT() << "Function: " << function->getName() << std::endl;
+    DEBUG_OUT() << "Total frame size: " << layout.totalFrameSize << " bytes"
+                << std::endl;
+    DEBUG_OUT() << "Return address at: sp+" << layout.returnAddressOffset
+                << std::endl;
+    DEBUG_OUT() << "Frame pointer at: sp+" << layout.framePointerOffset
+                << std::endl;
+    DEBUG_OUT() << "Final Frame Index mappings:" << std::endl;
 
     for (const auto& [fi, offset] : layout.frameIndexToOffset) {
-        std::cout << "  FI(" << fi << ") -> s0" << offset << std::endl;
+        DEBUG_OUT() << "  FI(" << fi << ") -> s0" << offset << std::endl;
     }
 }
 

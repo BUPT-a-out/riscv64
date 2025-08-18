@@ -57,8 +57,8 @@ void RegAllocGreedy::selectOrSplit(LiveInterval *LI,
     unsigned PhysReg = tryAssign(*LI, allocationOrder, NewVRegs, FixedRegs);
 
     if (PhysReg != NO_PHYS_REG) {
-        std::cout << "Assigning " << LI->reg().getRegNum() << " to " << PhysReg
-                  << std::endl;
+        DEBUG_OUT() << "Assigning " << LI->reg().getRegNum() << " to "
+                    << PhysReg << std::endl;
         Matrix->assign(*LI, RegisterOperand(PhysReg, false));
         VRM->assignVirt2Phys(LI->reg().getRegNum(), PhysReg);
         return;
@@ -119,7 +119,7 @@ void RegAllocGreedy::selectOrSplit(LiveInterval *LI,
 
     // 如果所有方法都失败，则溢出到内存
     VRM->assignVirt2StackSlot(LI->reg().getRegNum(), stackSlotNum_);
-    stackSlotNum_ ++;
+    stackSlotNum_++;
 }
 
 void RegAllocGreedy::enqueue(LiveInterval *LI) {
@@ -299,7 +299,9 @@ bool RegAllocGreedy::isUsedAsArgument(unsigned virtualReg) const {
 
 bool RegAllocGreedy::isUsedAcrossCalls(unsigned virtualReg) const {
     // 获取该虚拟寄存器的活跃区间
-    RegisterOperand regOp(virtualReg, true, assigningFloat ? RegisterType::Float : RegisterType::Integer);
+    RegisterOperand regOp(
+        virtualReg, true,
+        assigningFloat ? RegisterType::Float : RegisterType::Integer);
     if (!LIS->hasInterval(regOp)) {
         return false;
     }
@@ -519,7 +521,8 @@ unsigned RegAllocGreedy::tryLastChanceRecoloring(
             // 应用重着色
             for (auto &Entry : RecolorStack) {
                 Matrix->unassign(*Entry.first);
-                Matrix->assign(*Entry.first, RegisterOperand(Entry.second, false));
+                Matrix->assign(*Entry.first,
+                               RegisterOperand(Entry.second, false));
                 VRM->assignVirt2Phys(Entry.first->reg().getRegNum(),
                                      Entry.second);
             }

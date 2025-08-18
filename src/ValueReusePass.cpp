@@ -9,6 +9,14 @@
 #include "Instructions/All.h"
 #include "Pass/Analysis/DominanceInfo.h"
 
+// Debug output macro - only outputs when A_OUT_DEBUG is defined
+#ifdef A_OUT_DEBUG
+#define DEBUG_OUT() std::cout
+#else
+#define DEBUG_OUT() \
+    if constexpr (false) std::cout
+#endif
+
 namespace riscv64 {
 
 bool ValueReusePass::runOnFunction(
@@ -21,9 +29,9 @@ bool ValueReusePass::runOnFunction(
 
     resetState();
 
-    std::cout << "ValueReusePass: Analyzing function "
-              << riscv_function->getName()
-              << " with LI+LA optimization for debugging" << std::endl;
+    DEBUG_OUT() << "ValueReusePass: Analyzing function "
+                << riscv_function->getName()
+                << " with LI+LA optimization for debugging" << std::endl;
 
     bool changed = false;
     int optimizationCount = 0;
@@ -40,7 +48,7 @@ bool ValueReusePass::runOnFunction(
                     midend::DominanceAnalysis::getName(),
                     *const_cast<midend::Function*>(midend_function));
         if (dominanceInfo != nullptr) {
-            std::cout
+            DEBUG_OUT()
                 << "  Using precomputed dominance info from AnalysisManager"
                 << std::endl;
         }
@@ -48,19 +56,19 @@ bool ValueReusePass::runOnFunction(
 
     const auto* domTree = dominanceInfo->getDominatorTree();
     if (domTree == nullptr || domTree->getRoot() == nullptr) {
-        std::cout << "  Invalid dominator tree" << std::endl;
+        DEBUG_OUT() << "  Invalid dominator tree" << std::endl;
         return false;
     }
 
-    std::cout << "  Dominator tree root: " << domTree->getRoot()->bb->getName()
-              << std::endl;
+    DEBUG_OUT() << "  Dominator tree root: "
+                << domTree->getRoot()->bb->getName() << std::endl;
 
     // Use the existing basic block mapping from the function
     // No need to create our own mapping since Function already maintains it
-    std::cout << "  Using existing basic block mapping from Function"
-              << std::endl;
+    DEBUG_OUT() << "  Using existing basic block mapping from Function"
+                << std::endl;
 
-    std::cout << "  Starting dominator tree traversal..." << std::endl;
+    DEBUG_OUT() << "  Starting dominator tree traversal..." << std::endl;
 
     // Core optimization: DFS traversal of dominator tree with value tracking
     // std::unordered_map<const midend::Value*, RegisterOperand*> valueMap;
@@ -68,36 +76,36 @@ bool ValueReusePass::runOnFunction(
 
     try {
         modified = traverseDominatorTree(domTree->getRoot(), riscv_function);
-        std::cout << "  Dominator tree traversal completed successfully"
-                  << std::endl;
+        DEBUG_OUT() << "  Dominator tree traversal completed successfully"
+                    << std::endl;
     } catch (const std::exception& e) {
-        std::cout << "  Error during dominator tree traversal: " << e.what()
-                  << std::endl;
+        DEBUG_OUT() << "  Error during dominator tree traversal: " << e.what()
+                    << std::endl;
         return false;
     } catch (...) {
-        std::cout << "  Unknown error during dominator tree traversal"
-                  << std::endl;
+        DEBUG_OUT() << "  Unknown error during dominator tree traversal"
+                    << std::endl;
         return false;
     }
 
     // Print statistics
     if (stats_.loadsAnalyzed > 0 || stats_.optimizationOpportunities > 0) {
-        std::cout << "ValueReusePass statistics for "
-                  << riscv_function->getName() << ":" << std::endl;
-        std::cout << "  Instructions analyzed: " << stats_.loadsAnalyzed
-                  << std::endl;
-        std::cout << "  Optimization opportunities: "
-                  << stats_.optimizationOpportunities << std::endl;
-        std::cout << "  Instructions eliminated: " << stats_.loadsEliminated
-                  << std::endl;
-        std::cout << "  Virtual registers reused: " << stats_.virtualRegsReused
-                  << std::endl;
-        std::cout << "  Stores processed: " << stats_.storesProcessed
-                  << std::endl;
-        std::cout << "  Calls processed: " << stats_.callsProcessed
-                  << std::endl;
-        std::cout << "  Memory invalidations: " << stats_.invalidations
-                  << std::endl;
+        DEBUG_OUT() << "ValueReusePass statistics for "
+                    << riscv_function->getName() << ":" << std::endl;
+        DEBUG_OUT() << "  Instructions analyzed: " << stats_.loadsAnalyzed
+                    << std::endl;
+        DEBUG_OUT() << "  Optimization opportunities: "
+                    << stats_.optimizationOpportunities << std::endl;
+        DEBUG_OUT() << "  Instructions eliminated: " << stats_.loadsEliminated
+                    << std::endl;
+        DEBUG_OUT() << "  Virtual registers reused: "
+                    << stats_.virtualRegsReused << std::endl;
+        DEBUG_OUT() << "  Stores processed: " << stats_.storesProcessed
+                    << std::endl;
+        DEBUG_OUT() << "  Calls processed: " << stats_.callsProcessed
+                    << std::endl;
+        DEBUG_OUT() << "  Memory invalidations: " << stats_.invalidations
+                    << std::endl;
     }
 
     return modified;
@@ -106,8 +114,8 @@ bool ValueReusePass::runOnFunction(
 bool ValueReusePass::traverseDominatorTree(midend::DominatorTree::Node* node,
                                            Function* riscv_function) {
     if (node == nullptr) {
-        std::cout << "  Error: null node passed to traverseDominatorTree"
-                  << std::endl;
+        DEBUG_OUT() << "  Error: null node passed to traverseDominatorTree"
+                    << std::endl;
         return false;
     }
 
@@ -116,21 +124,21 @@ bool ValueReusePass::traverseDominatorTree(midend::DominatorTree::Node* node,
     auto* midend_bb = node->bb;  // Get the midend basic block from the node
     auto* riscv_bb = riscv_function->getBasicBlock(midend_bb);
     if (riscv_bb == nullptr) {
-        std::cout << "  Error: BasicBlock not found for midend block "
-                  << midend_bb->getName() << std::endl;
+        DEBUG_OUT() << "  Error: BasicBlock not found for midend block "
+                    << midend_bb->getName() << std::endl;
         return false;
     }
 
     for (const auto& inst : *riscv_bb) {
-        std::cout << "  Processing instruction: " << inst->toString()
-                  << std::endl;
+        DEBUG_OUT() << "  Processing instruction: " << inst->toString()
+                    << std::endl;
 
         // Process the instruction in the current basic block
         auto modified = modifyInstruction(
             inst.get(), riscv_bb, definitionsInThisBlock, availableValuesMap);
 
         // if (modified_inst.has_value()) {
-        //     std::cout << "  Modified instruction: "
+        //     DEBUG_OUT() << "  Modified instruction: "
         //               << modified_inst->get()->toString() << std::endl;
         //     // 存入修改后的指令
         //     riscv_bb->replaceInstruction(inst.get(),
@@ -141,24 +149,24 @@ bool ValueReusePass::traverseDominatorTree(midend::DominatorTree::Node* node,
         //     // return true;
         // }
         if (modified) {
-            std::cout << "  Instruction modified successfully: "
-                      << inst->toString() << std::endl;
+            DEBUG_OUT() << "  Instruction modified successfully: "
+                        << inst->toString() << std::endl;
             stats_.loadsEliminated++;
             stats_.virtualRegsReused++;
-        } 
+        }
     }
 
     // 递归下降
     for (auto& child : node->children) {
         if (child != nullptr) {
-            std::cout << "  Recursing into child node: " << child->bb->getName()
-                      << std::endl;
+            DEBUG_OUT() << "  Recursing into child node: "
+                        << child->bb->getName() << std::endl;
             traverseDominatorTree(child.get(), riscv_function);
-            std::cout << "  Child node processed successfully: "
-                      << child->bb->getName() << std::endl;
+            DEBUG_OUT() << "  Child node processed successfully: "
+                        << child->bb->getName() << std::endl;
 
         } else {
-            std::cout << "  Skipping null child node" << std::endl;
+            DEBUG_OUT() << "  Skipping null child node" << std::endl;
         }
     }
 
@@ -166,13 +174,13 @@ bool ValueReusePass::traverseDominatorTree(midend::DominatorTree::Node* node,
     // 退出词法作用域
     for (auto& definition : definitionsInThisBlock) {
         if (definition != nullptr) {
-            std::cout << "  Exiting lexical scope for definition: "
-                      << definition->toString() << std::endl;
+            DEBUG_OUT() << "  Exiting lexical scope for definition: "
+                        << definition->toString() << std::endl;
             // 清理当前块的定义
             availableValuesMap.erase(definition);
         } else {
-            std::cout << "  Skipping null definition in lexical scope exit"
-                      << std::endl;
+            DEBUG_OUT() << "  Skipping null definition in lexical scope exit"
+                        << std::endl;
         }
     }
 
@@ -193,15 +201,16 @@ auto ValueReusePass::modifyInstruction(
             }
 
             auto value = imm_op->getValue();
-            std::cout << "  Load immediate: " << value << " -> reg"
-                      << dest_reg->getRegNum() << std::endl;
+            DEBUG_OUT() << "  Load immediate: " << value << " -> reg"
+                        << dest_reg->getRegNum() << std::endl;
 
             // 通过立即数值进行查找，而不是指针比较
             auto valueMapIter = valueMap.end();
             for (auto it = valueMap.begin(); it != valueMap.end(); ++it) {
                 if (auto* key_imm =
                         dynamic_cast<ImmediateOperand*>(it->first)) {
-                    if (key_imm->getValue() == imm_op->getValue()) {  // 比较立即数的值
+                    if (key_imm->getValue() ==
+                        imm_op->getValue()) {  // 比较立即数的值
                         valueMapIter = it;
                         break;
                     }
@@ -211,11 +220,11 @@ auto ValueReusePass::modifyInstruction(
             if (valueMapIter != valueMap.end()) {
                 auto* existing_reg = valueMapIter->second;
                 if (existing_reg != nullptr) {
-                    std::cout << "  OPTIMIZATION: Found existing register "
-                              << existing_reg->toString()
-                              << " with same immediate value " << value
-                              << ", replacing with MV for "
-                              << dest_reg->toString() << std::endl;
+                    DEBUG_OUT() << "  OPTIMIZATION: Found existing register "
+                                << existing_reg->toString()
+                                << " with same immediate value " << value
+                                << ", replacing with MV for "
+                                << dest_reg->toString() << std::endl;
                     stats_.optimizationOpportunities++;
                     stats_.virtualRegsReused++;
 
@@ -223,10 +232,11 @@ auto ValueReusePass::modifyInstruction(
                     unsigned int dest_reg_num = dest_reg->getRegNum();
                     bool dest_is_virtual = dest_reg->isVirtual();
                     RegisterType dest_reg_type = dest_reg->getRegisterType();
-                    
+
                     unsigned int existing_reg_num = existing_reg->getRegNum();
                     bool existing_is_virtual = existing_reg->isVirtual();
-                    RegisterType existing_reg_type = existing_reg->getRegisterType();
+                    RegisterType existing_reg_type =
+                        existing_reg->getRegisterType();
 
                     // 替换为 MV 指令
                     inst->setOpcode(Opcode::MV);
@@ -234,11 +244,12 @@ auto ValueReusePass::modifyInstruction(
                     inst->addOperand(std::make_unique<RegisterOperand>(
                         dest_reg_num, dest_is_virtual, dest_reg_type));
                     inst->addOperand(std::make_unique<RegisterOperand>(
-                        existing_reg_num, existing_is_virtual, existing_reg_type));
+                        existing_reg_num, existing_is_virtual,
+                        existing_reg_type));
 
                     return true;
                 }
-                std::cout
+                DEBUG_OUT()
                     << "  No existing register found for immediate (nullptr) "
                     << value << ", keeping LI instruction" << std::endl;
                 // 如果没有找到现有寄存器，保留 LI 指令
@@ -246,14 +257,14 @@ auto ValueReusePass::modifyInstruction(
                 valueMap[imm_op] = dest_reg;  // 保存映射关系
 
             } else {
-                std::cout << "  No existing register found for immediate "
-                          << value << ", keeping LI instruction" << std::endl;
+                DEBUG_OUT() << "  No existing register found for immediate "
+                            << value << ", keeping LI instruction" << std::endl;
                 // 如果没有找到现有寄存器，保留 LI 指令
                 definitionsInThisBlock.push_back(imm_op);
                 valueMap[imm_op] = dest_reg;  // 保存映射关系
-                std::cout << "  Adding new mapping for immediate "
-                          << imm_op->toString() << " to register "
-                          << dest_reg->toString() << std::endl;
+                DEBUG_OUT() << "  Adding new mapping for immediate "
+                            << imm_op->toString() << " to register "
+                            << dest_reg->toString() << std::endl;
             }
         } break;
 
@@ -264,46 +275,48 @@ auto ValueReusePass::modifyInstruction(
         case Opcode::SW:
         case Opcode::SD:
         case Opcode::FSW: {
-            std::cout << "  Processing store instruction: "
-                      << inst->toString() << std::endl;
+            DEBUG_OUT() << "  Processing store instruction: "
+                        << inst->toString() << std::endl;
             stats_.storesProcessed++;
             stats_.invalidations++;
             valueMap.clear();                // 清空缓存的值
             definitionsInThisBlock.clear();  // 清空当前块的定义
-            std::cout << "  Invalidating all cached values due to store"
-                      << std::endl;
+            DEBUG_OUT() << "  Invalidating all cached values due to store"
+                        << std::endl;
         } break;
         case Opcode::CALL: {
             // 如果有副作用，则使缓存的值失效
-            std::cout << "  Processing call instruction: " << inst->toString()
-                      << std::endl;
+            DEBUG_OUT() << "  Processing call instruction: " << inst->toString()
+                        << std::endl;
             stats_.callsProcessed++;
 
             // TODO(rikka): 调用中端 API 判断是否有副作用
             // 这里假设所有调用都有副作用
-            // auto func_name = *dynamic_cast<LabelOperand*>(inst->getOperand(0));
-            // auto* riscv_func = inst->getParent()->getParent();
-            // auto* midend_func = riscv_func->getParentModule()->getMidendFunction(func_name.getLabelName());
+            // auto func_name =
+            // *dynamic_cast<LabelOperand*>(inst->getOperand(0)); auto*
+            // riscv_func = inst->getParent()->getParent(); auto* midend_func =
+            // riscv_func->getParentModule()->getMidendFunction(func_name.getLabelName());
             // if (midend_func == nullptr) {
-            //     std::cout << "  Warning: midend function not found for call "
+            //     DEBUG_OUT() << "  Warning: midend function not found for call
+            //     "
             //               << func_name.getLabelName() << std::endl;
             //     // return false;
             // }
-            
+
             // if (midend_func.hasSideEffects()) {
-            //     std::cout << "  Function " << midend_func->getName()
+            //     DEBUG_OUT() << "  Function " << midend_func->getName()
             //               << " has side effects, invalidating cached values"
             //               << std::endl;
             // } else {
-            //     std::cout << "  Function " << midend_func->getName()
+            //     DEBUG_OUT() << "  Function " << midend_func->getName()
             //               << " has no side effects, keeping cached values"
             //               << std::endl;
             // }
             stats_.invalidations++;
             valueMap.clear();                // 清空缓存的值
             definitionsInThisBlock.clear();  // 清空当前块的定义
-            std::cout << "  Invalidating all cached values due to call"
-                      << std::endl;
+            DEBUG_OUT() << "  Invalidating all cached values due to call"
+                        << std::endl;
         } break;
         default: {
             // 对于其他指令，如果第一个操作数(rd) 已经出现过，清除对应的缓存
@@ -311,16 +324,15 @@ auto ValueReusePass::modifyInstruction(
                 auto* dest_reg =
                     dynamic_cast<RegisterOperand*>(inst->getOperand(0));
                 // 查找相等的操作数而不是指针相等
-                auto it = std::find_if(
-                    valueMap.begin(), valueMap.end(),
-                    [dest_reg](const auto& pair) {
-                        auto* cached_reg = pair.second;
-                        return *cached_reg == *dest_reg;
-                    });
+                auto it = std::find_if(valueMap.begin(), valueMap.end(),
+                                       [dest_reg](const auto& pair) {
+                                           auto* cached_reg = pair.second;
+                                           return *cached_reg == *dest_reg;
+                                       });
 
                 if (it != valueMap.end()) {
-                    std::cout << "  Invalidating cached value for register "
-                              << dest_reg->toString() << std::endl;
+                    DEBUG_OUT() << "  Invalidating cached value for register "
+                                << dest_reg->toString() << std::endl;
                     // Find and erase from definitionsInThisBlock by value
                     auto def_it = std::find_if(
                         definitionsInThisBlock.begin(),
@@ -355,8 +367,8 @@ bool ValueReusePass::processBasicBlock(
         return false;
     }
 
-    std::cout << "    Processing basic block: " << riscv_bb->getLabel()
-              << std::endl;
+    DEBUG_OUT() << "    Processing basic block: " << riscv_bb->getLabel()
+                << std::endl;
 
     bool modified = false;
     std::vector<BasicBlock::iterator> toErase;
@@ -374,8 +386,8 @@ bool ValueReusePass::processBasicBlock(
 
     // Remove optimized instructions
     for (auto iter : toErase) {
-        std::cout << "      Removing redundant instruction: "
-                  << (*iter)->toString() << std::endl;
+        DEBUG_OUT() << "      Removing redundant instruction: "
+                    << (*iter)->toString() << std::endl;
         riscv_bb->erase(iter);
         stats_.loadsEliminated++;
     }
@@ -388,8 +400,8 @@ bool ValueReusePass::processInstruction(
     std::unordered_map<const midend::Value*, RegisterOperand*>& valueMap,
     std::vector<const midend::Value*>& definitionsInThisBlock) {
     Opcode opcode = inst->getOpcode();
-    std::cout << "        Processing instruction: " << inst->toString()
-              << std::endl;
+    DEBUG_OUT() << "        Processing instruction: " << inst->toString()
+                << std::endl;
 
     // switch (opcode) {
     //     case LI: {
@@ -403,15 +415,15 @@ bool ValueReusePass::processInstruction(
 
     //             if (dest_reg != nullptr && imm_op != nullptr) {
     //                 int64_t value = imm_op->getValue();
-    //                 std::cout << "          Load immediate: " << value
+    //                 DEBUG_OUT() << "          Load immediate: " << value
     //                           << " -> reg" << dest_reg->getRegNum()
     //                           << std::endl;
     //                 stats_.loadsAnalyzed++;
 
-
     //                 // 检查是否已经有寄存器保存了相同的立即数值
     //                 // for (auto& pair : valueMap) {
-    //                 //     if (auto* key_imm = dynamic_cast<ImmediateOperand*>(pair.first)) {
+    //                 //     if (auto* key_imm =
+    //                 dynamic_cast<ImmediateOperand*>(pair.first)) {
     //                 //         if (*key_imm == *imm_op) {
     //                 //             valueMapIter = pair;
     //                 //             break;
@@ -427,28 +439,32 @@ bool ValueReusePass::processInstruction(
     //                     // 确保现有寄存器仍然有效且不是当前目标寄存器
     //                     if (existing_reg->getRegNum() !=
     //                         dest_reg->getRegNum()) {
-    //                         std::cout << "          OPTIMIZATION: Found "
+    //                         DEBUG_OUT() << "          OPTIMIZATION: Found "
     //                                      "existing register "
     //                                   << existing_reg->getRegNum()
-    //                                   << " with same immediate value " << value
+    //                                   << " with same immediate value " <<
+    //                                   value
     //                                   << ", replacing with mv for reg"
     //                                   << dest_reg->getRegNum() << std::endl;
     //                         stats_.optimizationOpportunities++;
     //                         stats_.virtualRegsReused++;
 
     //                         // 保存寄存器号在清空操作数之前
-    //                         unsigned int dest_reg_num = dest_reg->getRegNum();
-    //                         unsigned int existing_reg_num =
+    //                         unsigned int dest_reg_num =
+    //                         dest_reg->getRegNum(); unsigned int
+    //                         existing_reg_num =
     //                             existing_reg->getRegNum();
 
     //                         // 实际应用优化：将 LI 指令替换为 MV 指令
     //                         inst->setOpcode(MV);
     //                         // 清空操作数并重新设置
     //                         inst->clearOperands();
-    //                         // 创建新的寄存器操作数：目标仍然是原寄存器，源是已有的寄存器
+    //                         //
+    //                         创建新的寄存器操作数：目标仍然是原寄存器，源是已有的寄存器
     //                         auto dest_operand =
     //                             std::make_unique<RegisterOperand>(
-    //                                 dest_reg_num, false, RegisterType::Integer);
+    //                                 dest_reg_num, false,
+    //                                 RegisterType::Integer);
     //                         auto source_operand =
     //                             std::make_unique<RegisterOperand>(
     //                                 existing_reg_num, false,
@@ -456,7 +472,8 @@ bool ValueReusePass::processInstruction(
     //                         inst->addOperand(std::move(dest_operand));
     //                         inst->addOperand(std::move(source_operand));
 
-    //                         std::cout << "          Applied optimization: MV r"
+    //                         DEBUG_OUT() << "          Applied optimization:
+    //                         MV r"
     //                                   << dest_reg_num << ", r"
     //                                   << existing_reg_num << std::endl;
 
@@ -470,7 +487,7 @@ bool ValueReusePass::processInstruction(
     //                 // 记录当前定义
     //                 valueMap[immediateConstant] = dest_reg;
     //                 definitionsInThisBlock.push_back(immediateConstant);
-    //                 std::cout << "          Recording immediate " << value
+    //                 DEBUG_OUT() << "          Recording immediate " << value
     //                           << " in reg" << dest_reg->getRegNum()
     //                           << std::endl;
     //             }
@@ -485,7 +502,7 @@ bool ValueReusePass::processInstruction(
     //             auto* dest_reg =
     //                 dynamic_cast<RegisterOperand*>(operands[0].get());
     //             if (dest_reg != nullptr) {
-    //                 std::cout << "          Load address -> reg"
+    //                 DEBUG_OUT() << "          Load address -> reg"
     //                           << dest_reg->getRegNum() << std::endl;
     //                 stats_.loadsAnalyzed++;
 
@@ -497,7 +514,8 @@ bool ValueReusePass::processInstruction(
     //                     if (auto* labelOp = dynamic_cast<LabelOperand*>(
     //                             operands[1].get())) {
     //                         // 获取标签的名称
-    //                         addressTarget = "label:" + labelOp->getLabelName();
+    //                         addressTarget = "label:" +
+    //                         labelOp->getLabelName();
     //                     } else {
     //                         // 其他类型的地址操作数
     //                         addressTarget = "address_operand";
@@ -506,7 +524,7 @@ bool ValueReusePass::processInstruction(
 
     //                 // 创建地址的规范化标识符，用作valueMap的key
     //                 std::string canonicalAddr = "addr:" + addressTarget;
-    //                 std::cout
+    //                 DEBUG_OUT()
     //                     << "          Address canonical: " << canonicalAddr
     //                     << std::endl;
 
@@ -530,18 +548,20 @@ bool ValueReusePass::processInstruction(
     //                     RegisterOperand* existing_reg = valueMapIter->second;
     //                     if (existing_reg->getRegNum() !=
     //                         dest_reg->getRegNum()) {
-    //                         std::cout << "          OPTIMIZATION: Found "
+    //                         DEBUG_OUT() << "          OPTIMIZATION: Found "
     //                                      "existing register "
     //                                   << existing_reg->getRegNum()
-    //                                   << " with same address " << canonicalAddr
+    //                                   << " with same address " <<
+    //                                   canonicalAddr
     //                                   << ", replacing with mv for reg"
     //                                   << dest_reg->getRegNum() << std::endl;
     //                         stats_.optimizationOpportunities++;
     //                         stats_.virtualRegsReused++;
 
     //                         // 保存寄存器号在清空操作数之前
-    //                         unsigned int dest_reg_num = dest_reg->getRegNum();
-    //                         unsigned int existing_reg_num =
+    //                         unsigned int dest_reg_num =
+    //                         dest_reg->getRegNum(); unsigned int
+    //                         existing_reg_num =
     //                             existing_reg->getRegNum();
 
     //                         // 实际应用优化：将 LA 指令替换为 MV 指令
@@ -549,7 +569,8 @@ bool ValueReusePass::processInstruction(
     //                         inst->clearOperands();
     //                         auto dest_operand =
     //                             std::make_unique<RegisterOperand>(
-    //                                 dest_reg_num, false, RegisterType::Integer);
+    //                                 dest_reg_num, false,
+    //                                 RegisterType::Integer);
     //                         auto source_operand =
     //                             std::make_unique<RegisterOperand>(
     //                                 existing_reg_num, false,
@@ -557,12 +578,14 @@ bool ValueReusePass::processInstruction(
     //                         inst->addOperand(std::move(dest_operand));
     //                         inst->addOperand(std::move(source_operand));
 
-    //                         std::cout << "          Applied optimization: MV r"
+    //                         DEBUG_OUT() << "          Applied optimization:
+    //                         MV r"
     //                                   << dest_reg_num << ", r"
     //                                   << existing_reg_num << std::endl;
 
     //                         // 记录当前定义 - 使用新创建的dest_operand
-    //                         // 注意：不要使用原来的dest_reg，因为指令已经被修改
+    //                         //
+    //                         注意：不要使用原来的dest_reg，因为指令已经被修改
     //                         valueMap[addressKey] =
     //                             dynamic_cast<RegisterOperand*>(
     //                                 inst->getOperands()[0].get());
@@ -574,7 +597,8 @@ bool ValueReusePass::processInstruction(
     //                 // 记录当前地址映射
     //                 valueMap[addressKey] = dest_reg;
     //                 definitionsInThisBlock.push_back(addressKey);
-    //                 std::cout << "          Recording address " << canonicalAddr
+    //                 DEBUG_OUT() << "          Recording address " <<
+    //                 canonicalAddr
     //                           << " in reg" << dest_reg->getRegNum()
     //                           << std::endl;
     //             }
@@ -590,7 +614,7 @@ bool ValueReusePass::processInstruction(
     //             auto* dest_reg =
     //                 dynamic_cast<RegisterOperand*>(operands[0].get());
     //             if (dest_reg != nullptr) {
-    //                 std::cout << "          Memory load -> reg"
+    //                 DEBUG_OUT() << "          Memory load -> reg"
     //                           << dest_reg->getRegNum() << std::endl;
     //                 stats_.loadsAnalyzed++;
 
@@ -604,18 +628,20 @@ bool ValueReusePass::processInstruction(
     //                                                          canonicalAddress);
     //                     if (correspondingLoad != nullptr) {
     //                         // 检查是否已经有寄存器保存了相同内存位置的值
-    //                         auto loadMapIter = valueMap.find(correspondingLoad);
-    //                         if (loadMapIter != valueMap.end() &&
+    //                         auto loadMapIter =
+    //                         valueMap.find(correspondingLoad); if (loadMapIter
+    //                         != valueMap.end() &&
     //                             loadMapIter->second != nullptr) {
     //                             RegisterOperand* existing_reg =
     //                                 loadMapIter->second;
 
     //                             if (existing_reg->getRegNum() !=
     //                                 dest_reg->getRegNum()) {
-    //                                 std::cout << "          OPTIMIZATION: "
+    //                                 DEBUG_OUT() << "          OPTIMIZATION: "
     //                                              "Found existing register "
     //                                           << existing_reg->getRegNum()
-    //                                           << " with same memory value from "
+    //                                           << " with same memory value
+    //                                           from "
     //                                           << canonicalAddress
     //                                           << ", could reuse for reg"
     //                                           << dest_reg->getRegNum()
@@ -629,7 +655,7 @@ bool ValueReusePass::processInstruction(
     //                         // 记录当前加载
     //                         valueMap[correspondingLoad] = dest_reg;
     //                         definitionsInThisBlock.push_back(correspondingLoad);
-    //                         std::cout << "          Recording load from "
+    //                         DEBUG_OUT() << "          Recording load from "
     //                                   << canonicalAddress << " in reg"
     //                                   << dest_reg->getRegNum() << std::endl;
     //                     }
@@ -641,7 +667,7 @@ bool ValueReusePass::processInstruction(
 
     //     case SW:
     //     case FSW: {
-    //         std::cout << "          Store instruction" << std::endl;
+    //         DEBUG_OUT() << "          Store instruction" << std::endl;
     //         stats_.storesProcessed++;
     //         // Store指令可能使某些内存值失效
     //         invalidateMemoryValues(valueMap, definitionsInThisBlock);
@@ -649,7 +675,7 @@ bool ValueReusePass::processInstruction(
     //     }
 
     //     case CALL: {
-    //         std::cout << "          Call instruction" << std::endl;
+    //         DEBUG_OUT() << "          Call instruction" << std::endl;
     //         stats_.callsProcessed++;
     //         // 函数调用可能修改内存，使某些值失效
     //         invalidateMemoryValues(valueMap, definitionsInThisBlock);
@@ -723,8 +749,8 @@ const midend::Value* ValueReusePass::findCorrespondingConstantValue(
             if (const auto* intConstant =
                     dynamic_cast<const midend::ConstantInt*>(constant)) {
                 if (intConstant->getValue() == value) {
-                    std::cout << "          Found matching constant " << value
-                              << " in midend IR" << std::endl;
+                    DEBUG_OUT() << "          Found matching constant " << value
+                                << " in midend IR" << std::endl;
                     return constant;
                 }
             }
@@ -758,9 +784,9 @@ const midend::Value* ValueReusePass::findCorrespondingLoadInstruction(
                 std::string midendCanonicalAddr =
                     getMidendCanonicalAddress(sourceAddr);
                 if (midendCanonicalAddr == canonicalAddress) {
-                    std::cout << "          Found matching load from "
-                              << canonicalAddress << " in midend IR"
-                              << std::endl;
+                    DEBUG_OUT()
+                        << "          Found matching load from "
+                        << canonicalAddress << " in midend IR" << std::endl;
                     return midend_inst;
                 }
             }
@@ -798,8 +824,8 @@ std::string ValueReusePass::getCanonicalMemoryAddress(Instruction* inst) {
                     canonical = "frame:offset" + std::to_string(offset);
                 }
 
-                std::cout << "          Canonical address: " << canonical
-                          << std::endl;
+                DEBUG_OUT() << "          Canonical address: " << canonical
+                            << std::endl;
                 return canonical;
             }
         }
@@ -863,8 +889,8 @@ ValueReusePass::createBasicBlockMapping(
         ++riscv_it;
     }
 
-    std::cout << "  Created mapping for " << mapping.size() << " basic blocks"
-              << std::endl;
+    DEBUG_OUT() << "  Created mapping for " << mapping.size() << " basic blocks"
+                << std::endl;
     return mapping;
 }
 
@@ -906,8 +932,8 @@ void ValueReusePass::invalidateMemoryValues(
         }
     }
 
-    std::cout << "        Conservative invalidation of " << toInvalidate.size()
-              << " tracked values" << std::endl;
+    DEBUG_OUT() << "        Conservative invalidation of "
+                << toInvalidate.size() << " tracked values" << std::endl;
 
     // 移除失效的值，但不要添加到definitionsInThisBlock
     // 因为这些不是在当前块中定义的新值

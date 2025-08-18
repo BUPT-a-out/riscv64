@@ -1,6 +1,14 @@
 #include "Instructions/BasicBlock.h"
 #include "Visit.h"
 
+// Debug output macro - only outputs when A_OUT_DEBUG is defined
+#ifdef A_OUT_DEBUG
+#define DEBUG_OUT() std::cout
+#else
+#define DEBUG_OUT() \
+    if constexpr (false) std::cout
+#endif
+
 namespace riscv64 {
 
 namespace CFG {
@@ -87,18 +95,18 @@ void handleComparisonJump(Function* func, BasicBlock* bb, Instruction* inst) {
 
 void print(Function* func) {
     // 调试：打印出 CFG 信息
-    std::cout << "Function: " << func->getName() << "\n";
+    DEBUG_OUT() << "Function: " << func->getName() << "\n";
     for (const auto& bb : *func) {
-        std::cout << "  BasicBlock: " << bb->getLabel() << "\n";
-        std::cout << "    Successors: ";
+        DEBUG_OUT() << "  BasicBlock: " << bb->getLabel() << "\n";
+        DEBUG_OUT() << "    Successors: ";
         for (const auto* succ : bb->getSuccessors()) {
-            std::cout << succ->getLabel() << " ";
+            DEBUG_OUT() << succ->getLabel() << " ";
         }
-        std::cout << "\n    Predecessors: ";
+        DEBUG_OUT() << "\n    Predecessors: ";
         for (const auto* pred : bb->getPredecessors()) {
-            std::cout << pred->getLabel() << " ";
+            DEBUG_OUT() << pred->getLabel() << " ";
         }
-        std::cout << "\n";
+        DEBUG_OUT() << "\n";
     }
 }
 

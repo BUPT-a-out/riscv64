@@ -6,6 +6,14 @@
 #include "MachineOperand.h"
 #include "Segment.h"
 
+// Debug output macro - only outputs when A_OUT_DEBUG is defined
+#ifdef A_OUT_DEBUG
+#define DEBUG_OUT() std::cerr
+#else
+#define DEBUG_OUT() \
+    if constexpr (false) std::cerr
+#endif
+
 namespace riscv64 {
 
 class Module {
@@ -44,14 +52,15 @@ class Module {
 
     // 添加全局变量
     void addGlobal(GlobalVariable var) {
-        std::cout << "Adding global variable: " << var.name
-                  << ", constant: " << var.is_constant
-                  << ", has_init: " << var.initializer.has_value() << std::endl;
+        DEBUG_OUT() << "Adding global variable: " << var.name
+                    << ", constant: " << var.is_constant
+                    << ", has_init: " << var.initializer.has_value()
+                    << std::endl;
 
         if (!var.initializer.has_value()) {
             // 没有初始化器 -> BSS 段
             bss_segment_.addItem(std::move(var));
-            std::cout << "Added to BSS segment" << std::endl;
+            DEBUG_OUT() << "Added to BSS segment" << std::endl;
         } else {
             // 检查初始化器类型
             bool is_zero_init = std::holds_alternative<ZeroInitializer>(
@@ -60,17 +69,17 @@ class Module {
             if (is_zero_init) {
                 // 零初始化 -> BSS 段
                 bss_segment_.addItem(std::move(var));
-                std::cout << "Added to BSS segment (zero init)" << std::endl;
+                DEBUG_OUT() << "Added to BSS segment (zero init)" << std::endl;
             } else {
                 // 非零初始化
                 if (var.is_constant) {
                     // 常量 -> RODATA 段
                     rodata_segment_.addItem(std::move(var));
-                    std::cout << "Added to RODATA segment" << std::endl;
+                    DEBUG_OUT() << "Added to RODATA segment" << std::endl;
                 } else {
                     // 变量 -> DATA 段
                     data_segment_.addItem(std::move(var));
-                    std::cout << "Added to DATA segment" << std::endl;
+                    DEBUG_OUT() << "Added to DATA segment" << std::endl;
                 }
             }
         }

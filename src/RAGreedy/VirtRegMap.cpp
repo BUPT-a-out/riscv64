@@ -2,6 +2,14 @@
 
 #include <iostream>
 
+// Debug output macro - only outputs when A_OUT_DEBUG is defined
+#ifdef A_OUT_DEBUG
+#define DEBUG_OUT() std::cout
+#else
+#define DEBUG_OUT() \
+    if constexpr (false) std::cout
+#endif
+
 namespace riscv64 {
 
 // 静态成员初始化
@@ -135,32 +143,34 @@ void VirtRegMap::clear() {
 }
 
 void VirtRegMap::dump() const {
-    std::cout << "=== VirtRegMap Dump ===" << std::endl;
+    DEBUG_OUT() << "=== VirtRegMap Dump ===" << std::endl;
 
     // 打印虚拟寄存器 → 物理寄存器映射
-    std::cout << "Virt2Phys Mapping:" << std::endl;
+    DEBUG_OUT() << "Virt2Phys Mapping:" << std::endl;
     for (const auto& pair : virt2PhysMap_) {
-        std::cout << "  V" << pair.first << " -> P" << pair.second << std::endl;
+        DEBUG_OUT() << "  V" << pair.first << " -> P" << pair.second
+                    << std::endl;
     }
 
     // 打印虚拟寄存器 → 栈槽映射
-    std::cout << "Virt2StackSlot Mapping:" << std::endl;
+    DEBUG_OUT() << "Virt2StackSlot Mapping:" << std::endl;
     for (const auto& pair : virt2StackSlotMap_) {
-        std::cout << "  V" << pair.first << " -> S" << pair.second << std::endl;
+        DEBUG_OUT() << "  V" << pair.first << " -> S" << pair.second
+                    << std::endl;
     }
 
     // 打印虚拟寄存器 → 分割映射
-    std::cout << "Virt2Split Mapping:" << std::endl;
+    DEBUG_OUT() << "Virt2Split Mapping:" << std::endl;
     for (const auto& pair : virt2SplitMap_) {
-        std::cout << "  V" << pair.first << " -> [";
+        DEBUG_OUT() << "  V" << pair.first << " -> [";
         for (size_t i = 0; i < pair.second.size(); ++i) {
-            if (i > 0) std::cout << ", ";
-            std::cout << "V" << pair.second[i];
+            if (i > 0) DEBUG_OUT() << ", ";
+            DEBUG_OUT() << "V" << pair.second[i];
         }
-        std::cout << "]" << std::endl;
+        DEBUG_OUT() << "]" << std::endl;
     }
 
-    std::cout << "======================" << std::endl;
+    DEBUG_OUT() << "======================" << std::endl;
 }
 
 void VirtRegMap::validateVirtReg(Register virtReg) const {

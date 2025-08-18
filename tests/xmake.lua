@@ -19,7 +19,7 @@ target("riscv64_test_framework")
     add_cxxflags("-Wall", "-Wextra")
     
     if is_mode("debug") then
-        add_cxxflags("-g", "-O0")
+        add_cxxflags("-g", "-O0", "-DA_OUT_DEBUG", "-fno-limit-debug-info")
         set_symbols("debug")
         set_optimize("none")
     elseif is_mode("release") then
@@ -55,7 +55,7 @@ target("riscv64_test_runner")
     add_cxxflags("-Wall", "-Wextra")
     
     if is_mode("debug") then
-        add_cxxflags("-g", "-O0")
+        add_cxxflags("-g", "-O0", "-DA_OUT_DEBUG", "-fno-limit-debug-info")
         set_symbols("debug")
         set_optimize("none")
     elseif is_mode("release") then
@@ -85,7 +85,7 @@ target("riscv64_codegen_test")
     add_cxxflags("-Wall", "-Wextra")
     
     if is_mode("debug") then
-        add_cxxflags("-g", "-O0")
+        add_cxxflags("-g", "-O0", "-DA_OUT_DEBUG", "-fno-limit-debug-info")
         set_symbols("debug")
         set_optimize("none")
     elseif is_mode("release") then

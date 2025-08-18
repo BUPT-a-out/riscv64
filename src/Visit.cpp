@@ -20,6 +20,14 @@
 #include "MagicDivision.h"
 #include "StackFrameManager.h"
 
+// Debug output macro - only outputs when A_OUT_DEBUG is defined
+#ifdef A_OUT_DEBUG
+#define DEBUG_OUT() std::cout
+#else
+#define DEBUG_OUT() \
+    if constexpr (false) std::cout
+#endif
+
 namespace riscv64 {
 
 Visitor::Visitor(CodeGenerator* code_gen) : codeGen_(code_gen) {}
@@ -707,14 +715,14 @@ std::unique_ptr<MachineOperand> Visitor::visitCallInst(
 
             // 使用预计算的栈偏移
             int64_t stack_offset = stack_arg_offsets[arg_i - 8];
-            std::cout << "DEBUG CALL stack arg store: func="
-                      << called_func->getName() << ", arg_index=" << arg_i
-                      << ", name=" << dest_arg->getName()
-                      << ", is_float=" << is_float_arg
-                      << ", is_pointer=" << dest_arg->getType()->isPointerType()
-                      << ", size_aligned="
-                      << ((getArgSize(dest_arg->getType()) + 7) & ~7)
-                      << ", stack_offset=" << stack_offset << std::endl;
+            DEBUG_OUT() << "DEBUG CALL stack arg store: func="
+                        << called_func->getName() << ", arg_index=" << arg_i
+                        << ", name=" << dest_arg->getName()
+                        << ", is_float=" << is_float_arg << ", is_pointer="
+                        << dest_arg->getType()->isPointerType()
+                        << ", size_aligned="
+                        << ((getArgSize(dest_arg->getType()) + 7) & ~7)
+                        << ", stack_offset=" << stack_offset << std::endl;
 
             // 根据参数类型选择存储指令
             Opcode store_opcode;
@@ -1497,10 +1505,11 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
     bool should_use_float_reg =
         !is_int_dest && value_to_store->getType()->isFloatType();
 
-    std::cout << "DEBUG: Store analysis - value type: "
-              << value_to_store->getType()->toString()
-              << ", dest is int: " << is_int_dest
-              << ", will use float reg: " << should_use_float_reg << std::endl;
+    DEBUG_OUT() << "DEBUG: Store analysis - value type: "
+                << value_to_store->getType()->toString()
+                << ", dest is int: " << is_int_dest
+                << ", will use float reg: " << should_use_float_reg
+                << std::endl;
 
     // 根据值的实际类型选择合适的寄存器类型
     std::unique_ptr<MachineOperand> value_operand;
@@ -1516,9 +1525,10 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
             dynamic_cast<RegisterOperand*>(value_operand.get())) {
         is_float_store = reg_operand->isFloatRegister();
     }
-    std::cout << "DEBUG: Store analysis - value type: "
-              << store_inst->getValueOperand()->getType()->toString()
-              << ", actual register is float: " << is_float_store << std::endl;
+    DEBUG_OUT() << "DEBUG: Store analysis - value type: "
+                << store_inst->getValueOperand()->getType()->toString()
+                << ", actual register is float: " << is_float_store
+                << std::endl;
 
     // 处理指针操作数 - 可能是 alloca 指令、GEP 指令或全局变量
     if (auto* alloca_inst =
@@ -1544,16 +1554,16 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
 
         // 根据存储值的实际类型选择存储指令（与前面的类型检查保持一致）
         bool is_float_store = should_use_float_reg;
-        std::cout << "DEBUG: Store instruction type check - is_float: "
-                  << is_float_store << ", value type: "
-                  << store_inst->getValueOperand()->getType()->toString()
-                  << std::endl;
+        DEBUG_OUT() << "DEBUG: Store instruction type check - is_float: "
+                    << is_float_store << ", value type: "
+                    << store_inst->getValueOperand()->getType()->toString()
+                    << std::endl;
         Opcode store_opcode = is_float_store ? Opcode::FSW : Opcode::SW;
-        std::cout << "DEBUG: Selected store opcode: "
-                  << (store_opcode == Opcode::SW
-                          ? "SW"
-                          : (store_opcode == Opcode::FSW ? "FSW" : "OTHER"))
-                  << std::endl;
+        DEBUG_OUT() << "DEBUG: Selected store opcode: "
+                    << (store_opcode == Opcode::SW
+                            ? "SW"
+                            : (store_opcode == Opcode::FSW ? "FSW" : "OTHER"))
+                    << std::endl;
         auto store_inst_new =
             std::make_unique<Instruction>(store_opcode, parent_bb);
         store_inst_new->addOperand(
@@ -1579,15 +1589,15 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
 
         // 根据value_operand的实际寄存器类型选择存储指令
         Opcode store_opcode = is_float_store ? Opcode::FSW : Opcode::SW;
-        std::cout << "DEBUG: Store to GEP - using float store: "
-                  << is_float_store << ", value type: "
-                  << store_inst->getValueOperand()->getType()->toString()
-                  << std::endl;
-        std::cout << "DEBUG: Selected store opcode for GEP: "
-                  << (store_opcode == Opcode::SW
-                          ? "SW"
-                          : (store_opcode == Opcode::FSW ? "FSW" : "OTHER"))
-                  << std::endl;
+        DEBUG_OUT() << "DEBUG: Store to GEP - using float store: "
+                    << is_float_store << ", value type: "
+                    << store_inst->getValueOperand()->getType()->toString()
+                    << std::endl;
+        DEBUG_OUT() << "DEBUG: Selected store opcode for GEP: "
+                    << (store_opcode == Opcode::SW
+                            ? "SW"
+                            : (store_opcode == Opcode::FSW ? "FSW" : "OTHER"))
+                    << std::endl;
         auto store_inst_new =
             std::make_unique<Instruction>(store_opcode, parent_bb);
         store_inst_new->addOperand(
@@ -1613,15 +1623,15 @@ void Visitor::visitStoreInst(const midend::Instruction* inst,
 
         // 根据value_operand的实际寄存器类型选择存储指令
         Opcode store_opcode = is_float_store ? Opcode::FSW : Opcode::SW;
-        std::cout << "DEBUG: Store to Global - using float store: "
-                  << is_float_store << ", value type: "
-                  << store_inst->getValueOperand()->getType()->toString()
-                  << std::endl;
-        std::cout << "DEBUG: Selected store opcode for Global: "
-                  << (store_opcode == Opcode::SW
-                          ? "SW"
-                          : (store_opcode == Opcode::FSW ? "FSW" : "OTHER"))
-                  << std::endl;
+        DEBUG_OUT() << "DEBUG: Store to Global - using float store: "
+                    << is_float_store << ", value type: "
+                    << store_inst->getValueOperand()->getType()->toString()
+                    << std::endl;
+        DEBUG_OUT() << "DEBUG: Selected store opcode for Global: "
+                    << (store_opcode == Opcode::SW
+                            ? "SW"
+                            : (store_opcode == Opcode::FSW ? "FSW" : "OTHER"))
+                    << std::endl;
         auto store_inst_new =
             std::make_unique<Instruction>(store_opcode, parent_bb);
         store_inst_new->addOperand(
@@ -3957,9 +3967,9 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
     if (foundReg.has_value()) {
         // 调试输出 - 特别关注PHI节点
         if (value->getName().find("phi") != std::string::npos) {
-            std::cout << "DEBUG VISIT: Found register for PHI value "
-                      << value->getName() << " -> reg "
-                      << foundReg.value()->getRegNum() << std::endl;
+            DEBUG_OUT() << "DEBUG VISIT: Found register for PHI value "
+                        << value->getName() << " -> reg "
+                        << foundReg.value()->getRegNum() << std::endl;
         }
         // 对于alloca指令，即使已经处理过，如果它被用作指针，也应该返回FrameIndex
         if (auto* alloca_inst = midend::dyn_cast<midend::AllocaInst>(value)) {
@@ -4019,10 +4029,11 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         int64_t final_offset = base_stack_arg_offset + arg_offset;
 
         bool is_pointer = arg->getType()->isPointerType();
-        std::cout << "DEBUG CALLEE stack arg load: func=" << function->getName()
-                  << ", arg_pos=" << arg_pos << ", name=" << arg->getName()
-                  << ", is_float=" << is_float << ", is_pointer=" << is_pointer
-                  << ", final_offset=" << final_offset << std::endl;
+        DEBUG_OUT() << "DEBUG CALLEE stack arg load: func="
+                    << function->getName() << ", arg_pos=" << arg_pos
+                    << ", name=" << arg->getName() << ", is_float=" << is_float
+                    << ", is_pointer=" << is_pointer
+                    << ", final_offset=" << final_offset << std::endl;
 
         // 为该参数分配一个虚拟寄存器并加载
         auto vreg = codeGen_->allocateReg(is_float);
@@ -4046,11 +4057,11 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
 
     // 检查是否是全局变量
     if (auto* global_var = midend::dyn_cast<midend::GlobalVariable>(value)) {
-        std::cout << "DEBUG: Found global variable reference: "
-                  << global_var->getName()
-                  << ", isConstant: " << global_var->isConstant()
-                  << ", hasInitializer: " << global_var->hasInitializer()
-                  << std::endl;
+        DEBUG_OUT() << "DEBUG: Found global variable reference: "
+                    << global_var->getName()
+                    << ", isConstant: " << global_var->isConstant()
+                    << ", hasInitializer: " << global_var->hasInitializer()
+                    << std::endl;
 
         // 1. 生成LA指令来获取地址
         auto global_addr_reg = codeGen_->allocateIntReg();
@@ -4065,8 +4076,8 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         // 2. 检查是否是数组类型 - 如果是数组，只返回地址，不加载值
         if (global_var->getValueType()->isArrayType()) {
             // 对于数组类型的全局变量，返回基地址用于后续的GEP计算
-            std::cout << "DEBUG: Global array " << global_var->getName()
-                      << " - returning base address for GEP" << std::endl;
+            DEBUG_OUT() << "DEBUG: Global array " << global_var->getName()
+                        << " - returning base address for GEP" << std::endl;
             return std::make_unique<RegisterOperand>(
                 global_addr_reg->getRegNum(), global_addr_reg->isVirtual());
         } else {
@@ -4153,12 +4164,12 @@ std::unique_ptr<MachineOperand> Visitor::visit(const midend::Value* value,
         // 判断范围，是否在 [-2048, 2047] 之间
         auto* int_const = midend::cast<midend::ConstantInt>(value);
         auto value_int = int_const->getSignedValue();
-        std::cout << "DEBUG: Processing integer constant: " << value_int
-                  << std::endl;
+        DEBUG_OUT() << "DEBUG: Processing integer constant: " << value_int
+                    << std::endl;
         auto signed_value = static_cast<int64_t>(value_int);
         if (isValidImmediateOffset(signed_value)) {
-            std::cout << "DEBUG: Returning immediate operand: " << value_int
-                      << std::endl;
+            DEBUG_OUT() << "DEBUG: Returning immediate operand: " << value_int
+                        << std::endl;
             return std::make_unique<ImmediateOperand>(value_int);
         }
         // 如果不在范围内，分配一个新的寄存器
@@ -4373,18 +4384,18 @@ std::vector<T> Visitor::processTypedArray(
 
     for (unsigned i = 0; i < const_array->getNumElements(); ++i) {
         auto* element = const_array->getElement(i);
-        std::cout << "Processing "
-                  << (std::is_same_v<T, int32_t> ? "int" : "float")
-                  << " array element " << i << ": " << element->toString()
-                  << std::endl;
+        DEBUG_OUT() << "Processing "
+                    << (std::is_same_v<T, int32_t> ? "int" : "float")
+                    << " array element " << i << ": " << element->toString()
+                    << std::endl;
 
         if (const auto* typed_const = midend::dyn_cast<ConstantType>(element)) {
             T value = extractor(typed_const);
             values.push_back(value);
-            std::cout << "  -> value: " << value << std::endl;
+            DEBUG_OUT() << "  -> value: " << value << std::endl;
         } else {
             // 对于非常量元素，使用默认值
-            std::cout << "  -> default value: " << default_value << std::endl;
+            DEBUG_OUT() << "  -> default value: " << default_value << std::endl;
             values.push_back(default_value);
         }
     }
@@ -4395,8 +4406,8 @@ std::vector<T> Visitor::processTypedArray(
                       default_value);
     }
 
-    std::cout << "Created " << (std::is_same_v<T, int32_t> ? "int" : "float")
-              << " array with " << values.size() << " elements" << std::endl;
+    DEBUG_OUT() << "Created " << (std::is_same_v<T, int32_t> ? "int" : "float")
+                << " array with " << values.size() << " elements" << std::endl;
     return values;
 }
 
@@ -4420,10 +4431,10 @@ std::vector<T> Visitor::processMultiDimArray(
         if (i < const_array->getNumElements()) {
             // Process explicitly initialized sub-array
             auto* element = const_array->getElement(i);
-            std::cout << "Processing nested "
-                      << (std::is_same_v<T, int32_t> ? "int" : "float")
-                      << " array element " << i << ": " << element->toString()
-                      << std::endl;
+            DEBUG_OUT() << "Processing nested "
+                        << (std::is_same_v<T, int32_t> ? "int" : "float")
+                        << " array element " << i << ": " << element->toString()
+                        << std::endl;
 
             auto nested_init = convertLLVMInitializerToConstantInitializer(
                 element, element_type);
@@ -4460,15 +4471,16 @@ std::vector<T> Visitor::processMultiDimArray(
         }
     }
 
-    std::cout << "Flattened " << (std::is_same_v<T, int32_t> ? "int" : "float")
-              << " array size: " << flattened_values.size() << std::endl;
+    DEBUG_OUT() << "Flattened "
+                << (std::is_same_v<T, int32_t> ? "int" : "float")
+                << " array size: " << flattened_values.size() << std::endl;
     return flattened_values;
 }
 
 ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
     const midend::Value* init, const midend::Type* type) {
-    std::cout << "Converting initializer: " << init->toString()
-              << " for type: " << type->toString() << std::endl;
+    DEBUG_OUT() << "Converting initializer: " << init->toString()
+                << " for type: " << type->toString() << std::endl;
 
     // 处理单个整数常量
     if (init->getType()->isIntegerType()) {
@@ -4477,7 +4489,7 @@ ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
             throw std::runtime_error("Expected ConstantInt for integer type");
         }
         int32_t value = static_cast<int32_t>(const_int->getSignedValue());
-        std::cout << "Found ConstantInt: " << value << std::endl;
+        DEBUG_OUT() << "Found ConstantInt: " << value << std::endl;
         return value;
     }
 
@@ -4488,7 +4500,7 @@ ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
             throw std::runtime_error("Expected ConstantFP for float type");
         }
         float value = const_float->getValue();
-        std::cout << "Found ConstantFP: " << value << std::endl;
+        DEBUG_OUT() << "Found ConstantFP: " << value << std::endl;
         return value;
     }
 
@@ -4499,14 +4511,15 @@ ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
             throw std::runtime_error("Expected ConstantArray for array type");
         }
 
-        std::cout << "Processing ConstantArray with "
-                  << const_array->getNumElements() << " elements" << std::endl;
+        DEBUG_OUT() << "Processing ConstantArray with "
+                    << const_array->getNumElements() << " elements"
+                    << std::endl;
 
         const auto* array_type =
             static_cast<const midend::ArrayType*>(init->getType());
         auto* element_type = array_type->getElementType();
-        std::cout << "Array element type: " << element_type->toString()
-                  << std::endl;
+        DEBUG_OUT() << "Array element type: " << element_type->toString()
+                    << std::endl;
 
         // 递归处理嵌套数组或基本类型元素
         if (element_type->isArrayType()) {
@@ -4563,8 +4576,8 @@ ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
             current_type = arr_type->getElementType();
         }
 
-        std::cout << "Creating zero-initialized array with " << total_elements
-                  << " elements" << std::endl;
+        DEBUG_OUT() << "Creating zero-initialized array with " << total_elements
+                    << " elements" << std::endl;
 
         if (current_type->isIntegerType()) {
             std::vector<int32_t> zero_values(total_elements, 0);
@@ -4576,7 +4589,7 @@ ConstantInitializer Visitor::convertLLVMInitializerToConstantInitializer(
     }
 
     // 对于其他情况，返回零初始化
-    std::cout << "Returning ZeroInitializer for unhandled case" << std::endl;
+    DEBUG_OUT() << "Returning ZeroInitializer for unhandled case" << std::endl;
     return ZeroInitializer{};
 }
 
@@ -4608,18 +4621,18 @@ void Visitor::visit(const midend::GlobalVariable* global_var,
     std::string name = global_var->getName();
     bool is_constant = global_var->isConstant();
 
-    std::cout << "Processing global variable: " << name
-              << ", is_constant: " << is_constant
-              << ", has_initializer: " << global_var->hasInitializer()
-              << std::endl;
+    DEBUG_OUT() << "Processing global variable: " << name
+                << ", is_constant: " << is_constant
+                << ", has_initializer: " << global_var->hasInitializer()
+                << std::endl;
 
     // 转换类型信息
     auto* llvm_type = global_var->getValueType();
     CompilerType compiler_type = convertLLVMTypeToCompilerType(llvm_type);
 
-    std::cout << "Converted type - base: "
-              << (compiler_type.base == BaseType::INT32 ? "INT32" : "FLOAT32")
-              << ", array_size: " << compiler_type.array_size << std::endl;
+    DEBUG_OUT() << "Converted type - base: "
+                << (compiler_type.base == BaseType::INT32 ? "INT32" : "FLOAT32")
+                << ", array_size: " << compiler_type.array_size << std::endl;
 
     // 处理初始化器
     std::optional<ConstantInitializer> initializer;
@@ -4627,22 +4640,22 @@ void Visitor::visit(const midend::GlobalVariable* global_var,
     if (global_var->hasInitializer()) {
         auto* init =
             const_cast<midend::GlobalVariable*>(global_var)->getInitializer();
-        std::cout << "Found initializer: " << init->toString() << std::endl;
+        DEBUG_OUT() << "Found initializer: " << init->toString() << std::endl;
 
         try {
             initializer =
                 convertLLVMInitializerToConstantInitializer(init, llvm_type);
-            std::cout << "Initializer processed successfully for " << name
-                      << std::endl;
+            DEBUG_OUT() << "Initializer processed successfully for " << name
+                        << std::endl;
 
             // 检查是否为零初始化
             bool is_zero_init = checkIfZeroInitializer(initializer.value());
-            std::cout << "Is zero initializer: " << is_zero_init << std::endl;
+            DEBUG_OUT() << "Is zero initializer: " << is_zero_init << std::endl;
 
             if (is_zero_init) {
                 // 零初始化应该放到 BSS 段
-                std::cout << "Converting to ZeroInitializer for BSS section"
-                          << std::endl;
+                DEBUG_OUT() << "Converting to ZeroInitializer for BSS section"
+                            << std::endl;
                 initializer = ZeroInitializer{};
             } else {
                 // 打印非零初始化的详细信息
@@ -4651,20 +4664,21 @@ void Visitor::visit(const midend::GlobalVariable* global_var,
                     [&name](const auto& value) {
                         using T = std::decay_t<decltype(value)>;
                         if constexpr (std::is_same_v<T, std::vector<int32_t>>) {
-                            std::cout << "Non-zero int array initializer for "
-                                      << name << " with " << value.size()
-                                      << " elements: ";
+                            DEBUG_OUT()
+                                << "Non-zero int array initializer for " << name
+                                << " with " << value.size() << " elements: ";
                             for (size_t i = 0;
                                  i < std::min(value.size(), size_t(10)); ++i) {
-                                std::cout << value[i] << " ";
+                                DEBUG_OUT() << value[i] << " ";
                             }
-                            if (value.size() > 10) std::cout << "...";
-                            std::cout << std::endl;
+                            if (value.size() > 10) DEBUG_OUT() << "...";
+                            DEBUG_OUT() << std::endl;
                         } else if constexpr (std::is_same_v<
                                                  T, std::vector<float>>) {
-                            std::cout << "Non-zero float array initializer for "
-                                      << name << " with " << value.size()
-                                      << " elements" << std::endl;
+                            DEBUG_OUT()
+                                << "Non-zero float array initializer for "
+                                << name << " with " << value.size()
+                                << " elements" << std::endl;
                         }
                     },
                     initializer.value());
@@ -4676,8 +4690,8 @@ void Visitor::visit(const midend::GlobalVariable* global_var,
             initializer = ZeroInitializer{};
         }
     } else {
-        std::cout << "No initializer found for " << name
-                  << ", using ZeroInitializer" << std::endl;
+        DEBUG_OUT() << "No initializer found for " << name
+                    << ", using ZeroInitializer" << std::endl;
         // 没有初始化器也放到 BSS 段
         initializer = ZeroInitializer{};
     }
@@ -4689,8 +4703,8 @@ void Visitor::visit(const midend::GlobalVariable* global_var,
     // 添加到模块中
     if (parent_module != nullptr) {
         parent_module->addGlobal(std::move(global_variable));
-        std::cout << "Global variable " << name << " added to module"
-                  << std::endl;
+        DEBUG_OUT() << "Global variable " << name << " added to module"
+                    << std::endl;
     }
 }
 

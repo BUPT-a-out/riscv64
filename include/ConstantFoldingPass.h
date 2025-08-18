@@ -2,6 +2,14 @@
 
 #include "Instructions/All.h"
 
+// Debug output macro - only outputs when A_OUT_DEBUG is defined
+#ifdef A_OUT_DEBUG
+#define DEBUG_OUT() std::cout
+#else
+#define DEBUG_OUT() \
+    if constexpr (false) std::cout
+#endif
+
 namespace riscv64 {
 
 class ConstantFolding {
@@ -41,8 +49,8 @@ class ConstantFolding {
     // 增添一条虚拟寄存器到常数值的映射
     void mapRegToConstant(unsigned int reg_num, int64_t value) {
         virtualRegisterConstants[reg_num] = value;
-        std::cout << "Mapped register " << reg_num << " to constant " << value
-                  << std::endl;
+        DEBUG_OUT() << "Mapped register " << reg_num << " to constant " << value
+                    << std::endl;
     }
 
    private:

@@ -11,25 +11,25 @@ namespace riscv64 {
 
 // VNInfo的dump方法实现
 void VNInfo::dump() const {
-    std::cout << "VN" << id << ":";
+    DEBUG_OUT() << "VN" << id << ":";
     if (isUnused()) {
-        std::cout << "unused";
+        DEBUG_OUT() << "unused";
     } else if (isPHIDef()) {
-        std::cout << "PHI@" << def;
+        DEBUG_OUT() << "PHI@" << def;
     } else {
-        std::cout << "@" << def;
+        DEBUG_OUT() << "@" << def;
     }
 }
 
 // LiveInterval::Segment的dump方法实现
 void LiveInterval::Segment::dump() const {
-    std::cout << "[" << start << "," << end << ":";
+    DEBUG_OUT() << "[" << start << "," << end << ":";
     if (valno) {
-        std::cout << "VN" << valno->id;
+        DEBUG_OUT() << "VN" << valno->id;
     } else {
-        std::cout << "null";
+        DEBUG_OUT() << "null";
     }
-    std::cout << ")";
+    DEBUG_OUT() << ")";
 }
 
 // LiveInterval::SubRange的方法实现
@@ -49,7 +49,7 @@ void LiveInterval::SubRange::print(std::ostream &OS) const {
 
 void LiveInterval::SubRange::dump() const {
     print(std::cout);
-    std::cout << std::endl;
+    DEBUG_OUT() << std::endl;
 }
 
 // LiveInterval的主要方法实现
@@ -275,7 +275,7 @@ void LiveInterval::print(std::ostream &OS) const {
 
 void LiveInterval::dump() const {
     print(std::cout);
-    std::cout << std::endl;
+    DEBUG_OUT() << std::endl;
 }
 
 // 私有辅助方法实现

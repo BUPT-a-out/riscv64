@@ -7,6 +7,14 @@
 
 #include "Instructions/Instruction.h"
 
+// Debug output macro - only outputs when A_OUT_DEBUG is defined
+#ifdef A_OUT_DEBUG
+#define DEBUG_OUT() std::cerr
+#else
+#define DEBUG_OUT() \
+    if constexpr (false) std::cerr
+#endif
+
 namespace riscv64 {
 
 BasicBlockReordering::BasicBlockReordering(Function* function)
@@ -14,13 +22,13 @@ BasicBlockReordering::BasicBlockReordering(Function* function)
 
 void BasicBlockReordering::run() {
     if (!function_ || function_->empty()) {
-        std::cout << "BasicBlockReordering: Skipping empty function"
-                  << std::endl;
+        DEBUG_OUT() << "BasicBlockReordering: Skipping empty function"
+                    << std::endl;
         return;
     }
 
-    std::cout << "\n=== Basic Block Reordering for function: "
-              << function_->getName() << " ===" << std::endl;
+    DEBUG_OUT() << "\n=== Basic Block Reordering for function: "
+                << function_->getName() << " ===" << std::endl;
 
     printOriginalLayout();
     optimizeBlockLayout();
@@ -30,7 +38,7 @@ void BasicBlockReordering::run() {
 }
 
 void BasicBlockReordering::optimizeBlockLayout() {
-    std::cout << "Starting greedy chain-building algorithm..." << std::endl;
+    DEBUG_OUT() << "Starting greedy chain-building algorithm..." << std::endl;
 
     // 收集所有基本块到临时vector（因为我们需要修改function的basic_blocks）
     std::vector<BasicBlock*> all_blocks;
@@ -63,8 +71,8 @@ void BasicBlockReordering::optimizeBlockLayout() {
             current_block = *unplaced_blocks.begin();
         }
 
-        std::cout << "Starting new chain with block: "
-                  << current_block->getLabel() << std::endl;
+        DEBUG_OUT() << "Starting new chain with block: "
+                    << current_block->getLabel() << std::endl;
 
         // 2b. 内循环：延伸当前链
         while (current_block &&
@@ -72,20 +80,21 @@ void BasicBlockReordering::optimizeBlockLayout() {
             // 2b.i 将当前块从未放置集合移除，添加到新布局
             unplaced_blocks.erase(current_block);
             new_layout.push_back(current_block);
-            std::cout << "  Added block: " << current_block->getLabel()
-                      << " to layout" << std::endl;
+            DEBUG_OUT() << "  Added block: " << current_block->getLabel()
+                        << " to layout" << std::endl;
 
             // 2b.ii 寻找最佳后继
             BasicBlock* next_block =
                 findBestSuccessor(current_block, unplaced_blocks);
 
             if (next_block) {
-                std::cout << "  Next block in chain: " << next_block->getLabel()
-                          << std::endl;
+                DEBUG_OUT()
+                    << "  Next block in chain: " << next_block->getLabel()
+                    << std::endl;
                 current_block = next_block;
             } else {
-                std::cout << "  Chain ended (no suitable successor)"
-                          << std::endl;
+                DEBUG_OUT()
+                    << "  Chain ended (no suitable successor)" << std::endl;
                 break;
             }
         }
@@ -115,12 +124,12 @@ void BasicBlockReordering::optimizeBlockLayout() {
         }
     }
 
-    std::cout << "Block layout optimization completed. New order: ";
+    DEBUG_OUT() << "Block layout optimization completed. New order: ";
     for (size_t i = 0; i < new_layout.size(); ++i) {
-        std::cout << new_layout[i]->getLabel();
-        if (i < new_layout.size() - 1) std::cout << " -> ";
+        DEBUG_OUT() << new_layout[i]->getLabel();
+        if (i < new_layout.size() - 1) DEBUG_OUT() << " -> ";
     }
-    std::cout << std::endl;
+    DEBUG_OUT() << std::endl;
 }
 
 BasicBlock* BasicBlockReordering::findBestSuccessor(
@@ -151,8 +160,8 @@ BasicBlock* BasicBlockReordering::findBestSuccessor(
     if (isConditionalBranch(current_block, jump_tgt, fallthrough_target)) {
         if (fallthrough_target &&
             unplaced_blocks.find(fallthrough_target) != unplaced_blocks.end()) {
-            std::cout << "    Priority 2: Following fallthrough path to "
-                      << fallthrough_target->getLabel() << std::endl;
+            DEBUG_OUT() << "    Priority 2: Following fallthrough path to "
+                        << fallthrough_target->getLabel() << std::endl;
             return fallthrough_target;
         }
     }
@@ -161,8 +170,8 @@ BasicBlock* BasicBlockReordering::findBestSuccessor(
     for (BasicBlock* successor : current_block->getSuccessors()) {
         if (successor &&
             unplaced_blocks.find(successor) != unplaced_blocks.end()) {
-            std::cout << "    Priority 3: Arbitrary successor "
-                      << successor->getLabel() << std::endl;
+            DEBUG_OUT() << "    Priority 3: Arbitrary successor "
+                        << successor->getLabel() << std::endl;
             return successor;
         }
     }
@@ -252,7 +261,7 @@ bool BasicBlockReordering::isConditionalBranch(
 }
 
 void BasicBlockReordering::removeRedundantJumps() {
-    std::cout << "Removing redundant jumps..." << std::endl;
+    DEBUG_OUT() << "Removing redundant jumps..." << std::endl;
 
     int removed_jumps = 0;
     auto& blocks = function_->basic_blocks;
@@ -273,9 +282,9 @@ void BasicBlockReordering::removeRedundantJumps() {
             // 检查这个J指令是否跳转到紧邻的下一个块
             const auto& successors = current->getSuccessors();
             if (successors.size() == 1 && successors[0] == next) {
-                std::cout << "  Removing redundant jump from "
-                          << current->getLabel() << " to " << next->getLabel()
-                          << std::endl;
+                DEBUG_OUT()
+                    << "  Removing redundant jump from " << current->getLabel()
+                    << " to " << next->getLabel() << std::endl;
 
                 // 删除这条指令
                 auto forward_it = current->end();
@@ -293,9 +302,9 @@ void BasicBlockReordering::removeRedundantJumps() {
             if (isConditionalBranch(current, jump_target, fallthrough_target)) {
                 // 如果fallthrough_target是下一个块，可以删除最后的无条件跳转
                 if (fallthrough_target == next) {
-                    std::cout << "  Removing redundant fallthrough jump from "
-                              << current->getLabel() << " to "
-                              << next->getLabel() << std::endl;
+                    DEBUG_OUT() << "  Removing redundant fallthrough jump from "
+                                << current->getLabel() << " to "
+                                << next->getLabel() << std::endl;
 
                     // 删除最后的无条件跳转指令
                     auto forward_it = current->end();
@@ -307,36 +316,36 @@ void BasicBlockReordering::removeRedundantJumps() {
         }
     }
 
-    std::cout << "Removed " << removed_jumps << " redundant jump instructions"
-              << std::endl;
+    DEBUG_OUT() << "Removed " << removed_jumps << " redundant jump instructions"
+                << std::endl;
 }
 
 void BasicBlockReordering::printOriginalLayout() const {
-    std::cout << "Original layout: ";
+    DEBUG_OUT() << "Original layout: ";
     bool first = true;
     for (const auto& bb : *function_) {
-        if (!first) std::cout << " -> ";
-        std::cout << bb->getLabel();
+        if (!first) DEBUG_OUT() << " -> ";
+        DEBUG_OUT() << bb->getLabel();
         first = false;
     }
-    std::cout << std::endl;
+    DEBUG_OUT() << std::endl;
 }
 
 void BasicBlockReordering::printOptimizedLayout() const {
-    std::cout << "Optimized layout: ";
+    DEBUG_OUT() << "Optimized layout: ";
     bool first = true;
     for (const auto& bb : *function_) {
-        if (!first) std::cout << " -> ";
-        std::cout << bb->getLabel();
+        if (!first) DEBUG_OUT() << " -> ";
+        DEBUG_OUT() << bb->getLabel();
         first = false;
     }
-    std::cout << std::endl;
+    DEBUG_OUT() << std::endl;
 }
 
 void BasicBlockReordering::printStatistics() const {
-    std::cout << "Block reordering statistics:" << std::endl;
-    std::cout << "  Total blocks: " << function_->getBasicBlockCount()
-              << std::endl;
+    DEBUG_OUT() << "Block reordering statistics:" << std::endl;
+    DEBUG_OUT() << "  Total blocks: " << function_->getBasicBlockCount()
+                << std::endl;
 
     // 统计跳转指令数量
     int jump_count = 0;
@@ -363,9 +372,9 @@ void BasicBlockReordering::printStatistics() const {
         }
     }
 
-    std::cout << "  Unconditional jumps: " << jump_count << std::endl;
-    std::cout << "  Conditional branches: " << conditional_branch_count
-              << std::endl;
+    DEBUG_OUT() << "  Unconditional jumps: " << jump_count << std::endl;
+    DEBUG_OUT() << "  Conditional branches: " << conditional_branch_count
+                << std::endl;
 }
 
 }  // namespace riscv64
