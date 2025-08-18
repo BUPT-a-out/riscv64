@@ -3,6 +3,7 @@
 #include "BasicBlockReordering.h"
 #include "CodeGen.h"
 #include "ConstantFoldingPass.h"
+#include "DeadCodeElimination.h"
 #include "FrameIndexElimination.h"
 #include "IR/Function.h"
 #include "Pass/Analysis/LoopInfo.h"
@@ -49,6 +50,8 @@ std::string RISCV64Target::compileToAssembly(
     initialFrameIndexPass(riscv_module);  // 第一阶段
     constantFoldingPass(riscv_module);    // 第1.6阶段：常量折叠优化
     basicBlockReorderingPass(riscv_module);  // 第1.7阶段：基本块重排优化
+
+    deadCodeEliminationPass(riscv_module);  // 第一阶段附加：DCE
 
     // RAGreedyPass(riscv_module);
 
@@ -282,6 +285,23 @@ Module& RISCV64Target::registerAllocationPass(
 
     DEBUG_OUT() << module.toString() << std::endl;
 
+    return module;
+}
+
+Module& RISCV64Target::deadCodeEliminationPass(riscv64::Module& module) {
+    DEBUG_OUT() << "\n=== Post-RA Dead Code Elimination ===" << std::endl;
+    DeadCodeElimination dce;
+    for (auto& function : module) {
+        if (function->empty()) {
+            continue;
+        }
+        bool changed = dce.runOnFunction(function.get());
+        if (changed) {
+            DEBUG_OUT() << "[DCE] Function optimized: " << function->getName()
+                        << std::endl;
+        }
+    }
+    DEBUG_OUT() << "=== DCE Completed ===" << std::endl;
     return module;
 }
 
