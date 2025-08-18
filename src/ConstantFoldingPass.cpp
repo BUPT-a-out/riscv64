@@ -850,10 +850,6 @@ void ConstantFolding::instructionReassociateAndCombine(Instruction* inst,
 }
 
 void ConstantFolding::useZeroReg(Instruction* inst, BasicBlock* parent_bb) {
-    if (inst->getOpcode() != LI) {
-        return;
-    }
-
     if (inst->getOpcode() == LI && inst->getOperand(1)->getValue() == 0) {
         auto dest_reg = Visitor::cloneRegister(
             dynamic_cast<RegisterOperand*>(inst->getOperand(0)));
@@ -863,6 +859,17 @@ void ConstantFolding::useZeroReg(Instruction* inst, BasicBlock* parent_bb) {
         inst->setOpcode(MV);
         inst->addOperand_(std::move(dest_reg));                        // rd
         inst->addOperand_(std::make_unique<RegisterOperand>("zero"));  // zero
+        return;
+    }
+
+    // 遍历寄存器操作数，判断是否为 0
+    for (size_t i = 0; i < inst->getOprandCount(); ++i) {
+        auto* operand = inst->getOperand(i);
+        if (operand->isReg() && (getConstant(*operand).value_or(-1) == 0)) {
+            DEBUG_OUT() << "Found reg value 0 in instruction: "
+                        << inst->toString() << std::endl;
+            // inst
+        }
     }
 }
 
