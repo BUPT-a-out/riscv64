@@ -54,6 +54,13 @@ class ConstantFolding {
                     << std::endl;
     }
 
+    // 清除一条映射
+    void removeRegMap(unsigned int reg_num) {
+        if (virtualRegisterConstants.erase(reg_num)) {
+            DEBUG_OUT() << "Removed mapping for register " << reg_num << std::endl;
+        }
+    }
+
    private:
     // 将虚拟寄存器映射到一个已知的常量值
     std::map<unsigned int, int64_t> virtualRegisterConstants;

@@ -91,6 +91,13 @@ std::optional<int64_t> ConstantFolding::getConstant(MachineOperand& operand) {
 
 void ConstantFolding::foldInstruction(Instruction* inst,
                                       BasicBlock* parent_bb) {
+    // 如果是 CALL 指令，清除 10~17
+    if (inst->getOpcode() == CALL) {
+        // DEBUG_OUT() << ""
+        for (unsigned int i = 10; i <= 17; i++) {
+            removeRegMap(i);
+        }
+    }
     // 目前假定第0个操作数是目的寄存器，后续的是源操作数
     if (inst->getOprandCount() <= 1) {
         return;  // 没有源操作数，无需折叠
