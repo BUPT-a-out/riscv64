@@ -37,7 +37,7 @@ enum class RegisterType {
 };
 
 // 操作数基类
-class MachineOperand : midend::Value {
+class MachineOperand : public midend::Value {
    public:
     virtual ~MachineOperand() = default;
     OperandType getType() const { return type; }

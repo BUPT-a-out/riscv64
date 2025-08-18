@@ -233,8 +233,12 @@ class Instruction : public midend::User {
     // 添加操作数
     void addOperand_(std::unique_ptr<MachineOperand> operand) {
         operands.push_back(std::move(operand));
+        this->addOperand(operand.get());
     }
-    void clearOperands() { operands.clear(); }
+    void clearOperands() {
+        operands.clear();
+        this->dropAllReferences();
+    }
 
     Opcode getOpcode() const { return opcode; }
     void setOpcode(Opcode new_opcode) { opcode = new_opcode; }
