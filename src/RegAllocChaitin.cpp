@@ -782,45 +782,41 @@ std::vector<unsigned> RegAllocChaitin::getSimplificationOrder() {
         invalidateDegreeCache(regNum);
     }
 
-    // unsigned spillCandidate = 0;
-    // int maxDegree = -1;
-
-    // for (auto const& [regNum, node] : interferenceGraph) {
-    //     // 只在未被移除且非预着色的节点中选择
-    //     if (!removed.count(regNum) && !node->isPrecolored &&
-    //         !ABI::isReservedReg(regNum, assigningFloat)) {
-    //         int currentDegree = getCachedDegree(regNum);
-    //         if (currentDegree > maxDegree) {
-    //             maxDegree = currentDegree;
-    //             spillCandidate = regNum;
-    //         }
-    //     }
-    // }
-
-    // TODO: sort list.
-    unsigned spillCandidate = 0;
-    double minCost = DBL_MAX;
+    using spillCand = std::pair<double, unsigned>;
+    std::priority_queue<spillCand, std::vector<spillCand>,
+                        std::greater<spillCand>>
+        spillWorkList;
 
     for (auto const& [regNum, node] : interferenceGraph) {
-        // 只在未被移除且非预着色的节点中选择
         if (!removed.count(regNum) && !node->isPrecolored &&
             !ABI::isReservedReg(regNum, assigningFloat)) {
             int deg = getCachedDegree(regNum);
-            double currentCost = (double)computeSpillCost(regNum) / deg;
-            DEBUG_OUT() << "reg" << regNum << "cost" << currentCost << "deg"
-                        << deg << std::endl;
-            if (currentCost < minCost) {
-                minCost = currentCost;
-                spillCandidate = regNum;
-            }
+            double cost = (double)computeSpillCost(regNum) / deg;
+            spillWorkList.push(std::make_pair(cost, regNum));
         }
     }
 
-    // 确保找到了一个候选
-    if (spillCandidate != 0) {
-        DEBUG_OUT() << "Spill candidate selected: reg " << spillCandidate
-                    << std::endl;
-        spilledRegs.insert(spillCandidate);
+    while (!spillWorkList.empty()) {
+        spillCand reg = spillWorkList.top();
+        spillWorkList.pop();
+
+        auto regNum = reg.second;
+        auto deg = getCachedDegree(regNum);
+        if (deg < static_cast<int>(availableRegs.size())) {
+            removed.insert(regNum);
+        } else {
+            spilledRegs.insert(regNum);
+        }
+
+        if (interferenceGraph.find(regNum) != interferenceGraph.end()) {
+            for (unsigned neighbor : interferenceGraph[regNum]->neighbors) {
+                if (removed.find(neighbor) == removed.end() &&
+                    !interferenceGraph[neighbor]->isPrecolored) {
+                    // 更新邻居的度数
+                    degreeCache[neighbor]--;
+                }
+            }
+        }
     }
 
     // 按栈顺序返回
@@ -914,17 +910,11 @@ bool RegAllocChaitin::attemptColoring(const std::vector<unsigned>& order) {
 }
 
 /// Spill
-// TODO: adjust spill batch size
 void RegAllocChaitin::handleSpills() {
-    // auto spillCandidates = selectSpillCandidates();
+    auto spillCandidates = selectSpillCandidates();
 
-    // for (unsigned reg : spillCandidates) {
-    //     insertSpillCode(reg);
-    // }
-
-    auto spillCandidate = selectSpillCandidate();
-    if (spillCandidate) {
-        insertSpillCode(spillCandidate);
+    for (unsigned reg : spillCandidates) {
+        insertSpillCode(reg);
     }
 
     // 清空状态重新开始
@@ -939,7 +929,7 @@ void RegAllocChaitin::handleSpills() {
     clearDegreeCache();
 }
 
-// TODO: compute spill cost
+const int BATCH_SIZE = 10;
 std::vector<unsigned> RegAllocChaitin::selectSpillCandidates() {
     std::vector<unsigned> candidates;
 
@@ -955,11 +945,25 @@ std::vector<unsigned> RegAllocChaitin::selectSpillCandidates() {
 
     std::sort(candidates.begin(), candidates.end(),
               [this](unsigned a, unsigned b) {
-                  return interferenceGraph[a]->neighbors.size() >
-                         interferenceGraph[b]->neighbors.size();
+                  auto degA = interferenceGraph[a]->neighbors.size();
+                  auto degB = interferenceGraph[b]->neighbors.size();
+                  auto costA = computeSpillCost(a);
+                  auto costB = computeSpillCost(b);
+
+                  auto A = (double)costA / degA;
+                  auto B = (double)costB / degB;
+                  return A < B;
               });
 
-    return candidates;
+    if (candidates.size() <= 30) {
+        std::vector<unsigned> cand = {candidates[0]};
+        return cand;
+    } else {
+        std::vector<unsigned> cand;
+        cand.assign(candidates.begin(), candidates.begin() + BATCH_SIZE);
+        return cand;
+    }
+
 }
 
 unsigned RegAllocChaitin::selectSpillCandidate() {
@@ -1390,6 +1394,7 @@ int RegAllocChaitin::getBasicBlockFrequency(BasicBlock* bb) {
     return std::max(frequency, 1);  // 确保至少为1
 }
 
+// TODO: low perf
 int RegAllocChaitin::getRegisterUsageCount(unsigned reg) {
     int count = 0;
     for (auto& bb : *function) {
