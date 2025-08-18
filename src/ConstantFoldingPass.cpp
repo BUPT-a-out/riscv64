@@ -150,6 +150,7 @@ void ConstantFolding::peepholeOptimize(Instruction* inst,
         bitwiseOperationSimplify(inst, parent_bb);
         // mvToAddiw(inst, parent_bb);
         instructionReassociateAndCombine(inst, parent_bb);
+        useZeroReg(inst, parent_bb);
     }
 }
 
@@ -838,6 +839,23 @@ void ConstantFolding::instructionReassociateAndCombine(Instruction* inst,
         }
 
     } else if (inst->getOpcode() == MUL || inst->getOpcode() == MULW) {
+    }
+}
+
+void ConstantFolding::useZeroReg(Instruction* inst, BasicBlock* parent_bb) {
+    if (inst->getOpcode() != LI) {
+        return;
+    }
+
+    if (inst->getOpcode() == LI && inst->getOperand(1)->getValue() == 0) {
+        auto dest_reg = Visitor::cloneRegister(
+            dynamic_cast<RegisterOperand*>(inst->getOperand(0)));
+        DEBUG_OUT() << "Replace reg " << dest_reg->toString() << " with zero"
+                    << std::endl;
+        inst->clearOperands();
+        inst->setOpcode(MV);
+        inst->addOperand(std::move(dest_reg));                   // rd
+        inst->addOperand(std::make_unique<RegisterOperand>("zero"));  // zero
     }
 }
 

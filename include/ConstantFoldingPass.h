@@ -33,6 +33,7 @@ class ConstantFolding {
     void mvToAddiw(Instruction* inst, BasicBlock* parent_bb);
     void instructionReassociateAndCombine(Instruction* inst,
                                           BasicBlock* parent_bb);
+    void useZeroReg(Instruction* inst, BasicBlock* parent_bb);
 
     // 尝试常量传播
     void constantPropagate(Instruction* inst, BasicBlock* parent_bb);
