@@ -68,12 +68,15 @@ void ConstantFolding::handleInstruction(Instruction* inst,
                                         BasicBlock* parent_bb) {
     // 处理重定义
     if (inst->getOprandCount() >= 1) {
-        auto* defined_operand = inst->getOperand(0);
-        if (defined_operand->isReg()) {
-            // 旧值失效
-            virtualRegisterConstants.erase(defined_operand->getRegNum());
+        // auto* defined_operand = inst->getOperand(0);
+        auto defined_regs = inst->getDefinedIntegerRegs();
+        // 旧值失效
+        for (auto& reg : defined_regs) {
+            virtualRegisterConstants.erase(reg);
         }
     }
+
+    useZeroReg(inst, parent_bb);
 
     // 尝试折叠
     foldInstruction(inst, parent_bb);
@@ -173,7 +176,6 @@ void ConstantFolding::peepholeOptimize(Instruction* inst,
         bitwiseOperationSimplify(inst, parent_bb);
         // mvToAddiw(inst, parent_bb);
         instructionReassociateAndCombine(inst, parent_bb);
-        useZeroReg(inst, parent_bb);
     }
 }
 
@@ -866,12 +868,21 @@ void ConstantFolding::instructionReassociateAndCombine(Instruction* inst,
 }
 
 void ConstantFolding::useZeroReg(Instruction* inst, BasicBlock* parent_bb) {
-    if (inst->getOpcode() == LI && inst->getOperand(1)->getValue() == 0) {
+    if (inst->getOprandCount() == 0) {
+        return;
+    }
+
+    if (inst->getOpcode() == BNEZ) {
+        auto a = 1;  // breakpoint
+    }
+
+    if (inst->getOpcode() == LI && inst->getOperand(1)->getValue() == 0 &&
+        inst->getOperand(0)->getRegNum() >= 100) {
         mapRegToConstant(inst->getOperand(0)->getRegNum(), 0);
         // 防止同一条指令被加入多次
         if (std::find(instructionsToRemove.begin(), instructionsToRemove.end(),
                       inst) == instructionsToRemove.end()) {
-            instructionsToRemove.push_back(inst);
+            // instructionsToRemove.push_back(inst);
         }
         return;
     }
