@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "IR/Type.h"
 #include "MachineOperand.h"
 
 namespace riscv64 {
@@ -205,15 +206,29 @@ enum Opcode {
 };
 using DestSourcePair = std::pair<MachineOperand*, MachineOperand*>;
 
-class Instruction {
+inline auto getContext() {
+    static const auto context = std::make_unique<midend::Context>();
+    return context.get();
+}
+
+inline auto getVoidType() { return getContext()->getVoidType(); }
+
+class Instruction : public midend::User {
    public:
-    explicit Instruction(Opcode op) : opcode(op) {}
+    explicit Instruction(Opcode op)
+        : midend::User(getVoidType(), midend::ValueKind::RISCVInstruction, 0),
+          opcode(op) {}
     explicit Instruction(Opcode op, BasicBlock* parent)
-        : opcode(op), parent(parent) {}
+        : midend::User(getVoidType(), midend::ValueKind::RISCVInstruction, 0),
+          opcode(op),
+          parent(parent) {}
     explicit Instruction(
         Opcode op, std::vector<std::unique_ptr<MachineOperand>>&& operands_vec,
         BasicBlock* parent = nullptr)
-        : opcode(op), operands(std::move(operands_vec)), parent(parent) {}
+        : midend::User(getVoidType(), midend::ValueKind::RISCVInstruction, 0),
+          opcode(op),
+          operands(std::move(operands_vec)),
+          parent(parent) {}
 
     // 添加操作数
     void addOperand_(std::unique_ptr<MachineOperand> operand) {
