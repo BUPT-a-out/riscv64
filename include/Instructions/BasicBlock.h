@@ -68,7 +68,6 @@ class BasicBlock {
                 return;
             }
         }
-        throw std::runtime_error("Instruction not found in BasicBlock");
     }
 
     auto size() const { return instructions.size(); }

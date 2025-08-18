@@ -239,6 +239,13 @@ class Instruction : public midend::User {
         operands.clear();
         this->dropAllReferences();
     }
+    void setOperand(size_t index, std::unique_ptr<MachineOperand> operand) {
+        if (index < operands.size()) {
+            operands[index] = std::move(operand);
+        } else {
+            throw std::out_of_range("Index out of range for operands");
+        }
+    }
 
     Opcode getOpcode() const { return opcode; }
     void setOpcode(Opcode new_opcode) { opcode = new_opcode; }

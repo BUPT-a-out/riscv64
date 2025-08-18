@@ -1,8 +1,10 @@
 #include "ConstantFoldingPass.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <unordered_set>
 
 #include "Visit.h"
 
@@ -41,10 +43,24 @@ void ConstantFolding::runOnBasicBlock(BasicBlock* basicBlock) {
         handleInstruction(inst.get(), basicBlock);
     }
 
+    // 去重后再删除，避免同一指令被多次加入（例如 peephole
+    // 多轮处理）导致的二次释放
+    std::unordered_set<Instruction*> seen;
     for (auto* inst : instructionsToRemove) {
-        // Remove the instruction from the basic block
-        basicBlock->removeInstruction(inst);
-        DEBUG_OUT() << "Removed instruction: " << inst->toString() << std::endl;
+        if (!inst) {
+            continue;
+        }
+        if (seen.insert(inst).second) {  // first time seen
+            std::string text;
+            // toString 里会访问 operands，安全起见在移除前取字符串
+            try {
+                text = inst->toString();
+            } catch (...) {
+                text = "<invalid>";
+            }
+            DEBUG_OUT() << "Removed instruction: " << text << std::endl;
+            basicBlock->removeInstruction(inst);
+        }
     }
 }
 
@@ -851,24 +867,24 @@ void ConstantFolding::instructionReassociateAndCombine(Instruction* inst,
 
 void ConstantFolding::useZeroReg(Instruction* inst, BasicBlock* parent_bb) {
     if (inst->getOpcode() == LI && inst->getOperand(1)->getValue() == 0) {
-        auto dest_reg = Visitor::cloneRegister(
-            dynamic_cast<RegisterOperand*>(inst->getOperand(0)));
-        DEBUG_OUT() << "Replace reg " << dest_reg->toString() << " with zero"
-                    << std::endl;
-        inst->clearOperands();
-        inst->setOpcode(MV);
-        inst->addOperand_(std::move(dest_reg));                        // rd
-        inst->addOperand_(std::make_unique<RegisterOperand>("zero"));  // zero
+        mapRegToConstant(inst->getOperand(0)->getRegNum(), 0);
+        // 防止同一条指令被加入多次
+        if (std::find(instructionsToRemove.begin(), instructionsToRemove.end(),
+                      inst) == instructionsToRemove.end()) {
+            instructionsToRemove.push_back(inst);
+        }
         return;
     }
 
     // 遍历寄存器操作数，判断是否为 0
     for (size_t i = 0; i < inst->getOprandCount(); ++i) {
         auto* operand = inst->getOperand(i);
-        if (operand->isReg() && (getConstant(*operand).value_or(-1) == 0)) {
-            DEBUG_OUT() << "Found reg value 0 in instruction: "
-                        << inst->toString() << std::endl;
-            // inst
+        if (operand->isReg() && (getConstant(*operand).value_or(-1) == 0) &&
+            (operand->getRegNum() != 0)) {
+            DEBUG_OUT() << "Found reg value 0 in instruction: '"
+                        << inst->toString() << "', replace "
+                        << operand->toString() << " to zero." << std::endl;
+            inst->setOperand(i, std::make_unique<RegisterOperand>("zero"));
         }
     }
 }
