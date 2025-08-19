@@ -110,6 +110,9 @@ std::optional<int64_t> ConstantFolding::getConstant(MachineOperand& operand) {
 
 void ConstantFolding::foldInstruction(Instruction* inst,
                                       BasicBlock* parent_bb) {
+    if (inst->getOpcode() == MV) {
+        return;
+    }
     // 如果是 CALL 指令，清除 10~17
     if (inst->getOpcode() == CALL) {
         // DEBUG_OUT() << ""
@@ -864,6 +867,7 @@ void ConstantFolding::instructionReassociateAndCombine(Instruction* inst,
         }
 
     } else if (inst->getOpcode() == MUL || inst->getOpcode() == MULW) {
+        // 搁置
     }
 }
 
