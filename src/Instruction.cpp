@@ -341,6 +341,9 @@ std::vector<unsigned> Instruction::getUsedIntegerRegs() const {
             break;
         }
 
+        case LI:
+            return usedRegs;  // LI指令不使用寄存器
+
         // 加载指令：LD rd, offset(rs1) - 使用rs1作为基址寄存器
         case LD:
         case LW:
@@ -430,6 +433,7 @@ std::vector<unsigned> Instruction::getUsedIntegerRegs() const {
                     usedRegs.push_back(operands[0]->getRegNum());
                 }
             }
+            break;
         }
 
         case JALR: {
