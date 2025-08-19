@@ -51,7 +51,7 @@ std::string RISCV64Target::compileToAssembly(
     constantFoldingPass(riscv_module);    // 第1.6阶段：常量折叠优化
     basicBlockReorderingPass(riscv_module);  // 第1.7阶段：基本块重排优化
 
-    deadCodeEliminationPass(riscv_module);  // 第一阶段附加：DCE
+    deadCodeEliminationPass(riscv_module, false);  // 第一阶段附加：DCE
 
     // RAGreedyPass(riscv_module);
 
@@ -59,6 +59,9 @@ std::string RISCV64Target::compileToAssembly(
     frameIndexEliminationPass(riscv_module);                // 第三阶段
 
     foldMemoryAccessPass(riscv_module);
+
+    deadCodeEliminationPass(riscv_module, true);  // 第一阶段附加：DCE
+
 
     return riscv_module.toString();
 }
@@ -290,14 +293,14 @@ Module& RISCV64Target::registerAllocationPass(
     return module;
 }
 
-Module& RISCV64Target::deadCodeEliminationPass(riscv64::Module& module) {
+Module& RISCV64Target::deadCodeEliminationPass(riscv64::Module& module, bool forPhys) {
     DEBUG_OUT() << "\n=== Post-RA Dead Code Elimination ===" << std::endl;
     DeadCodeElimination dce;
     for (auto& function : module) {
         if (function->empty()) {
             continue;
         }
-        bool changed = dce.runOnFunction(function.get());
+        bool changed = dce.runOnFunction(function.get(), forPhys);
         if (changed) {
             DEBUG_OUT() << "[DCE] Function optimized: " << function->getName()
                         << std::endl;

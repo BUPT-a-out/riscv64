@@ -38,7 +38,7 @@ class RISCV64Target {
         const midend::AnalysisManager* analysisManager =
             nullptr);  // 阶段2：寄存器分配
     Module& deadCodeEliminationPass(
-        riscv64::Module& module);  // 寄存器分配后：死代码删除
+        riscv64::Module& module, bool forPhys);  // 寄存器分配前后：死代码删除
     Module& frameIndexEliminationPass(
         riscv64::Module& module);  // 阶段3：Frame Index消除
     Module& foldMemoryAccessPass(riscv64::Module& module);
