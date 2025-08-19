@@ -6,10 +6,10 @@
 
 // Debug output macro - only outputs when A_OUT_DEBUG is defined
 #ifdef A_OUT_DEBUG
-#define DEBUG_OUT() std::cerr
+#define DEBUG_OUT() std::cout
 #else
 #define DEBUG_OUT() \
-    if constexpr (false) std::cerr
+    if constexpr (false) std::cout
 #endif
 
 namespace riscv64 {

@@ -10,19 +10,19 @@
 
 namespace riscv64 {
 
-bool DeadCodeElimination::runOnFunction(Function* func) {
+bool DeadCodeElimination::runOnFunction(Function* func, bool forPhys) {
     if (func == nullptr || func->empty()) {
         return false;
     }
 
     info_.clear();
-    computeDefUse(func);
-    livenessFixpoint(func);
-    bool changed = eliminate(func);
+    computeDefUse(func, forPhys);
+    livenessFixpoint(func, forPhys);
+    bool changed = eliminate(func, forPhys);
     return changed;
 }
 
-void DeadCodeElimination::computeDefUse(Function* func) {
+void DeadCodeElimination::computeDefUse(Function* func, bool forPhys) {
     for (auto& bbPtr : *func) {
         auto* basicBlock = bbPtr.get();
         auto& blk = info_[basicBlock];
@@ -34,8 +34,11 @@ void DeadCodeElimination::computeDefUse(Function* func) {
             Instruction* inst = instPtr.get();
             // Uses
             for (unsigned usedReg : getUsedRegs(inst)) {
-                if (!isVirtualReg(usedReg)) {
+                if (!forPhys && !isVirtualReg(usedReg)) {
                     continue;  // ignore physical
+                }
+                if (forPhys && (isVirtualReg(usedReg) || usedReg <= 4 || usedReg == 8)) {
+                    continue;  // ignore virtual or preserved reg
                 }
                 if (blk.def.find(usedReg) == blk.def.end()) {
                     blk.use.insert(usedReg);
@@ -43,7 +46,10 @@ void DeadCodeElimination::computeDefUse(Function* func) {
             }
             // Defs
             for (unsigned defReg : getDefinedRegs(inst)) {
-                if (!isVirtualReg(defReg)) {
+                if (!forPhys && !isVirtualReg(defReg)) {
+                    continue;
+                }
+                if (forPhys && (isVirtualReg(defReg) || defReg <= 4)) {
                     continue;
                 }
                 blk.def.insert(defReg);
@@ -52,7 +58,7 @@ void DeadCodeElimination::computeDefUse(Function* func) {
     }
 }
 
-void DeadCodeElimination::livenessFixpoint(Function* func) {
+void DeadCodeElimination::livenessFixpoint(Function* func, bool forPhys) {
     // Initialize liveIn/liveOut empty vectors implicitly by map default.
     // Compute a post-order then iterate in reverse (RPO) until convergence.
     auto postOrder = func->getPostOrder();
@@ -65,7 +71,25 @@ void DeadCodeElimination::livenessFixpoint(Function* func) {
 
             // liveOut = union of successors' liveIn
             std::unordered_set<unsigned> newLiveOut;
-            for (BasicBlock* succ : basicBlock->getSuccessors()) {
+            auto successors = basicBlock->getSuccessors();
+            if (successors.empty()) {
+                if (forPhys) {
+                    newLiveOut.insert(10);// Exit block: 10 (a0) is used.
+                    newLiveOut.insert(42);// fa0
+
+                    newLiveOut.insert(9); // s1
+                    newLiveOut.insert(41); // fs1
+
+                    for (int i = 18; i <= 27; i++) { // s2-s11
+                        newLiveOut.insert(i); // 
+                    }
+
+                    for (int i = 40; i <= 59; i++) {
+                        newLiveOut.insert(i); // fs2-fs11
+                    }
+                }
+            }
+            for (BasicBlock* succ : successors) {
                 if (succ == nullptr) {
                     continue;
                 }
@@ -90,7 +114,7 @@ void DeadCodeElimination::livenessFixpoint(Function* func) {
     }
 }
 
-bool DeadCodeElimination::eliminate(Function* func) {
+bool DeadCodeElimination::eliminate(Function* func, bool forPhys) {
     bool changed = false;
     // For each block, walk instructions backwards tracking per-instruction live
     for (auto& bbPtr : *func) {
@@ -109,10 +133,13 @@ bool DeadCodeElimination::eliminate(Function* func) {
             bool removable = false;
             if (!defs.empty() && defs.size() == 1) {  // single-def instruction
                 unsigned definedReg = defs[0];
-                if (isVirtualReg(definedReg) &&
-                    live.find(definedReg) == live.end() &&
-                    !hasSideEffects(inst)) {
-                    removable = true;
+                // s0 and reserved
+                if ((forPhys && !isVirtualReg(definedReg) && definedReg >= 5 && definedReg != 8) ||
+                    (!forPhys && isVirtualReg(definedReg))) {
+                    if (live.find(definedReg) == live.end() &&
+                        !hasSideEffects(inst)) {
+                        removable = true;
+                    }
                 }
             }
 
@@ -165,6 +192,7 @@ std::vector<unsigned> DeadCodeElimination::getUsedRegs(
     if (inst == nullptr) {
         return out;
     }
+
     auto ints = inst->getUsedIntegerRegs();
     out.insert(out.end(), ints.begin(), ints.end());
     auto flts = inst->getUsedFloatRegs();

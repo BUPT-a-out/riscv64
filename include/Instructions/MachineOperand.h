@@ -128,6 +128,12 @@ class RegisterOperand : public MachineOperand {
                       : RegisterType::Integer;
     }
 
+    // 请确保真的是物理整数寄存器
+    void setPhysicalRegForce(unsigned physReg) {
+        regNum = physReg;
+        is_virtual = false;
+    }
+
     bool operator==(const RegisterOperand& other) const {
         return regNum == other.regNum && is_virtual == other.is_virtual &&
                regType == other.regType;
@@ -202,6 +208,12 @@ class ImmediateOperand : public MachineOperand {
         assert(isInt() &&
                "Attempted to get integer value from a float immediate operand");
         return static_cast<std::int32_t>(value);
+    }
+
+    void setIntValue(int v) {
+        assert(isInt() &&
+               "Attempted to set integer value to a float immediate operand");
+        value = v;
     }
 
     // 获取浮点数值 (如果不是浮点数则会触发断言)

@@ -171,6 +171,35 @@ class FrameIndexElimination {
 
         return insts;
     }
+
+    // Peephole: fold address materialization (addi rd, rs, imm) followed by
+    // memory ops using 0(rd) into direct memory ops imm(rs). We attempt this
+    // aggressively for lw/ld/sw/sd/flw/fsw and their 8/16/32-bit variants as
+    // long as the final immediate stays within the signed 12-bit range and
+    // 'rd' has no other non-memory uses before being redefined.
+    void foldAddressIntoMemory();
+    static bool isMemoryAccessOpcode(Opcode opc) {
+        switch (opc) {
+            case LW:
+            case LD:
+            case LH:
+            case LHU:
+            case LB:
+            case LBU:
+            case LWU:
+            case SW:
+            case SD:
+            case SH:
+            case SB:
+            case FLW:
+            case FSW:
+            case FLD:
+            case FSD:
+                return true;
+            default:
+                return false;
+        }
+    }
 };
 
 }  // namespace riscv64
