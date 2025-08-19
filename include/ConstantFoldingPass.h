@@ -38,6 +38,8 @@ class ConstantFolding {
     // 尝试常量传播
     void constantPropagate(Instruction* inst, BasicBlock* parent_bb);
 
+    void copyPropagate(Function* func);
+
     // 工具函数
 
     // 判断是否是常量，如果是则获取之

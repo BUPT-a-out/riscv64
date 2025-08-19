@@ -6,6 +6,7 @@
 #include <string>
 #include <unordered_set>
 
+#include "UnionFind.h"
 #include "Visit.h"
 
 // Debug output macro - only outputs when A_OUT_DEBUG is defined
@@ -28,6 +29,8 @@ void ConstantFolding::runOnFunction(Function* function) {
             runOnBasicBlock(bb.get());
         }
     }
+
+    copyPropagate(function);
 }
 
 void ConstantFolding::runOnBasicBlock(BasicBlock* basicBlock) {
@@ -1181,6 +1184,133 @@ std::optional<int64_t> ConstantFolding::calculateInstructionValue(
 
         default:
             return std::nullopt;  // Not (yet) supported
+    }
+}
+
+bool isVReg(unsigned int reg_num) { return reg_num >= 100; }
+
+bool isVreg(MachineOperand* operand) {
+    return operand->isReg() && isVReg(operand->getRegNum());
+}
+
+bool isNotCallerSavedReg(MachineOperand* operand) {
+    return operand->isReg() &&
+           (operand->getRegNum() < 10 || operand->getRegNum() > 17);
+}
+
+void replaceInstSourceReg(Instruction* inst, unsigned old_reg,
+                          unsigned new_reg) {
+    if (inst->getOpcode() == MV) {
+        return;
+    }
+
+    auto source_operands = inst->getUsedIntegerRegs();
+    auto isSourceOperand = [&source_operands](unsigned reg) {
+        return std::find(source_operands.begin(), source_operands.end(), reg) !=
+               source_operands.end();
+    };
+
+    for (size_t i = 0; i < inst->getOprandCount(); i++) {
+        auto* operand = inst->getOperand(i);
+        if (operand->isReg() && operand->getRegNum() == old_reg &&
+            isSourceOperand(operand->getRegNum())) {
+            // 替换源寄存器
+            if (new_reg == 0) {
+                // 不要使用 setRegNum(0)。
+                // 使用与 useZeroReg 中相同的、已知正确的方法来替换为 zero
+                // 寄存器。
+                inst->setOperand(i, std::make_unique<RegisterOperand>("zero"));
+            } else {
+                // 对于其他虚拟寄存器，setRegNum 可能是安全的。
+                operand->setRegNum(new_reg);
+            }
+            DEBUG_OUT() << "Replaced reg " << old_reg << " with " << new_reg
+                        << " in instruction: " << inst->toString() << std::endl;
+
+            break;
+        }
+    }
+}
+
+void ConstantFolding::copyPropagate(Function* func) {
+    UnionFind ufs;
+    std::vector<Instruction*> candidate_moves;
+    std::map<unsigned int, int> def_counts;  // 用于统计每个vreg的定义次数
+
+    // 1. 首次遍历：填充并查集，并找出所有候选的mv指令
+    for (auto& block : *func) {
+        for (auto& inst : *block) {
+            // 将所有用到的vreg添加到并查集中
+            auto uses = inst->getUsedIntegerRegs();
+            for (auto vreg : uses) {
+                ufs.add(vreg);
+            }
+            auto defines = inst->getDefinedIntegerRegs();
+            if (!defines.empty()) {
+                auto defined_vreg = defines[0];
+                ufs.add(defined_vreg);
+                // 统计定义次数
+                def_counts[defined_vreg]++;
+            }
+
+            // 收集所有潜在的 mv 指令
+            if (inst->getOpcode() == MV && inst->getOprandCount() == 2 &&
+                isNotCallerSavedReg(inst->getOperand(0)) &&
+                isNotCallerSavedReg(inst->getOperand(1))) {
+                candidate_moves.push_back(inst.get());
+            }
+        }
+    }
+
+    // 2. 合并：处理所有mv指令，记录寄存器等价关系
+    for (Instruction* mv_inst : candidate_moves) {
+        auto v_dst = mv_inst->getOperand(0)->getRegNum();
+        auto v_src = mv_inst->getOperand(1)->getRegNum();
+
+        // *** 这是关键的安全检查 ***
+        // 只有当目标寄存器 v_dst 在整个函数中只被定义了一次时，
+        // 这才是一个纯粹的拷贝，而不是一个 PHI 节点。
+        if (def_counts[v_dst] == 1) {
+            DEBUG_OUT() << "Safe to unite: " << v_dst << " <- " << v_src
+                        << " (def count of " << v_dst << " is 1)" << std::endl;
+            ufs.uniteWithDirection(v_dst, v_src);
+        } else {
+            DEBUG_OUT() << "UNSAFE to unite: " << v_dst << " <- " << v_src
+                        << " (def count of " << v_dst << " is "
+                        << def_counts[v_dst] << ")" << std::endl;
+        }
+    }
+
+    // 3. 重写和删除：应用合并结果
+    for (auto& block : *func) {
+        // 使用迭代器以支持安全删除
+        for (auto it = block->begin(); it != block->end();) {
+            auto& inst = *it;
+
+            // 检查它是否是我们要删除的 mv 指令
+            if (inst->getOpcode() == MV &&
+                isNotCallerSavedReg(inst->getOperand(0)) &&
+                isNotCallerSavedReg(inst->getOperand(1))) {
+                unsigned int vdst = inst->getOperand(0)->getRegNum();
+                unsigned int vsrc = inst->getOperand(1)->getRegNum();
+                if (ufs.find(vdst) == ufs.find(vsrc)) {
+                    // 源和目标等价，删除这条指令
+                    it = block->erase(it);  // erase返回下一个有效迭代器
+                    continue;               // 继续下一次循环
+                }
+            }
+
+            // 对所有其他指令，重写其源操作数
+            auto used_vregs = inst->getUsedIntegerRegs();  // 获取源寄存器列表
+            for (unsigned int old_vreg : used_vregs) {
+                unsigned int new_vreg = ufs.find(old_vreg);
+                if (old_vreg != new_vreg) {
+                    replaceInstSourceReg(inst.get(), old_vreg, new_vreg);
+                }
+            }
+
+            ++it;  // 处理下一条指令
+        }
     }
 }
 
