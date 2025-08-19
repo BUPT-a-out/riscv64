@@ -277,6 +277,7 @@ class Instruction : public midend::User {
     bool isJumpInstr() const;
     bool isTerminator() const;
     bool isReturnInstr() const;
+    bool isMemoryInstr() const;
 
     bool isBranch() const;
     bool isBackEdge() const;

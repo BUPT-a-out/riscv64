@@ -24,6 +24,10 @@ void FrameIndexElimination::run() {
     generateFinalPrologueEpilogue();
     eliminateFrameIndices();
 
+    // After frame indices are materialized as addi/add pairs, try to fold
+    // them into direct base+imm12 memory accesses.
+    // foldAddressIntoMemory();
+
     printFinalLayout();
 }
 
@@ -494,6 +498,83 @@ void FrameIndexElimination::printFinalLayout() const {
 
     for (const auto& [fi, offset] : layout.frameIndexToOffset) {
         DEBUG_OUT() << "  FI(" << fi << ") -> s0" << offset << std::endl;
+    }
+}
+
+// Peephole optimization: Fold address materialization sequences into
+// memory instructions using base+imm12 addressing: pattern
+//   addi tmp, base, imm12
+//   lw rd, 0(tmp)   =>  lw rd, imm12(base)
+// Similar for ld/sw/sd/etc. Conditions:
+//  - addi immediate fits signed 12-bit (already required for addi)
+//  - memory instruction currently uses (tmp) with offset 0
+//  - tmp is defined by just this addi and not used elsewhere before being
+//    redefined (simple linear scan check)
+void FrameIndexElimination::foldAddressIntoMemory() {
+    auto isLoad = [](Opcode opc) {
+        switch (opc) {
+            case LD: case LW: case LH: case LB: case LWU: case LHU: case LBU: case FLD: case FLW:
+                return true;
+            default: return false;
+        }
+    };
+    for (auto& bb : *function) {
+        for (auto it = bb->begin(); it != bb->end();) {
+            Instruction* addi = it->get();
+            if (!addi || (addi->getOpcode() != Opcode::ADDI && addi->getOpcode() != Opcode::ADDIW) || addi->getOprandCount() != 3) {
+                ++it; continue;
+            }
+            auto* rd = addi->getOperand(0);
+            auto* rs1 = addi->getOperand(1);
+            auto* imm = addi->getOperand(2);
+            if (!rd->isReg() || !rs1->isReg() || !imm->isImm() || rd->getRegNum() == rs1->getRegNum()) {
+                ++it; continue;
+            }
+            int offset = static_cast<int>(imm->getValue());
+            if (!isValidImmediateOffset(offset)) { ++it; continue; }
+            // Candidate must be the immediately following instruction
+            auto nextIt = std::next(it);
+            if (nextIt == bb->end()) { ++it; continue; }
+            Instruction* mem = nextIt->get();
+            if (!mem || !isLoad(mem->getOpcode()) || mem->getOprandCount() != 2) { ++it; continue; }
+            auto* memOp = dynamic_cast<MemoryOperand*>(mem->getOperand(1));
+            if (!memOp) { ++it; continue; }
+            if (!memOp->getBaseReg() || memOp->getBaseReg()->getRegNum() != rd->getRegNum()) { ++it; continue; }
+            if (!memOp->getOffset() || !memOp->getOffset()->isImm() || memOp->getOffset()->getValue() != 0) { ++it; continue; }
+            // Ensure rd not used later before redefinition (simple forward scan)
+            bool laterUse = false;
+            for (auto scan = std::next(nextIt); scan != bb->end(); ++scan) {
+                Instruction* cur = scan->get();
+                // Detect use (including as memory base) even if instruction also redefines rd.
+                bool defines = false;
+                auto defs = cur->getDefinedIntegerRegs();
+                defines = std::find(defs.begin(), defs.end(), rd->getRegNum()) != defs.end();
+                // Scan operands for a use of old rd value
+                for (size_t oi = 0; oi < cur->getOprandCount(); ++oi) {
+                    auto* op = cur->getOperand(oi);
+                    if (op->isReg() && op->getRegNum() == rd->getRegNum()) { laterUse = true; break; }
+                    if (op->isMem()) {
+                        auto* memOp2 = dynamic_cast<MemoryOperand*>(op);
+                        if (memOp2 && memOp2->getBaseReg() && memOp2->getBaseReg()->getRegNum() == rd->getRegNum()) { laterUse = true; break; }
+                        if (memOp2 && memOp2->getOffset() && memOp2->getOffset()->isReg() && memOp2->getOffset()->getRegNum() == rd->getRegNum()) { laterUse = true; break; }
+                    }
+                }
+                if (laterUse) { break; }
+                // If it defines rd but did not use old value, lifetime ends -> safe to stop.
+                if (defines) { break; }
+            }
+            if (laterUse) { ++it; continue; }
+            // Rewrite memory base to rs1 with folded offset
+            auto* rs1Reg = dynamic_cast<RegisterOperand*>(rs1);
+            bool rs1IsVirt = rs1Reg ? rs1Reg->isVirtual() : false;
+            auto newBase = std::make_unique<RegisterOperand>(rs1->getRegNum(), rs1IsVirt);
+            auto newImm = std::make_unique<ImmediateOperand>(offset);
+            auto newMem = std::make_unique<MemoryOperand>(std::move(newBase), std::move(newImm));
+            mem->setOperand(1, std::move(newMem));
+            DEBUG_OUT() << "Peephole (conservative): fold '" << addi->toString() << "' -> " << mem->toString() << std::endl;
+            it = bb->erase(it); // remove addi
+            continue; // iterator now at former mem instruction
+        }
     }
 }
 
