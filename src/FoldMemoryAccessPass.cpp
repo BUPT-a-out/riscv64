@@ -63,16 +63,26 @@ void FoldMemoryAccessPass::processInstr(Instruction* instr) {
         auto src = instr->getOperand(1)->getRegNum();
         if (offsetMap.count(src)) {
             offsetMap[dst] = offsetMap[src];
+            valueMap.erase(dst);
+            return;
+        } else {
+            offsetMap.erase(dst);
             return;
         }
+    
         if (valueMap.count(src)) {
             valueMap[dst] = valueMap[src];
+            offsetMap.erase(dst);
             return;
+        } else {
+            valueMap.erase(dst);
         }
     }
 
     if (instr->isMemoryInstr()) {
         // 处理内存访问指令：lw, sw, lb, sb, lh, sh 等
+        auto val_reg = instr->getOperand(0)->getRegNum();
+
         auto memOp = static_cast<MemoryOperand*>(instr->getOperand(1));
         auto addr_reg = memOp->getBaseReg()->getRegNum();
         auto current_offset = memOp->getOffset()->getValue();
@@ -91,6 +101,13 @@ void FoldMemoryAccessPass::processInstr(Instruction* instr) {
 
                 DEBUG_OUT() << instr->toString() << std::endl;
             }
+        }
+
+        // TODO: extract func, avoid mis-operation
+        // 内存值不可预料.
+        if (opCode == LW || opCode == LD) {
+            valueMap.erase(val_reg);
+            offsetMap.erase(val_reg);
         }
         return;
     }

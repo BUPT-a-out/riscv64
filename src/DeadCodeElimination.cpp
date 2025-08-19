@@ -192,12 +192,8 @@ std::vector<unsigned> DeadCodeElimination::getUsedRegs(
     if (inst == nullptr) {
         return out;
     }
+
     auto ints = inst->getUsedIntegerRegs();
-    std::cout << inst->toString() << "\nFUCKS ";
-    for (auto i : ints) {
-        std::cout << " " << i;
-    }
-    std::cout<<"\n";
     out.insert(out.end(), ints.begin(), ints.end());
     auto flts = inst->getUsedFloatRegs();
     out.insert(out.end(), flts.begin(), flts.end());
