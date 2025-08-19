@@ -58,6 +58,8 @@ std::string RISCV64Target::compileToAssembly(
     registerAllocationPass(riscv_module, analysisManager);  // 第二阶段
     frameIndexEliminationPass(riscv_module);                // 第三阶段
 
+    foldMemoryAccessPass(riscv_module);
+
     return riscv_module.toString();
 }
 

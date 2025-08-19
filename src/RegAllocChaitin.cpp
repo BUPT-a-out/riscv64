@@ -196,15 +196,15 @@ void RegAllocChaitin::computeDefUse(BasicBlock* bb, LivenessInfo& info) {
         }
 
         // 特殊处理函数调用指令
-        if (inst->isCallInstr()) {
-            // 函数调用会隐式修改所有调用者保存寄存器
-            std::vector<unsigned> callerSavedRegs =
-                ABI::getCallerSavedRegs(assigningFloat);
+        // if (inst->isCallInstr()) {
+        //     // 函数调用会隐式修改所有调用者保存寄存器
+        //     std::vector<unsigned> callerSavedRegs =
+        //         ABI::getCallerSavedRegs(assigningFloat);
 
-            for (unsigned reg : callerSavedRegs) {
-                info.def.insert(reg);  // 调用者保存寄存器被隐式定义
-            }
-        }
+        //     for (unsigned reg : callerSavedRegs) {
+        //         info.def.insert(reg);  // 调用者保存寄存器被隐式定义
+        //     }
+        // }
     }
 }
 
