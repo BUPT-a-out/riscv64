@@ -32,17 +32,22 @@ void FoldMemoryAccessPass::processInstr(Instruction* instr) {
             // 检查新的offset是否在有效范围内
             if (Visitor::isValidImmediateOffset(new_offset)) {
                 offsetMap[rd] = new_offset;
+            } else {
+                offsetMap.erase(rd);
             }
             return;
         }
+
         if (rs1 == 8) {  // s0
             offsetMap[rd] = imm;
+            valueMap.erase(rd);
             return;
         }
 
         // 跟踪常数值
         if (valueMap.count(rs1)) {
             valueMap[rd] = valueMap[rs1] + imm;
+            offsetMap.erase(rd);
         } else {
             // 休矣, 无法武断.
             valueMap.erase(rd);
@@ -50,11 +55,13 @@ void FoldMemoryAccessPass::processInstr(Instruction* instr) {
         }
         return;
     }
+    // TODO: ADD
 
     if (opCode == Opcode::LI) {
         auto rd = instr->getOperand(0)->getRegNum();
         auto imm = instr->getOperand(1)->getValue();
         valueMap[rd] = imm;
+        offsetMap.erase(rd);
         return;
     }
 
@@ -64,16 +71,13 @@ void FoldMemoryAccessPass::processInstr(Instruction* instr) {
         if (offsetMap.count(src)) {
             offsetMap[dst] = offsetMap[src];
             valueMap.erase(dst);
-            return;
         } else {
             offsetMap.erase(dst);
-            return;
         }
     
         if (valueMap.count(src)) {
             valueMap[dst] = valueMap[src];
             offsetMap.erase(dst);
-            return;
         } else {
             valueMap.erase(dst);
         }
