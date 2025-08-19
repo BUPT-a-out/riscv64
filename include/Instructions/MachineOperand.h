@@ -48,6 +48,10 @@ class MachineOperand : public midend::Value {
         throw std::runtime_error("Not a register operand");
     }
 
+    virtual void setRegNum(unsigned reg) {
+        throw std::runtime_error("Not a register operand");
+    }
+
     virtual bool isFloatRegister() const { return false; }
 
     virtual bool isIntegerRegister() const { return false; }
