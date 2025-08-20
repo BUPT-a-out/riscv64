@@ -3,6 +3,7 @@
 #include "BasicBlockReordering.h"
 #include "CodeGen.h"
 #include "ConstantFoldingPass.h"
+#include "CopyPropagationPass.h"
 #include "DeadCodeElimination.h"
 #include "FrameIndexElimination.h"
 #include "IR/Function.h"
@@ -53,6 +54,8 @@ std::string RISCV64Target::compileToAssembly(
 
     deadCodeEliminationPass(riscv_module, false);  // 第一阶段附加：DCE
 
+    copyPropagationPass(riscv_module);  // 第1.8阶段：复写传播优化
+
     // RAGreedyPass(riscv_module);
 
     registerAllocationPass(riscv_module, analysisManager);  // 第二阶段
@@ -61,7 +64,6 @@ std::string RISCV64Target::compileToAssembly(
     foldMemoryAccessPass(riscv_module);
 
     deadCodeEliminationPass(riscv_module, true);  // 第一阶段附加：DCE
-
 
     return riscv_module.toString();
 }
@@ -293,7 +295,8 @@ Module& RISCV64Target::registerAllocationPass(
     return module;
 }
 
-Module& RISCV64Target::deadCodeEliminationPass(riscv64::Module& module, bool forPhys) {
+Module& RISCV64Target::deadCodeEliminationPass(riscv64::Module& module,
+                                               bool forPhys) {
     DEBUG_OUT() << "\n=== Post-RA Dead Code Elimination ===" << std::endl;
     DeadCodeElimination dce;
     for (auto& function : module) {
@@ -328,6 +331,29 @@ Module& RISCV64Target::frameIndexEliminationPass(riscv64::Module& module) {
     }
 
     DEBUG_OUT() << "=== Frame Index Elimination Completed ===" << std::endl;
+    return module;
+}
+
+Module& RISCV64Target::copyPropagationPass(riscv64::Module& module) {
+    DEBUG_OUT() << "\n=== Copy Propagation Optimization ===" << std::endl;
+
+    for (auto& function : module) {
+        if (function->empty()) {
+            DEBUG_OUT() << "Skipping empty function: " << function->getName()
+                        << std::endl;
+            continue;
+        }
+
+        DEBUG_OUT() << "Processing function: " << function->getName()
+                    << std::endl;
+
+        CopyPropagationPass pass;
+        pass.runOnFunction(function.get());
+    }
+
+    DEBUG_OUT() << "=== Copy Propagation Completed ===" << std::endl;
+    DEBUG_OUT() << module.toString() << std::endl;
+
     return module;
 }
 

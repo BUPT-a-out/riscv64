@@ -30,7 +30,7 @@ void ConstantFolding::runOnFunction(Function* function) {
         }
     }
 
-    copyPropagate(function);
+    // copyPropagate(function);
 }
 
 void ConstantFolding::runOnBasicBlock(BasicBlock* basicBlock) {

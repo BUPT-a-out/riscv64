@@ -41,6 +41,7 @@ class RISCV64Target {
         riscv64::Module& module, bool forPhys);  // 寄存器分配前后：死代码删除
     Module& frameIndexEliminationPass(
         riscv64::Module& module);  // 阶段3：Frame Index消除
+    Module& copyPropagationPass(riscv64::Module& module);  // 复写传播优化
     Module& foldMemoryAccessPass(riscv64::Module& module);
 
     // 保留原有方法以兼容
