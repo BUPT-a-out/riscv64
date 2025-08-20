@@ -60,7 +60,7 @@ std::string RISCV64Target::compileToAssembly(
 
         deadCodeEliminationPass(riscv_module, false);  // 第一阶段附加：DCE
 
-        // copyPropagationPass(riscv_module);  // 第1.8阶段：复写传播优化
+        copyPropagationPass(riscv_module);  // 第1.8阶段：复写传播优化
     }
 
     // RAGreedyPass(riscv_module);
@@ -71,8 +71,8 @@ std::string RISCV64Target::compileToAssembly(
     if (analysisManager != nullptr) {
         foldMemoryAccessPass(riscv_module);
 
-        // deadCodeEliminationPass(riscv_module, true);
-    }  // 第一阶段附加：DCE
+        deadCodeEliminationPass(riscv_module, true);
+    }  // 第三阶段附加：DCE
 
     return riscv_module.toString();
 }
@@ -335,7 +335,8 @@ Module& RISCV64Target::registerAllocationPass(
     return module;
 }
 
-Module& RISCV64Target::deadCodeEliminationPass(riscv64::Module& module, bool forPhys) {
+Module& RISCV64Target::deadCodeEliminationPass(riscv64::Module& module,
+                                               bool forPhys) {
     DEBUG_OUT() << "\n=== Post-RA Dead Code Elimination ===" << std::endl;
     DeadCodeElimination dce;
     for (auto& function : module) {
