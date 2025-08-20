@@ -43,8 +43,7 @@ void CopyPropagationPass::runOnFunction(Function* function) {
 }
 
 void CopyPropagationPass::clear() {
-    gen.clear();
-    kill.clear();
+    genKillSeq.clear();
     copyIn.clear();
     copyOut.clear();
     instructionsToRemove.clear();
@@ -61,60 +60,38 @@ void CopyPropagationPass::computeGenKill(Function* function) {
 
 void CopyPropagationPass::processBasicBlock(BasicBlock* basicBlock) {
     CopyInfo currentGen;
-    std::unordered_set<unsigned> currentKill;
+    std::vector<GenOrKill> newSeq;
 
     for (auto& inst : *basicBlock) {
         // 获取指令定义和使用的寄存器
         auto defs = inst->getDefinedIntegerRegs();
         auto uses = inst->getUsedIntegerRegs();
 
-        // 处理定义的寄存器（添加到kill集合）
-        for (unsigned def : defs) {
-            if (isVirtualRegister(def)) {
-                currentKill.insert(def);
-
-                // 从当前gen集合中移除涉及该寄存器的复写关系
-                auto iter = currentGen.begin();
-                while (iter != currentGen.end()) {
-                    if (iter->involves(def)) {
-                        iter = currentGen.erase(iter);
-                    } else {
-                        ++iter;
-                    }
-                }
-            }
-        }
-
         // 如果是复写指令，添加到gen集合
-        if (isCopyInstruction(inst.get())) {
+        if (inst->isCopyInstr()) {
             auto dest = inst->getOperand(0)->getRegNum();
             auto src = inst->getOperand(1)->getRegNum();
 
             if (isVirtualRegister(dest) && isVirtualRegister(src)) {
-                // 移除之前涉及dest或src的复写关系
-                auto iter = currentGen.begin();
-                while (iter != currentGen.end()) {
-                    if (iter->involves(dest)) {
-                        iter = currentGen.erase(iter);
-                    } else {
-                        ++iter;
-                    }
-                }
-
-                // 添加新的复写关系
-                currentGen.insert(CopyPair(dest, src));
+                newSeq.push_back(CopyPair(dest, src));
                 CP_DEBUG_OUT() << "  Generated copy: " << dest << " <- " << src
                                << std::endl;
+            }
+        } else {
+            // 处理定义的寄存器（添加到kill集合）
+            for (unsigned def : defs) {
+                if (isVirtualRegister(def)) {
+                    newSeq.push_back(def);
+                }
             }
         }
     }
 
-    gen[basicBlock] = std::move(currentGen);
-    kill[basicBlock] = std::move(currentKill);
+    genKillSeq[basicBlock] = newSeq;
 
     CP_DEBUG_OUT() << "BasicBlock " << basicBlock->getLabel()
-                   << ": gen=" << gen[basicBlock].size()
-                   << ", kill=" << kill[basicBlock].size() << std::endl;
+                   << ": gen/kill size=" << genKillSeq[basicBlock].size()
+                   << std::endl;
 }
 
 // 阶段2：迭代数据流分析
@@ -156,14 +133,38 @@ void CopyPropagationPass::iterativeDataFlow(Function* function) {
                 changed = true;
             }
 
-            // 计算CopyOut[bb] = gen[bb] ∪ (CopyIn[bb] - kill[bb])
-            CopyInfo survivingCopies = applyCopyKill(copyIn[currentBasicBlock],
-                                                     kill[currentBasicBlock]);
-            CopyInfo newCopyOut = gen[currentBasicBlock];
+            auto seq = genKillSeq[basicBlock.get()];
+            CopyInfo newCopyOut = newCopyIn;
 
             // 合并存活的复写和新生成的复写
-            for (const auto& copy : survivingCopies) {
-                newCopyOut.insert(copy);
+            // TODO: use a map.
+            for (auto& op : seq) {
+                if (auto copy = std::get_if<CopyPair>(&op)) {
+                    auto dst = copy->dest();
+                    auto src = copy->src();
+                    auto s = findUltimateSource(newCopyOut, src);
+
+                    auto it = newCopyOut.begin();
+                    while (it != newCopyOut.end()) {
+                        if (it->involves(dst)) {
+                            it = newCopyOut.erase(it);
+                        } else {
+                            ++it;
+                        }
+                    }
+
+                    // 加入新的 CopyPair{dst, s}
+                    newCopyOut.insert(CopyPair{dst, s});
+                } else if (auto kill = std::get_if<unsigned>(&op)) {
+                    auto it = newCopyOut.begin();
+                    while (it != newCopyOut.end()) {
+                        if (it->involves(*kill)) {
+                            it = newCopyOut.erase(it);
+                        } else {
+                            ++it;
+                        }
+                    }
+                }
             }
 
             if (newCopyOut != copyOut[currentBasicBlock]) {
@@ -195,27 +196,27 @@ auto CopyPropagationPass::intersectCopyInfo(const std::vector<CopyInfo>& sets)
     return result;
 }
 
-auto CopyPropagationPass::applyCopyKill(
-    const CopyInfo& copySet, const std::unordered_set<unsigned>& killSet)
-    -> CopyInfo {
-    CopyInfo result;
+// auto CopyPropagationPass::applyCopyKill(
+//     const CopyInfo& copySet, const std::unordered_set<unsigned>& killSet)
+//     -> CopyInfo {
+//     CopyInfo result;
 
-    for (const auto& copy : copySet) {
-        bool killed = false;
-        for (unsigned killedReg : killSet) {
-            if (copy.involves(killedReg)) {
-                killed = true;
-                break;
-            }
-        }
+//     for (const auto& copy : copySet) {
+//         bool killed = false;
+//         for (unsigned killedReg : killSet) {
+//             if (copy.involves(killedReg)) {
+//                 killed = true;
+//                 break;
+//             }
+//         }
 
-        if (!killed) {
-            result.insert(copy);
-        }
-    }
+//         if (!killed) {
+//             result.insert(copy);
+//         }
+//     }
 
-    return result;
-}
+//     return result;
+// }
 
 // 阶段3：代码转换
 void CopyPropagationPass::transformCode(Function* function) {
@@ -230,68 +231,100 @@ void CopyPropagationPass::transformBasicBlock(BasicBlock* basicBlock) {
     CopyInfo currentCopies = copyIn[basicBlock];
 
     for (auto& inst : *basicBlock) {
-        // 替换使用的寄存器
-        auto uses = inst->getUsedIntegerRegs();
-        for (size_t i = 0; i < inst->getOprandCount(); i++) {
-            auto* operand = inst->getOperand(i);
-            if (operand->isReg() && isVirtualRegister(operand->getRegNum())) {
-                unsigned reg = operand->getRegNum();
+        // 如果是复写指令，添加新的复写关系并标记删除
+        if (inst->isCopyInstr()) {
+            auto dest = inst->getOperand(0)->getRegNum();
+            auto src = inst->getOperand(1)->getRegNum();
 
-                // 检查是否是使用操作数（而非定义操作数）
-                bool isUse =
-                    std::find(uses.begin(), uses.end(), reg) != uses.end();
-                if (isUse) {
-                    // 查找复写关系
-                    for (const auto& copy : currentCopies) {
-                        if (copy.dest() == reg) {
-                            // 替换寄存器
-                            operand->setRegNum(copy.src());
-                            CP_DEBUG_OUT() << "  Replaced " << reg << " with "
-                                           << copy.src() << " in instruction: "
-                                           << inst->toString() << std::endl;
-                            break;
+            if (isVirtualRegister(dest) && isVirtualRegister(src)) {
+                auto ss = findUltimateSource(currentCopies, src);
+                auto ds = findUltimateSource(currentCopies, dest);
+
+                if (ss == ds) {
+                    markInstructionForRemoval(inst.get());
+                } else {
+                    auto iter = currentCopies.begin();
+                    while (iter != currentCopies.end()) {
+                        if (iter->involves(dest)) {
+                            iter = currentCopies.erase(iter);
+                        } else {
+                            ++iter;
+                        }
+                    }
+                    currentCopies.insert(CopyPair(dest, ss));
+                }
+                CP_DEBUG_OUT() << "  Marked copy instruction for removal: "
+                               << inst->toString() << std::endl;
+            }
+        } else {
+            // 替换使用的寄存器
+            auto uses = inst->getUsedIntegerRegs();
+            for (size_t i = 0; i < inst->getOprandCount(); i++) {
+                auto* operand = inst->getOperand(i);
+                if (operand->isReg() &&
+                    isVirtualRegister(operand->getRegNum())) {
+                    unsigned reg = operand->getRegNum();
+
+                    // 检查是否是使用操作数（而非定义操作数）
+                    bool isUse =
+                        std::find(uses.begin(), uses.end(), reg) != uses.end();
+                    if (isUse) {
+                        // 查找复写关系
+                        for (const auto& copy : currentCopies) {
+                            if (copy.dest() == reg) {
+                                // 替换寄存器
+                                operand->setRegNum(copy.src());
+                                CP_DEBUG_OUT()
+                                    << "  Replaced " << reg << " with "
+                                    << copy.src()
+                                    << " in instruction: " << inst->toString()
+                                    << std::endl;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            // 更新当前复写集合
+            auto defs = inst->getDefinedIntegerRegs();
+            for (unsigned def : defs) {
+                if (isVirtualRegister(def)) {
+                    // 移除涉及该寄存器的复写关系
+                    auto iter = currentCopies.begin();
+                    while (iter != currentCopies.end()) {
+                        if (iter->involves(def)) {
+                            iter = currentCopies.erase(iter);
+                        } else {
+                            ++iter;
                         }
                     }
                 }
             }
         }
-
-        // 更新当前复写集合
-        auto defs = inst->getDefinedIntegerRegs();
-        for (unsigned def : defs) {
-            if (isVirtualRegister(def)) {
-                // 移除涉及该寄存器的复写关系
-                auto iter = currentCopies.begin();
-                while (iter != currentCopies.end()) {
-                    if (iter->involves(def)) {
-                        iter = currentCopies.erase(iter);
-                    } else {
-                        ++iter;
-                    }
-                }
-            }
-        }
-
-        // 如果是复写指令，添加新的复写关系并标记删除
-        if (isCopyInstruction(inst.get())) {
-            auto dest = inst->getOperand(0)->getRegNum();
-            auto src = inst->getOperand(1)->getRegNum();
-
-            if (isVirtualRegister(dest) && isVirtualRegister(src)) {
-                currentCopies.insert(CopyPair(dest, src));
-                markInstructionForRemoval(inst.get());
-                CP_DEBUG_OUT() << "  Marked copy instruction for removal: "
-                               << inst->toString() << std::endl;
-            }
-        }
     }
 }
 
-// 辅助方法实现
-auto CopyPropagationPass::isCopyInstruction(Instruction* inst) -> bool {
-    return inst->getOpcode() == Opcode::MV && inst->getOprandCount() == 2 &&
-           inst->getOperand(0)->isReg() && inst->getOperand(1)->isReg();
+unsigned CopyPropagationPass::findUltimateSource(CopyInfo& copyInfo,
+                                                 unsigned s) {
+    bool found;
+    do {
+        found = false;
+        for (const auto& existingCopy : copyInfo) {
+            if (existingCopy.dest() == s) {
+                s = existingCopy.src();  // 继续追溯
+                found = true;
+                break;
+            }
+        }
+    } while (found);  // 直到找不到更早的源头
+    return s;
 }
+
+// 辅助方法实现
+// auto CopyPropagationPass::isCopyInstruction(Instruction* inst) -> bool {
+//     return inst->getOpcode() == Opcode::MV && inst->getOprandCount() == 2 &&
+//            inst->getOperand(0)->isReg() && inst->getOperand(1)->isReg();
+// }
 
 auto CopyPropagationPass::isVirtualRegister(unsigned reg) -> bool {
     return reg >= VIRTUAL_REG_START;

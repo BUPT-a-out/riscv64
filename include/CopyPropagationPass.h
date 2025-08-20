@@ -42,13 +42,11 @@ struct CopyPair {
 using CopyInfo = std::set<CopyPair>;
 
 using GenOrKill = std::variant<unsigned, CopyPair>;
-static const GenOrKill currentGenOrKill = static_cast<unsigned>(1);
 
 class CopyPropagationPass {
    private:
     // 每个基本块的gen和kill集合
-    ska::unordered_map<BasicBlock*, CopyInfo> gen;
-    ska::unordered_map<BasicBlock*, std::unordered_set<unsigned>> kill;
+    ska::unordered_map<BasicBlock*, std::vector<GenOrKill>> genKillSeq;
 
     // 每个基本块的CopyIn和CopyOut集合
     ska::unordered_map<BasicBlock*, CopyInfo> copyIn;
@@ -78,6 +76,8 @@ class CopyPropagationPass {
     static auto isVirtualRegister(unsigned reg) -> bool;
     void markInstructionForRemoval(Instruction* inst);
     void removeMarkedInstructions(Function* function);
+    unsigned findUltimateSource(CopyInfo& copyInfo,
+                                                 unsigned s);
 
     static constexpr unsigned VIRTUAL_REG_START = 100;
 
