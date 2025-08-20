@@ -53,9 +53,9 @@ std::string RISCV64Target::compileToAssembly(
 
     if (analysisManager != nullptr) {
         constantFoldingPass(riscv_module);  // 第1.6阶段：常量折叠优化
-        whileBranchPredictionPass(
-            riscv_module, module,
-            analysisManager);  // 第1.65阶段：while分支预测优化
+        // whileBranchPredictionPass(
+        //     riscv_module, module,
+        //     analysisManager);  // 第1.65阶段：while分支预测优化
         basicBlockReorderingPass(riscv_module);  // 第1.7阶段：基本块重排优化
 
         deadCodeEliminationPass(riscv_module, false);  // 第一阶段附加：DCE
