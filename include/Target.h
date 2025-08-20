@@ -43,6 +43,10 @@ class RISCV64Target {
         riscv64::Module& module);  // 阶段3：Frame Index消除
     Module& copyPropagationPass(riscv64::Module& module);  // 复写传播优化
     Module& foldMemoryAccessPass(riscv64::Module& module);
+    Module& whileBranchPredictionPass(
+        riscv64::Module& module, const midend::Module& mid_module,
+        const midend::AnalysisManager* analysisManager =
+            nullptr);  // while分支预测优化
 
     // 保留原有方法以兼容
     Module& reorderInstructionsPass(riscv64::Module& module);

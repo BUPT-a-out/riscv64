@@ -92,7 +92,7 @@ class Visitor {
     static std::unique_ptr<RegisterOperand> cloneRegister(RegisterOperand* reg_op,
                                                    bool is_float);
 
-    void createCFG(Function* func);
+    static void createCFG(Function* func);
 
     void visit(const midend::Constant* constant);
     void visit(const midend::GlobalVariable* var, Module* parent_module);

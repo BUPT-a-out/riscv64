@@ -54,7 +54,8 @@ bool Instruction::isJumpInstr() const {
 
 // note: only int32/64 store/load
 bool Instruction::isMemoryInstr() const {
-    return opcode == Opcode::SW || opcode == Opcode::LW || opcode == Opcode::SD || opcode == Opcode::LD;
+    return opcode == Opcode::SW || opcode == Opcode::LW ||
+           opcode == Opcode::SD || opcode == Opcode::LD;
 }
 
 bool Instruction::isTerminator() const {
@@ -435,7 +436,8 @@ std::vector<unsigned> Instruction::getUsedIntegerRegs() const {
             break;
         }
 
-        case BNEZ: {
+        case BNEZ:
+        case BEQZ: {
             if (operands.size() >= 2) {
                 if (operands[0]->isReg() && operands[0]->isIntegerRegister()) {
                     usedRegs.push_back(operands[0]->getRegNum());
@@ -803,7 +805,9 @@ std::vector<unsigned> Instruction::getDefinedIntegerRegs() const {
         case BGE:
         case BLTU:
         case BGEU:
-        case BNEZ: {
+        case BNEZ:
+        case BEQZ:
+        case BLEZ: {
             break;
         }
 

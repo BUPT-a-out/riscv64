@@ -21,6 +21,7 @@ class Function {
    public:
     // 友元声明，允许BasicBlockReordering访问私有成员
     friend class BasicBlockReordering;
+    friend class WhileBranchPredictionPass;  // while 分支预测需要重排基本块
 
     explicit Function(std::string name)
         : name(std::move(name)),
