@@ -300,8 +300,7 @@ Module& RISCV64Target::registerAllocationPass(
     return module;
 }
 
-Module& RISCV64Target::deadCodeEliminationPass(riscv64::Module& module,
-                                               bool forPhys) {
+Module& RISCV64Target::deadCodeEliminationPass(riscv64::Module& module, bool forPhys) {
     DEBUG_OUT() << "\n=== Post-RA Dead Code Elimination ===" << std::endl;
     DeadCodeElimination dce;
     for (auto& function : module) {
